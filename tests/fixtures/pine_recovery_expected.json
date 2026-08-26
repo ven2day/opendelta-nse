@@ -1,0 +1,49 @@
+{
+  "source": "Frozen Pine-compatible overlapping-observation fixture for OpenDelta CI",
+  "indicator_checkpoints": [
+    {
+      "index": 36,
+      "ema_fast": 97.440646,
+      "ema_slow": 99.289236,
+      "rsi": 44.482500,
+      "session_vwap": 96.617722,
+      "volume_ema": 1365.089168
+    },
+    {
+      "index": 54,
+      "ema_fast": 87.465260,
+      "ema_slow": 89.778148,
+      "rsi": 41.461555,
+      "session_vwap": 86.800000,
+      "volume_ema": 1401.282914
+    }
+  ],
+  "trades": [
+    {
+      "sequence_number": 1,
+      "rsi_arm_timestamp": "2025-01-02T11:30:00+05:30",
+      "rsi_arm_value": 35.599359,
+      "recovery_timestamp": "2025-01-03T09:40:00+05:30",
+      "buy_timestamp": "2025-01-03T09:40:00+05:30",
+      "entry_price": 98.400000,
+      "target_price": 98.892000,
+      "target_hit_timestamp": null,
+      "status": "OPEN",
+      "mae_pct": -15.447154,
+      "mfe_pct": -1.016260
+    },
+    {
+      "sequence_number": 2,
+      "rsi_arm_timestamp": "2025-01-03T09:50:00+05:30",
+      "rsi_arm_value": 36.150588,
+      "recovery_timestamp": "2025-01-06T09:45:00+05:30",
+      "buy_timestamp": "2025-01-06T09:45:00+05:30",
+      "entry_price": 89.000000,
+      "target_price": 89.445000,
+      "target_hit_timestamp": "2025-01-06T09:50:00+05:30",
+      "status": "TARGET_HIT",
+      "mae_pct": 0.224719,
+      "mfe_pct": 1.348315
+    }
+  ]
+}

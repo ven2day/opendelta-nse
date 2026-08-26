@@ -1,0 +1,40 @@
+[Unit]
+Description=Vento NSE historical backtest API
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/vento-nse/backtest
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/vento-nse/dhan
+ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/vento-nse/data
+ExecStartPre=-/usr/bin/docker network create vento-nse-internal
+ExecStartPre=-/usr/bin/docker rm -f vento-nse-backtest
+ExecStart=/usr/bin/docker run --rm --name vento-nse-backtest \
+  --network vento-nse-internal \
+  --env-file /etc/vento-nse-dhan.env \
+  --env BACKTEST_CACHE_DIR=/var/lib/vento-nse/backtest \
+  --env BACKTEST_WORKERS=4 \
+  --env LIVE_SIGNAL_ENGINE_ENABLED=true \
+  --env LIVE_SIGNAL_DIR=/var/lib/vento-nse/backtest/live-signals \
+  --env LIVE_MARKET_DATA_FILE=/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv \
+  --mount type=bind,source=/var/lib/vento-nse/backtest,target=/var/lib/vento-nse/backtest \
+  --mount type=bind,source=/var/lib/vento-nse/dhan,target=/var/lib/vento-nse/dhan \
+  --mount type=bind,source=/var/lib/vento-nse/data,target=/var/lib/vento-nse/data \
+  --publish 127.0.0.1:3200:8000 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=128m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --pids-limit 256 \
+  --memory 2g \
+  vento-nse-backtest:current
+ExecStop=/usr/bin/docker stop -t 20 vento-nse-backtest
+Restart=always
+RestartSec=5
+TimeoutStartSec=5min
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

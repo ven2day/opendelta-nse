@@ -1,0 +1,919 @@
+"use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Native navigation avoids stalled vinext client transitions in production. */
+
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  Clock3,
+  LayoutDashboard,
+  LineChart,
+  LoaderCircle,
+  LogOut,
+  MoveHorizontal,
+  Moon,
+  Radio,
+  RotateCcw,
+  Search,
+  Square,
+  Sun,
+  TrendingUp,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import { FormEvent, useMemo, useRef, useState } from "react";
+import {
+  RecoveryResults,
+  mergeRecoveryResponses,
+  type RecoveryBacktestResponse,
+} from "./recovery-results";
+
+type BacktestDashboardProps = {
+  symbols: string[];
+  userName: string;
+  signOutHref: string;
+};
+
+type ChartPoint = {
+  time: string;
+  close: number | null;
+  rsi: number | null;
+  equity: number | null;
+  action: "buy" | "sell" | "hold" | null;
+  entryPrice?: number | null;
+  candidateExitPrice?: number | null;
+  netReturnPct?: number | null;
+  requiredNetProfitPct?: number | null;
+  estimatedFees?: number | null;
+  signalRsi?: number | null;
+  reason?: string;
+};
+
+type Trade = {
+  entrySignalTime: string;
+  entryTime: string;
+  entryRsi: number;
+  entryPrice: number;
+  exitSignalTime: string;
+  exitTime: string;
+  exitRsi: number;
+  exitPrice: number;
+  quantity: number;
+  holdingBars: number;
+  netPnl: number;
+  returnPct: number;
+  fees: number;
+};
+
+type RangeEvent = {
+  range: "entry" | "exit";
+  signalTime: string;
+  rsi: number;
+  signalClose: number;
+  nextCandleTime: string | null;
+  nextOpen: number | null;
+};
+
+type BacktestResult = {
+  symbol: string;
+  verdict: "profitable" | "unprofitable" | "no-trades";
+  firstCandle: string;
+  lastCandle: string;
+  bars: number;
+  closedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  strategyReturnPct: number;
+  cagrPct: number;
+  buyHoldReturnPct: number;
+  niftyReturnPct: number | null;
+  maxDrawdownPct: number;
+  sharpe: number | null;
+  sortino: number | null;
+  profitFactor: number | null;
+  averageTradeReturnPct: number | null;
+  averageWinPct: number | null;
+  averageLossPct: number | null;
+  endingCapital: number;
+  heldExitSignals: number;
+  openPosition: {
+    entryTime: string;
+    entryRsi: number;
+    entryPrice: number;
+    quantity: number;
+    lastPrice: number;
+    unrealizedPnl: number;
+    estimatedReturnPct: number;
+  } | null;
+  trades: Trade[];
+  events: RangeEvent[];
+  chart: ChartPoint[];
+};
+
+type BacktestResponse = {
+  metadata: {
+    runId: string;
+    strategyMode: "rsi_range";
+    strategyVersion: string;
+    generatedAt: string;
+    analysisStart: string;
+    durationYears: number;
+    timeframe: string;
+    entryRange: [number, number];
+    exitRange: [number, number];
+    initialCapitalPerSymbol: number;
+    minimumNetProfitPct: number;
+    timezone: string;
+    benchmark: string;
+    costModel: {
+      variableFeePerSidePct: number;
+      fixedFeePerOrder: number;
+      slippagePerSidePct: number;
+    };
+  };
+  results: BacktestResult[];
+  errors: Array<{ symbol: string; message: string }>;
+  warnings: string[];
+};
+
+type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse) & { detail?: string };
+
+const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
+
+async function readBacktestPayload(result: Response, batchStart: string): Promise<BacktestPayload> {
+  const body = await result.text();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    throw new Error(
+      `Backtest service returned an unreadable response near ${batchStart} (HTTP ${result.status}). Please retry; completed batches are still shown.`,
+    );
+  }
+
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`Backtest service returned an empty response near ${batchStart}. Please retry.`);
+  }
+  return payload as BacktestPayload;
+}
+
+function initials(name: string) {
+  const value = name.includes("@") ? name.split("@")[0] : name;
+  return value
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("") || "OD";
+}
+
+function number(value: number | null, digits = 2) {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return new Intl.NumberFormat("en-IN", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
+function money(value: number | null) {
+  return value === null ? "—" : `₹${number(value)}`;
+}
+
+function percent(value: number | null) {
+  if (value === null) return "—";
+  return `${value > 0 ? "+" : ""}${number(value)}%`;
+}
+
+function formatIst(value: string | null, daily = false) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    ...(daily ? {} : { hour: "2-digit", minute: "2-digit", hour12: false }),
+    timeZone: "Asia/Kolkata",
+  }).format(parsed) + (daily ? "" : " IST");
+}
+
+function tone(value: number | null) {
+  if (value === null || value === 0) return "neutral-value";
+  return value > 0 ? "positive-value" : "negative-value";
+}
+
+function chartDecisionTitle(point: ChartPoint) {
+  const lines = [
+    `${point.action?.toUpperCase() ?? "PRICE"} - ${formatIst(point.time)}`,
+    `RSI: ${number(point.signalRsi ?? point.rsi)} | Chart close: ${money(point.close)}`,
+  ];
+
+  if (!point.action) {
+    lines.push(`Equity: ${money(point.equity)}`);
+  } else if (point.action === "buy") {
+    lines.push(`Buy price: ${money(point.entryPrice ?? null)}`);
+    lines.push(`Entry fee estimate: ${money(point.estimatedFees ?? null)}`);
+    lines.push("Condition: low-RSI signal, executed at the next candle open.");
+  } else {
+    lines.push(`Buy price: ${money(point.entryPrice ?? null)}`);
+    lines.push(`Candidate sell price: ${money(point.candidateExitPrice ?? null)}`);
+    lines.push(`Net return after fees and slippage: ${percent(point.netReturnPct ?? null)}`);
+    lines.push(`Required net profit: at least ${number(point.requiredNetProfitPct ?? 1)}%`);
+    lines.push(`Total fee estimate: ${money(point.estimatedFees ?? null)}`);
+  }
+
+  if (point.reason) lines.push(point.reason);
+  return lines.join("\n");
+}
+
+function formatChartAxisIst(value: string, daily: boolean): [string, string?] {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return [value];
+  const date = new Intl.DateTimeFormat("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+    timeZone: "Asia/Kolkata",
+  }).format(parsed);
+  if (daily) return [date];
+  const time = new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Kolkata",
+  }).format(parsed);
+  return [date, time];
+}
+
+function PerformanceChart({
+  points,
+  entryRange,
+  exitRange,
+  timeframe,
+}: {
+  points: ChartPoint[];
+  entryRange: [number, number];
+  exitRange: [number, number];
+  timeframe: string;
+}) {
+  const valid = useMemo(
+    () => points.filter((point) => point.close !== null && point.rsi !== null),
+    [points],
+  );
+  const [activePoint, setActivePoint] = useState<{
+    point: ChartPoint;
+    left: number;
+    top: number;
+    placement: "above" | "below";
+  } | null>(null);
+  const [windowState, setWindowState] = useState({ start: 0, count: Math.max(valid.length, 2) });
+  const [dragging, setDragging] = useState(false);
+  const chartCanvasRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startIndex: number } | null>(null);
+
+  if (valid.length < 2) return <div className="chart-empty">Not enough points to draw a chart.</div>;
+
+  const width = 1000;
+  const height = 380;
+  const plotLeft = 78;
+  const plotRight = 982;
+  const plotWidth = plotRight - plotLeft;
+  const priceTop = 22;
+  const priceBottom = 220;
+  const rsiTop = 258;
+  const rsiBottom = 310;
+  const minimumWindow = Math.min(18, valid.length);
+  const visibleCount = Math.max(minimumWindow, Math.min(windowState.count, valid.length));
+  const maximumStart = Math.max(0, valid.length - visibleCount);
+  const visibleStart = Math.min(windowState.start, maximumStart);
+  const visible = valid.slice(visibleStart, visibleStart + visibleCount);
+  const prices = visible.map((point) => point.close as number);
+  const rawMinPrice = Math.min(...prices);
+  const rawMaxPrice = Math.max(...prices);
+  const rawSpread = rawMaxPrice - rawMinPrice;
+  const pricePadding = rawSpread > 0 ? rawSpread * 0.08 : Math.max(Math.abs(rawMaxPrice) * 0.02, 1);
+  const minPrice = rawMinPrice - pricePadding;
+  const maxPrice = rawMaxPrice + pricePadding;
+  const spread = Math.max(maxPrice - minPrice, 1);
+  const x = (index: number) => plotLeft + (index / Math.max(visible.length - 1, 1)) * plotWidth;
+  const priceY = (value: number) => priceBottom - ((value - minPrice) / spread) * (priceBottom - priceTop);
+  const rsiY = (value: number) => rsiBottom - (value / 100) * (rsiBottom - rsiTop);
+  const priceLine = visible.map((point, index) => `${x(index)},${priceY(point.close as number)}`).join(" ");
+  const rsiLine = visible.map((point, index) => `${x(index)},${rsiY(point.rsi as number)}`).join(" ");
+  const priceTicks = Array.from({ length: 5 }, (_, index) => minPrice + (spread * index) / 4);
+  const xTickIndices = Array.from(
+    new Set(Array.from({ length: 6 }, (_, index) => Math.round(index * (visible.length - 1) / 5))),
+  );
+
+  const zoom = (factor: number, anchor = 0.5) => {
+    setWindowState((current) => {
+      const currentCount = Math.max(minimumWindow, Math.min(current.count, valid.length));
+      const nextCount = Math.max(minimumWindow, Math.min(valid.length, Math.round(currentCount * factor)));
+      const anchorIndex = Math.min(current.start, valid.length - currentCount) + currentCount * anchor;
+      const nextStart = Math.max(0, Math.min(valid.length - nextCount, Math.round(anchorIndex - nextCount * anchor)));
+      return { start: nextStart, count: nextCount };
+    });
+    setActivePoint(null);
+  };
+
+  const panTo = (start: number) => {
+    setWindowState((current) => ({
+      ...current,
+      start: Math.max(0, Math.min(valid.length - Math.min(current.count, valid.length), start)),
+    }));
+    setActivePoint(null);
+  };
+
+  const activatePoint = (point: ChartPoint, index: number) => {
+    const pointY = priceY(point.close as number);
+    setActivePoint({
+      point,
+      left: Math.min(86, Math.max(14, x(index) / width * 100)),
+      top: pointY / height * 100,
+      placement: pointY < 120 ? "below" : "above",
+    });
+  };
+
+  const resetChart = () => {
+    setWindowState({ start: 0, count: valid.length });
+    setActivePoint(null);
+  };
+
+  return (
+    <div className="performance-chart">
+      <div className="chart-toolbar">
+        <div className="chart-legend">
+          <span><i className="legend-price" />Price</span>
+          <span><i className="legend-rsi" />RSI</span>
+          <span><i className="legend-buy" />Buy</span>
+          <span><i className="legend-sell" />Sell</span>
+          <span><i className="legend-hold" />Hold</span>
+        </div>
+        <div className="chart-controls" aria-label="Chart zoom controls">
+          <span>{visibleStart + 1}-{visibleStart + visible.length} of {valid.length}</span>
+          <button type="button" onClick={() => zoom(1.5)} disabled={visibleCount >= valid.length} aria-label="Zoom out"><ZoomOut size={14} /></button>
+          <button type="button" onClick={() => zoom(0.65)} disabled={visibleCount <= minimumWindow} aria-label="Zoom in"><ZoomIn size={14} /></button>
+          <button type="button" onClick={resetChart} disabled={visibleCount >= valid.length && visibleStart === 0} aria-label="Reset chart"><RotateCcw size={14} /></button>
+        </div>
+      </div>
+      <div
+        ref={chartCanvasRef}
+        className={`chart-canvas ${dragging ? "dragging" : ""}`}
+        onWheel={(event) => {
+          event.preventDefault();
+          if (Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.shiftKey) {
+            panTo(visibleStart + Math.sign(event.deltaX || event.deltaY) * Math.max(1, Math.round(visibleCount * 0.08)));
+            return;
+          }
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const anchor = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+          zoom(event.deltaY > 0 ? 1.22 : 0.82, anchor);
+        }}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || visibleCount >= valid.length) return;
+          dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startIndex: visibleStart };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+          setActivePoint(null);
+        }}
+        onPointerMove={(event) => {
+          const drag = dragRef.current;
+          if (!drag || drag.pointerId !== event.pointerId) return;
+          const bounds = chartCanvasRef.current?.getBoundingClientRect();
+          if (!bounds) return;
+          const candleDelta = Math.round((drag.startX - event.clientX) / bounds.width * visibleCount);
+          panTo(drag.startIndex + candleDelta);
+        }}
+        onPointerUp={(event) => {
+          if (dragRef.current?.pointerId === event.pointerId) {
+            dragRef.current = null;
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            setDragging(false);
+          }
+        }}
+        onPointerCancel={() => { dragRef.current = null; setDragging(false); }}
+      >
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Interactive historical price and RSI chart with IST date and time axes">
+          <defs><clipPath id="backtest-chart-clip"><rect x={plotLeft} y={priceTop} width={plotWidth} height={rsiBottom - priceTop} /></clipPath></defs>
+          <rect x={plotLeft} y={rsiY(exitRange[1])} width={plotWidth} height={rsiY(exitRange[0]) - rsiY(exitRange[1])} className="chart-exit-zone" />
+          <rect x={plotLeft} y={rsiY(entryRange[1])} width={plotWidth} height={rsiY(entryRange[0]) - rsiY(entryRange[1])} className="chart-entry-zone" />
+          {priceTicks.map((tick) => (
+            <g key={tick}>
+              <line x1={plotLeft} x2={plotRight} y1={priceY(tick)} y2={priceY(tick)} className="chart-grid-line" />
+              <text x={plotLeft - 9} y={priceY(tick) + 3} textAnchor="end" className="chart-axis-label">{number(tick)}</text>
+            </g>
+          ))}
+          {[30, 50, 70].map((tick) => <text key={tick} x={plotLeft - 9} y={rsiY(tick) + 3} textAnchor="end" className="chart-axis-label">{tick}</text>)}
+          {xTickIndices.map((index) => {
+            const [dateLabel, timeLabel] = formatChartAxisIst(visible[index].time, timeframe === "1d");
+            return (
+              <g key={`${visible[index].time}-${index}`}>
+                <line x1={x(index)} x2={x(index)} y1={priceTop} y2={rsiBottom} className="chart-grid-line vertical" />
+                <text x={x(index)} y="334" textAnchor="middle" className="chart-axis-label date-time">
+                  <tspan x={x(index)}>{dateLabel}</tspan>
+                  {timeLabel && <tspan x={x(index)} dy="12">{timeLabel}</tspan>}
+                </text>
+              </g>
+            );
+          })}
+          <line x1={plotLeft} x2={plotRight} y1={priceBottom} y2={priceBottom} className="chart-axis" />
+          <line x1={plotLeft} x2={plotRight} y1={rsiTop} y2={rsiTop} className="chart-divider" />
+          <text x="15" y={(priceTop + priceBottom) / 2} transform={`rotate(-90 15 ${(priceTop + priceBottom) / 2})`} textAnchor="middle" className="chart-axis-title">Price (INR)</text>
+          <text x="15" y={(rsiTop + rsiBottom) / 2} transform={`rotate(-90 15 ${(rsiTop + rsiBottom) / 2})`} textAnchor="middle" className="chart-axis-title">RSI</text>
+          <text x={(plotLeft + plotRight) / 2} y="372" textAnchor="middle" className="chart-axis-title">Date and time (IST)</text>
+          <g clipPath="url(#backtest-chart-clip)">
+            <polyline points={priceLine} className="chart-price-line" />
+            <polyline points={rsiLine} className="chart-rsi-line" />
+            {visible.map((point, index) => (
+              <circle
+                key={`${point.time}-target`}
+                cx={x(index)}
+                cy={priceY(point.close as number)}
+                r="10"
+                className="chart-point-target"
+                onMouseEnter={() => activatePoint(point, index)}
+                onMouseLeave={() => setActivePoint(null)}
+              />
+            ))}
+            {visible.map((point, index) => point.action ? (
+              <circle
+                key={`${point.time}-${point.action}`}
+                cx={x(index)}
+                cy={priceY(point.close as number)}
+                r="6"
+                className={`chart-action ${point.action}`}
+                tabIndex={0}
+                aria-label={chartDecisionTitle(point)}
+                onMouseEnter={() => activatePoint(point, index)}
+                onMouseLeave={() => setActivePoint(null)}
+                onFocus={() => activatePoint(point, index)}
+                onBlur={() => setActivePoint(null)}
+              >
+                <title>{chartDecisionTitle(point)}</title>
+              </circle>
+            ) : null)}
+          </g>
+        </svg>
+        {activePoint && (
+          <div
+            className={`chart-decision-tooltip ${activePoint.point.action ?? "point"} ${activePoint.placement}`}
+            style={{ left: `${activePoint.left}%`, top: `${activePoint.top}%` }}
+            role="tooltip"
+          >
+            <div className="decision-tooltip-top">
+              <strong>{activePoint.point.action?.toUpperCase() ?? "CANDLE"}</strong>
+              <span>{formatIst(activePoint.point.time)}</span>
+            </div>
+            <p>{activePoint.point.reason ?? "Price, RSI, and portfolio value at this candle."}</p>
+            <dl>
+              <div><dt>Close price</dt><dd>{money(activePoint.point.close)}</dd></div>
+              <div><dt>RSI</dt><dd>{number(activePoint.point.signalRsi ?? activePoint.point.rsi)}</dd></div>
+              {!activePoint.point.action && <div><dt>Portfolio value</dt><dd>{money(activePoint.point.equity)}</dd></div>}
+              {activePoint.point.action && <div><dt>Buy price</dt><dd>{money(activePoint.point.entryPrice ?? null)}</dd></div>}
+              {activePoint.point.action && activePoint.point.action !== "buy" && <>
+                <div><dt>Candidate sell</dt><dd>{money(activePoint.point.candidateExitPrice ?? null)}</dd></div>
+                <div><dt>Net after costs</dt><dd className={tone(activePoint.point.netReturnPct ?? null)}>{percent(activePoint.point.netReturnPct ?? null)}</dd></div>
+                <div><dt>Required</dt><dd>at least {number(activePoint.point.requiredNetProfitPct ?? 1)}%</dd></div>
+              </>}
+              {activePoint.point.action && <div><dt>Estimated fees</dt><dd>{money(activePoint.point.estimatedFees ?? null)}</dd></div>}
+            </dl>
+          </div>
+        )}
+      </div>
+      <div className="chart-navigator">
+        <span>{formatIst(valid[0].time, timeframe === "1d")}</span>
+        <input type="range" min="0" max={maximumStart} step="1" value={visibleStart} disabled={maximumStart === 0} onChange={(event) => panTo(Number(event.target.value))} aria-label="Scroll through chart dates" />
+        <span>{formatIst(valid.at(-1)?.time ?? null, timeframe === "1d")}</span>
+      </div>
+      <div className="chart-scale">
+        <span><MoveHorizontal size={12} /> Drag to scroll / wheel to zoom</span>
+        <span>Price axis auto-fits visible candles</span>
+        <span>RSI {entryRange[0]}-{entryRange[1]} buy / {exitRange[0]}-{exitRange[1]} sell check</span>
+      </div>
+    </div>
+  );
+}
+
+export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDashboardProps) {
+  const [darkMode, setDarkMode] = useState(true);
+  const [strategyMode, setStrategyMode] = useState<"rsi_range" | "rsi_recovery">("rsi_range");
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(symbols.includes("LUPIN") ? ["LUPIN"] : symbols.slice(0, 1));
+  const [useAllSymbols, setUseAllSymbols] = useState(false);
+  const [symbolQuery, setSymbolQuery] = useState("");
+  const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
+  const [durationYears, setDurationYears] = useState<1 | 3>(1);
+  const [timeframe, setTimeframe] = useState<(typeof timeframes)[number]>("1d");
+  const [entryLow, setEntryLow] = useState(20);
+  const [entryHigh, setEntryHigh] = useState(30);
+  const [exitLow, setExitLow] = useState(50);
+  const [exitHigh, setExitHigh] = useState(70);
+  const [rsiLength, setRsiLength] = useState(14);
+  const [rsiArmLow, setRsiArmLow] = useState(30);
+  const [rsiArmHigh, setRsiArmHigh] = useState(40);
+  const [rsiRecovery, setRsiRecovery] = useState(40);
+  const [setupExpiryBars, setSetupExpiryBars] = useState(50);
+  const [emaEnabled, setEmaEnabled] = useState(true);
+  const [emaFast, setEmaFast] = useState(9);
+  const [emaSlow, setEmaSlow] = useState(20);
+  const [vwapEnabled, setVwapEnabled] = useState(true);
+  const [volumeEnabled, setVolumeEnabled] = useState(true);
+  const [volumeEma, setVolumeEma] = useState(20);
+  const [minimumConfirmations, setMinimumConfirmations] = useState(2);
+  const [targetPct, setTargetPct] = useState(0.5);
+  const [executionModel, setExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
+  const [buyCostBps, setBuyCostBps] = useState(0);
+  const [sellCostBps, setSellCostBps] = useState(0);
+  const [slippageBps, setSlippageBps] = useState(0);
+  const [exitProtectionEnabled, setExitProtectionEnabled] = useState(false);
+  const [quantityPerTrade, setQuantityPerTrade] = useState(50);
+  const [maxOpenLotsPerSymbol, setMaxOpenLotsPerSymbol] = useState(1);
+  const [maxHoldingTradingDays, setMaxHoldingTradingDays] = useState(5);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | null>(null);
+  const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
+  const [runProgress, setRunProgress] = useState<{ completed: number; total: number } | null>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
+
+  const choices = useMemo(() => {
+    const query = symbolQuery.trim().toUpperCase();
+    return symbols.filter((symbol) => !selectedSymbols.includes(symbol) && (!query || symbol.includes(query))).slice(0, 12);
+  }, [selectedSymbols, symbolQuery, symbols]);
+
+  const rangeResponse = response?.metadata.strategyMode === "rsi_range" ? response : null;
+  const detail = rangeResponse?.results.find((result) => result.symbol === detailSymbol) ?? rangeResponse?.results[0] ?? null;
+  const profitableCount = rangeResponse?.results.filter((result) => result.verdict === "profitable").length ?? 0;
+
+  const addSymbol = (symbol: string) => {
+    if (selectedSymbols.length >= 10) return;
+    setUseAllSymbols(false);
+    setSelectedSymbols((current) => [...current, symbol]);
+    setSymbolQuery("");
+    setSymbolMenuOpen(false);
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    if (!symbolsToRun.length) {
+      setError("Select at least one symbol.");
+      return;
+    }
+    if (strategyMode === "rsi_range") {
+      if (!(entryLow < entryHigh && entryHigh < exitLow && exitLow < exitHigh)) {
+        setError("RSI ranges must be ordered from the low entry range to the high exit range.");
+        return;
+      }
+    } else {
+      const rsiValues = [rsiArmLow, rsiArmHigh, rsiRecovery];
+      if (!rsiValues.every((value) => Number.isFinite(value) && value >= 0 && value <= 100)) {
+        setError("RSI arm and recovery values must be between 0 and 100.");
+        return;
+      }
+      if (!(rsiArmLow < rsiArmHigh)) {
+        setError("RSI arm low must be lower than RSI arm high.");
+        return;
+      }
+      if (![rsiLength, emaFast, emaSlow, volumeEma].every((value) => Number.isInteger(value) && value > 0)) {
+        setError("RSI, EMA, and volume EMA lengths must be whole numbers greater than 0.");
+        return;
+      }
+      if (!(targetPct > 0)) {
+        setError("Profit target must be greater than 0%.");
+        return;
+      }
+      if (!Number.isInteger(setupExpiryBars) || setupExpiryBars < 0) {
+        setError("Setup expiry must be 0 or a positive whole number of bars.");
+        return;
+      }
+      const enabledConfirmations = [emaEnabled, vwapEnabled, volumeEnabled].filter(Boolean).length;
+      if (minimumConfirmations < 0 || minimumConfirmations > enabledConfirmations) {
+        setError(`Minimum confirmations must be between 0 and ${enabledConfirmations}, the number of enabled filters.`);
+        return;
+      }
+      if (![buyCostBps, sellCostBps, slippageBps].every((value) => Number.isFinite(value) && value >= 0)) {
+        setError("Cost and slippage assumptions cannot be negative.");
+        return;
+      }
+      if (exitProtectionEnabled && ![quantityPerTrade, maxOpenLotsPerSymbol, maxHoldingTradingDays].every((value) => Number.isInteger(value) && value > 0)) {
+        setError("Quantity, maximum open lots, and maximum holding days must be positive whole numbers.");
+        return;
+      }
+    }
+
+    setLoading(true);
+    setError(null);
+    setResponse(null);
+    setDetailSymbol(null);
+    setRunProgress({ completed: 0, total: symbolsToRun.length });
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    let completedCount = 0;
+    const runId = crypto.randomUUID();
+    try {
+      let aggregate: BacktestResponse | RecoveryBacktestResponse | null = null;
+      const batchSize = 10;
+      for (let offset = 0; offset < symbolsToRun.length; offset += batchSize) {
+        const batch = symbolsToRun.slice(offset, offset + batchSize);
+        const strategyPayload = strategyMode === "rsi_range" ? {
+          entryLow,
+          entryHigh,
+          exitLow,
+          exitHigh,
+        } : {
+          rsiLength,
+          rsiArmLow,
+          rsiArmHigh,
+          rsiRecovery,
+          emaEnabled,
+          emaFast,
+          emaSlow,
+          vwapEnabled,
+          volumeEnabled,
+          volumeEma,
+          minimumConfirmations,
+          targetPct,
+          setupExpiryBars,
+          executionModel,
+          buyCostBps,
+          sellCostBps,
+          slippageBps,
+          exitProtectionEnabled,
+          quantityPerTrade,
+          maxOpenLotsPerSymbol,
+          maxHoldingTradingDays,
+          timeExit: "NEXT_TRADING_SESSION_OPEN",
+        };
+        const result = await fetch("/api/backtest", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            symbols: batch,
+            strategyMode,
+            universeMode: useAllSymbols ? "all" : "selected",
+            runId,
+            durationYears,
+            timeframe,
+            ...strategyPayload,
+          }),
+          signal: controller.signal,
+        });
+        const payload = await readBacktestPayload(result, batch[0]);
+        if (!result.ok) throw new Error(payload.detail ?? `Backtest stopped near ${batch[0]}.`);
+        if (!Array.isArray(payload.results) || !Array.isArray(payload.errors) || !Array.isArray(payload.warnings)) {
+          throw new Error(`Backtest service returned incomplete data near ${batch[0]}. Please retry.`);
+        }
+
+        if (strategyMode === "rsi_recovery") {
+          if (payload.metadata.strategyMode !== "rsi_recovery") throw new Error("Backtest service returned the wrong strategy mode.");
+          aggregate = mergeRecoveryResponses(
+            aggregate?.metadata.strategyMode === "rsi_recovery" ? aggregate : null,
+            payload,
+          );
+        } else {
+          if (payload.metadata.strategyMode !== "rsi_range") throw new Error("Backtest service returned the wrong strategy mode.");
+          aggregate = aggregate?.metadata.strategyMode === "rsi_range" ? {
+            metadata: aggregate.metadata,
+            results: [...aggregate.results, ...payload.results],
+            errors: [...aggregate.errors, ...payload.errors],
+            warnings: Array.from(new Set([...aggregate.warnings, ...payload.warnings])),
+          } : payload;
+        }
+
+        const completed = Math.min(offset + batch.length, symbolsToRun.length);
+        completedCount = completed;
+        setResponse(aggregate);
+        setRunProgress({ completed, total: symbolsToRun.length });
+        if (strategyMode === "rsi_range") {
+          setDetailSymbol((current) => current ?? aggregate?.results[0]?.symbol ?? null);
+        }
+      }
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setError(`Backtest stopped after ${completedCount} of ${symbolsToRun.length} symbols. Completed results are still shown.`);
+      } else {
+        setError(caught instanceof Error ? caught.message : "Backtest could not be completed.");
+      }
+    } finally {
+      runAbortRef.current = null;
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="site-shell backtest-shell" data-theme={darkMode ? "dark" : "light"}>
+      <header className="global-header">
+        <div className="header-inner backtest-header-inner">
+          <a className="brand" href="/" aria-label="OpenDelta dashboard">
+            <div className="brand-mark" aria-hidden="true">₹</div>
+            <div><strong>OpenDelta</strong><span>Market intelligence</span></div>
+          </a>
+          <nav className="top-nav" aria-label="Main navigation">
+            <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
+            <a className="nav-item active" href="/backtest" aria-current="page"><TrendingUp size={16} />Backtest</a>
+            <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
+          </nav>
+          <div className="header-actions">
+            <div className="snapshot-pill"><LineChart size={15} /><span className="status-dot" /><div><strong>Dhan history</strong><span>IST candles</span></div></div>
+            <div className="user-chip" title={userName}><div className="avatar">{initials(userName)}</div><span>{userName}</span></div>
+            <button type="button" className="icon-button" onClick={() => setDarkMode((current) => !current)} aria-label="Toggle theme">
+              {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+            <a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a>
+          </div>
+        </div>
+      </header>
+
+      <main className="backtest-main">
+        <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
+          <button type="button" className={strategyMode === "rsi_range" ? "active" : ""} onClick={() => { setStrategyMode("rsi_range"); setResponse(null); setError(null); }}>RSI Range Strategy</button>
+          <button type="button" className={strategyMode === "rsi_recovery" ? "active" : ""} onClick={() => { setStrategyMode("rsi_recovery"); setTimeframe("5m"); setResponse(null); setError(null); }}>RSI Recovery Scalping</button>
+        </div>
+        <section className="backtest-intro">
+          <div><span className="section-kicker">RSI strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : "Measure how often an armed RSI recovery reaches its target, how quickly it gets there, and how far it goes underwater first."}</p></div>
+          <button type="button" className="method-pill strategy-rule-trigger" aria-label="Hover or focus to view all backtest conditions">
+            <Clock3 size={16} />
+            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : "CNC · own capital · hold until target"}; hover for all conditions</span>
+            <span className="strategy-rules-popover" role="tooltip">
+              {strategyMode === "rsi_range" ? <>
+                <strong>Buy / hold / sell conditions</strong>
+                <span><b>BUY:</b> RSI enters {entryLow}-{entryHigh}; execute at the next candle open.</span>
+                <span><b>CHECK:</b> When RSI is {exitLow}-{exitHigh}, estimate the next-open sale after entry fee, exit fee, and slippage.</span>
+                <span><b>SELL:</b> Execute only when estimated net profit is at least 1% of the buy cost.</span>
+                <span><b>HOLD:</b> If net profit is below 1%, cancel that exit and wait for a later high-RSI opportunity.</span>
+              </> : <>
+                <strong>RSI Recovery BUY and hold conditions</strong>
+                <span><b>ARM:</b> RSI enters {rsiArmLow}–{rsiArmHigh}. Falling below the arm range does not cancel it.</span>
+                <span><b>MANDATORY TRIGGER:</b> Armed RSI crosses above {rsiRecovery}; RSI is never counted as an optional confirmation.</span>
+                <span><b>CONFIRM:</b> Require {minimumConfirmations} of enabled EMA, session VWAP, and volume filters.</span>
+                <span><b>ENTRY:</b> {executionModel === "SIGNAL_CLOSE" ? "Reference the completed signal candle close." : "Execute at the following candle open."}</span>
+                <span><b>TARGET:</b> {targetPct}% from entry, monitored only from the following candle.</span>
+                {exitProtectionEnabled ? <>
+                  <span><b>POSITION LIMIT:</b> Buy {quantityPerTrade} shares only while fewer than {maxOpenLotsPerSymbol} lot(s) are open for that symbol.</span>
+                  <span><b>TIME EXIT:</b> Hold through {maxHoldingTradingDays} NSE sessions including entry day, then exit at the next available session open. No stop loss.</span>
+                </> : <span><b>OBSERVATIONS:</b> Every fresh RSI arm/recovery cycle is recorded independently. Open signals do not block later signals; there is no stop loss, end-of-day exit, or leverage.</span>}
+              </>}
+            </span>
+          </button>
+        </section>
+
+        <form className="backtest-controls" onSubmit={submit}>
+          <div className="control-block symbol-control">
+            <label>Symbol universe <span>{useAllSymbols ? `${symbols.length} symbols` : `${selectedSymbols.length}/10 selected`}</span></label>
+            <div className="universe-toggle segmented backtest-segmented">
+              <button type="button" className={!useAllSymbols ? "active" : ""} onClick={() => setUseAllSymbols(false)}>Selected symbols</button>
+              <button type="button" className={useAllSymbols ? "active" : ""} onClick={() => { setUseAllSymbols(true); setSymbolMenuOpen(false); }}>All {symbols.length} symbols</button>
+            </div>
+            {useAllSymbols ? (
+              <div className="all-symbols-selection">
+                <strong>Entire symbols.csv universe</strong>
+                <span>Runs automatically in safe groups of 10. Keep this page open to see progress.</span>
+              </div>
+            ) : (
+              <div className="selected-symbols">
+                {selectedSymbols.map((symbol) => (
+                  <button key={symbol} type="button" className="symbol-chip" onClick={() => setSelectedSymbols((current) => current.filter((item) => item !== symbol))}>
+                    {symbol}<X size={12} />
+                  </button>
+                ))}
+                <div className="symbol-picker">
+                  <Search size={15} />
+                  <input value={symbolQuery} onFocus={() => setSymbolMenuOpen(true)} onChange={(event) => { setSymbolQuery(event.target.value); setSymbolMenuOpen(true); }} placeholder="Add NSE symbol" disabled={selectedSymbols.length >= 10} />
+                  <button type="button" onClick={() => setSymbolMenuOpen((current) => !current)} aria-label="Show symbols"><ChevronDown size={15} /></button>
+                  {symbolMenuOpen && selectedSymbols.length < 10 && (
+                    <div className="symbol-options">
+                      {choices.length ? choices.map((symbol) => <button key={symbol} type="button" onClick={() => addSymbol(symbol)}>{symbol}<Check size={13} /></button>) : <span>No matching symbol</span>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="control-block compact-control"><span className="control-title">Duration</span><div className="segmented backtest-segmented">{([1, 3] as const).map((years) => <button key={years} type="button" className={durationYears === years ? "active" : ""} onClick={() => setDurationYears(years)}>{years} year{years > 1 ? "s" : ""}</button>)}</div></div>
+          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
+          {strategyMode === "rsi_range" ? <>
+            <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" min="0" max="100" value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" min="0" max="100" value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
+            <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" min="0" max="100" value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" min="0" max="100" value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
+          </> : <>
+            <div className="recovery-config recovery-simple-config">
+              <fieldset className="recovery-config-card target-card">
+                <legend>Execution &amp; target</legend>
+                <label><span>Profit target</span><span className="suffixed-input"><input aria-label="Profit target" type="number" min="0.01" step="0.01" value={targetPct} onChange={(event) => setTargetPct(Number(event.target.value))} /><i>%</i></span></label>
+                <div className="execution-model"><span>Execution model</span><div className="segmented backtest-segmented"><button type="button" className={executionModel === "SIGNAL_CLOSE" ? "active" : ""} onClick={() => setExecutionModel("SIGNAL_CLOSE")}>Signal close</button><button type="button" className={executionModel === "NEXT_BAR_OPEN" ? "active" : ""} onClick={() => setExecutionModel("NEXT_BAR_OPEN")}>Next open</button></div></div>
+                <div className="execution-model"><span>Exit protection</span><div className="segmented backtest-segmented exit-protection-toggle"><button type="button" className={!exitProtectionEnabled ? "active" : ""} onClick={() => setExitProtectionEnabled(false)}>Off</button><button type="button" className={exitProtectionEnabled ? "active" : ""} onClick={() => { setExitProtectionEnabled(true); if (targetPct === 0.5) setTargetPct(0.51); }}>On</button></div></div>
+                <div className="fixed-strategy-rules">{exitProtectionEnabled ? <><span>No stop loss</span><span>Five-session protection</span><span>Next-session open exit</span></> : <><span>No stop loss</span><span>No end-of-day exit</span><span>Hold until target</span></>}</div>
+              </fieldset>
+              <fieldset className="recovery-config-card position-config-card">
+                <legend>Position limits</legend>
+                <label><span>Quantity</span><span className="suffixed-input"><input aria-label="Quantity per trade" type="number" min="1" step="1" value={quantityPerTrade} disabled={!exitProtectionEnabled} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label>
+                <label><span>Maximum open lots</span><input aria-label="Maximum open lots per symbol" type="number" min="1" step="1" value={maxOpenLotsPerSymbol} disabled={!exitProtectionEnabled} onChange={(event) => setMaxOpenLotsPerSymbol(Number(event.target.value))} /></label>
+                <label><span>Maximum holding days</span><span className="suffixed-input"><input aria-label="Maximum holding trading days" type="number" min="1" step="1" value={maxHoldingTradingDays} disabled={!exitProtectionEnabled} onChange={(event) => setMaxHoldingTradingDays(Number(event.target.value))} /><i>NSE sessions</i></span><small>Entry session is day 1. A missed target exits at the next available session open.</small></label>
+              </fieldset>
+            </div>
+            <details className="advanced-settings">
+              <summary>Advanced settings</summary>
+              <div className="recovery-config advanced-recovery-grid">
+                <fieldset className="recovery-config-card">
+                  <legend>Detailed RSI configuration</legend>
+                  <label><span>RSI length</span><input type="number" min="1" step="1" value={rsiLength} onChange={(event) => setRsiLength(Number(event.target.value))} /></label>
+                  <label className="wide-config-field"><span>Arm RSI</span><div className="inline-number-range"><input type="number" min="0" max="100" value={rsiArmLow} onChange={(event) => setRsiArmLow(Number(event.target.value))} /><i>to</i><input type="number" min="0" max="100" value={rsiArmHigh} onChange={(event) => setRsiArmHigh(Number(event.target.value))} /></div></label>
+                  <label><span>Recovery</span><input type="number" min="0" max="100" value={rsiRecovery} onChange={(event) => setRsiRecovery(Number(event.target.value))} /></label>
+                  <label><span>Setup expiry</span><span className="suffixed-input"><input type="number" min="0" step="1" value={setupExpiryBars} onChange={(event) => setSetupExpiryBars(Number(event.target.value))} /><i>bars</i></span><small>0 = never expire</small></label>
+                </fieldset>
+                <fieldset className="recovery-config-card confirmation-card">
+                  <legend>EMA · VWAP · volume</legend>
+                  <label className="toggle-config"><input type="checkbox" checked={emaEnabled} onChange={(event) => setEmaEnabled(event.target.checked)} /><span>EMA trend</span><span className="inline-number-range"><input aria-label="Fast EMA length" type="number" min="1" step="1" value={emaFast} onChange={(event) => setEmaFast(Number(event.target.value))} /><i>/</i><input aria-label="Slow EMA length" type="number" min="1" step="1" value={emaSlow} onChange={(event) => setEmaSlow(Number(event.target.value))} /></span></label>
+                  <label className="toggle-config"><input type="checkbox" checked={vwapEnabled} onChange={(event) => setVwapEnabled(event.target.checked)} /><span>VWAP</span><small>Close &gt; session VWAP</small></label>
+                  <label className="toggle-config"><input type="checkbox" checked={volumeEnabled} onChange={(event) => setVolumeEnabled(event.target.checked)} /><span>Volume</span><span className="suffixed-input"><input aria-label="Volume EMA length" type="number" min="1" step="1" value={volumeEma} onChange={(event) => setVolumeEma(Number(event.target.value))} /><i>EMA</i></span></label>
+                  <label><span>Minimum confirmations</span><input type="number" min="0" max="3" step="1" value={minimumConfirmations} onChange={(event) => setMinimumConfirmations(Number(event.target.value))} /><small>RSI recovery remains mandatory and is not scored</small></label>
+                </fieldset>
+                <fieldset className="recovery-config-card cost-card">
+                  <legend>Estimated costs</legend>
+                  <label><span>Buy cost</span><span className="suffixed-input"><input type="number" min="0" step="1" value={buyCostBps} onChange={(event) => setBuyCostBps(Number(event.target.value))} /><i>bps</i></span></label>
+                  <label><span>Sell cost</span><span className="suffixed-input"><input type="number" min="0" step="1" value={sellCostBps} onChange={(event) => setSellCostBps(Number(event.target.value))} /><i>bps</i></span></label>
+                  <label><span>Slippage / side</span><span className="suffixed-input"><input type="number" min="0" step="1" value={slippageBps} onChange={(event) => setSlippageBps(Number(event.target.value))} /><i>bps</i></span></label>
+                  <small>Defaults remain zero. These assumptions are applied to net position P&amp;L.</small>
+                </fieldset>
+              </div>
+            </details>
+          </>}
+          {loading ? (
+            <button className="run-backtest stop-backtest" type="button" onClick={() => runAbortRef.current?.abort()}><Square size={15} />Stop {runProgress ? `${runProgress.completed}/${runProgress.total}` : "run"}</button>
+          ) : (
+            <button className="run-backtest" type="submit"><TrendingUp size={17} />Run backtest</button>
+          )}
+        </form>
+
+        {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}
+        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Fetching and testing historical candles</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols complete. ` : ""}Intraday universe runs can take much longer the first time; cached runs are faster.</span></div></div>}
+
+        {response && (
+          response.metadata.strategyMode === "rsi_recovery" ? <RecoveryResults response={response} /> : <>
+            <section className="backtest-overview">
+              <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>
+              <div><span>Profitable</span><strong className="positive-value">{profitableCount}</strong></div>
+              <div><span>Total closed trades</span><strong>{response.results.reduce((sum, result) => sum + result.closedTrades, 0)}</strong></div>
+              <div><span>Test window</span><strong>{response.metadata.durationYears}Y · {response.metadata.timeframe}</strong></div>
+              <div><span>Generated</span><strong>{formatIst(response.metadata.generatedAt)}</strong></div>
+            </section>
+
+            <section className="backtest-panel">
+              <div className="panel-title"><div><span className="section-kicker">All selected symbols</span><h2>Performance summary</h2></div><span className="cost-note">Includes fees + {number(response.metadata.costModel.slippagePerSidePct)}% slippage per side / sell target at least {number(response.metadata.minimumNetProfitPct)}% net</span></div>
+              <div className="summary-grid summary-head"><span>Symbol</span><span>Result</span><span>Trades</span><span>Win rate</span><span>Strategy</span><span>Buy & hold</span><span>NIFTY 50</span><span>Max drawdown</span><span>Profit factor</span></div>
+              {response.results.map((result) => (
+                <button key={result.symbol} type="button" className={`summary-grid summary-row ${detail?.symbol === result.symbol ? "selected" : ""}`} onClick={() => setDetailSymbol(result.symbol)}>
+                  <strong>{result.symbol}</strong><span className={`verdict ${result.verdict}`}>{result.verdict === "no-trades" ? "No trades" : result.verdict}</span><span data-label="Trades">{result.closedTrades}</span><span data-label="Win rate">{percent(result.winRate)}</span><span data-label="Strategy" className={tone(result.strategyReturnPct)}>{percent(result.strategyReturnPct)}</span><span data-label="Buy & hold" className={tone(result.buyHoldReturnPct)}>{percent(result.buyHoldReturnPct)}</span><span data-label="NIFTY 50" className={tone(result.niftyReturnPct)}>{percent(result.niftyReturnPct)}</span><span data-label="Max drawdown" className="negative-value">{percent(result.maxDrawdownPct)}</span><span data-label="Profit factor">{number(result.profitFactor)}</span>
+                </button>
+              ))}
+            </section>
+
+            {detail && (
+              <section className="backtest-panel detail-panel">
+                <div className="panel-title"><div><span className="section-kicker">Selected result</span><h2>{detail.symbol} trade history</h2></div><span className="date-window">{formatIst(detail.firstCandle, response.metadata.timeframe === "1d")} – {formatIst(detail.lastCandle, response.metadata.timeframe === "1d")}</span></div>
+                <div className="metric-grid">
+                  <div><span>Strategy return</span><strong className={tone(detail.strategyReturnPct)}>{percent(detail.strategyReturnPct)}</strong></div>
+                  <div><span>CAGR</span><strong className={tone(detail.cagrPct)}>{percent(detail.cagrPct)}</strong></div>
+                  <div><span>Win rate</span><strong>{percent(detail.winRate)}</strong></div>
+                  <div><span>Sharpe</span><strong>{number(detail.sharpe)}</strong></div>
+                  <div><span>Sortino</span><strong>{number(detail.sortino)}</strong></div>
+                  <div><span>Avg win / loss</span><strong>{percent(detail.averageWinPct)} / {percent(detail.averageLossPct)}</strong></div>
+                  <div><span>Ending capital</span><strong>{money(detail.endingCapital)}</strong></div>
+                  <div><span>Candles tested</span><strong>{number(detail.bars, 0)}</strong></div>
+                  <div><span>High-RSI exits held</span><strong>{number(detail.heldExitSignals, 0)}</strong></div>
+                </div>
+                <PerformanceChart key={`${detail.symbol}-${detail.firstCandle}-${detail.lastCandle}`} points={detail.chart} entryRange={response.metadata.entryRange} exitRange={response.metadata.exitRange} timeframe={response.metadata.timeframe} />
+
+                {detail.openPosition && <div className="backtest-message open-position"><Clock3 size={17} /><span><strong>Open position:</strong> bought {detail.openPosition.quantity} shares at {money(detail.openPosition.entryPrice)} on {formatIst(detail.openPosition.entryTime)}; marked at {money(detail.openPosition.lastPrice)} ({percent(detail.openPosition.estimatedReturnPct)}).</span></div>}
+
+                <div className="history-columns">
+                  <div className="history-block">
+                    <h3>Completed trades</h3>
+                    {detail.trades.length ? <div className="trade-list">{detail.trades.map((trade, index) => (
+                      <div className="trade-card" key={`${trade.entryTime}-${index}`}>
+                        <div className="trade-card-top"><strong>Trade {index + 1}</strong><span className={tone(trade.returnPct)}>{percent(trade.returnPct)} · {money(trade.netPnl)}</span></div>
+                        <div className="trade-leg buy"><span>BUY · RSI {number(trade.entryRsi)}</span><strong>{money(trade.entryPrice)}</strong><small>{formatIst(trade.entryTime)}</small></div>
+                        <div className="trade-leg sell"><span>SELL · RSI {number(trade.exitRsi)}</span><strong>{money(trade.exitPrice)}</strong><small>{formatIst(trade.exitTime)}</small></div>
+                        <div className="trade-foot"><span>{trade.holdingBars} candles held</span><span>{money(trade.fees)} estimated fees</span></div>
+                      </div>
+                    ))}</div> : <div className="empty-history">No completed low-to-high RSI trade occurred in this window.</div>}
+                  </div>
+                  <div className="history-block">
+                    <h3>RSI range occurrences</h3>
+                    {detail.events.length ? <div className="event-list">{[...detail.events].reverse().map((item, index) => (
+                      <div className="event-row" key={`${item.signalTime}-${item.range}-${index}`}><span className={`event-range ${item.range}`}>{item.range === "entry" ? `${response.metadata.entryRange[0]}–${response.metadata.entryRange[1]}` : `${response.metadata.exitRange[0]}–${response.metadata.exitRange[1]}`}</span><div><strong>RSI {number(item.rsi)} · {money(item.signalClose)}</strong><span>{formatIst(item.signalTime)}</span></div><div><strong>{item.nextOpen === null ? "No next candle" : money(item.nextOpen)}</strong><span>{item.nextCandleTime ? `Next open · ${formatIst(item.nextCandleTime)}` : "Signal only"}</span></div></div>
+                    ))}</div> : <div className="empty-history">No RSI range entries occurred in this window.</div>}
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {(response.errors.length > 0 || response.warnings.length > 0) && <section className="backtest-notes"><h3>Backtest notes</h3>{response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}{response.warnings.map((warning) => <p key={warning}>{warning}</p>)}</section>}
+          </>
+        )}
+      </main>
+    </div>
+  );
+}

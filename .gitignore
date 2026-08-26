@@ -1,0 +1,40 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend build output
+web/node_modules/
+web/.next/
+web/.vinext/
+web/dist/
+web/.wrangler/
+web/coverage/
+
+# Runtime state, caches, reports, and exports
+run/
+data/
+reports/
+outputs/
+work/
+*.tar.gz
+*.zip
+Lastdata.csv
+nse_yesterday_losers_rsi_20_40.csv
+
+# IDE and OS metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

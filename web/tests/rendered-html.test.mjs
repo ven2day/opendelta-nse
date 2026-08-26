@@ -276,10 +276,17 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(backtestText, /<RecoveryResults response=\{response\}/);
   assert.match(backtestText, /Every fresh RSI arm\/recovery cycle is recorded independently/);
   assert.doesNotMatch(backtestText, /one active position per symbol/);
-  assert.match(backtestText, /Exit protection/);
+  assert.match(backtestText, /Exit model/);
+  assert.match(backtestText, /Legacy fixed target/);
+  assert.match(backtestText, /Fixed TP and SL/);
+  assert.match(backtestText, /ATR dynamic TP and SL/);
+  assert.match(backtestText, /Stop ATR multiplier/);
+  assert.match(backtestText, /Reward:risk/);
+  assert.match(backtestText, /Rupee risk budget/);
+  assert.match(backtestText, /Optimize ATR exits/);
   assert.match(backtestText, /Quantity per trade/);
   assert.match(backtestText, /Maximum open lots/);
-  assert.match(backtestText, /Maximum holding trading days/);
+  assert.match(backtestText, /Maximum holding trading sessions/);
   assert.match(backtestText, /Advanced settings/);
   assert.match(backtestText, /exitProtectionEnabled,/);
   assert.match(backtestText, /quantityPerTrade,/);
@@ -307,6 +314,9 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(recoveryResultsText, /summary\.stillOpen/);
   assert.match(recoveryResultsText, /summary\.executedTrades/);
   assert.match(recoveryResultsText, /summary\.openPositions/);
+  assert.match(recoveryResultsText, /ATR at entry/);
+  assert.match(recoveryResultsText, /Stop loss/);
+  assert.match(recoveryResultsText, /summary\.winRate/);
   assert.match(featureAnalysisText, /Entry-time analysis only/);
   assert.match(featureAnalysisText, /Cliff&apos;s delta/);
   assert.match(featureAnalysisText, /Features are frozen on the closed BUY signal candle/);
@@ -321,6 +331,8 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(stylesText, /\.chart-navigator/);
   assert.match(backtestApiText, /getSessionUser/);
   assert.match(backtestApiText, /BACKTEST_SERVICE_URL/);
+  assert.match(backtestApiText, /action === "optimize-atr"/);
+  assert.match(backtestApiText, /\/backtest\/optimize-atr/);
   assert.match(recoveryAnalysisApiText, /getSessionUser/);
   assert.match(recoveryAnalysisApiText, /BACKTEST_SERVICE_URL/);
   assert.match(recoveryAnalysisApiText, /\[PROXY_TOKEN_HEADER\] = proxyToken/);

@@ -32,12 +32,14 @@ export async function POST(request: Request): Promise<Response> {
     const proxyToken = process.env.BACKTEST_PROXY_TOKEN?.trim();
     if (proxyToken) headers[PROXY_TOKEN_HEADER] = proxyToken;
 
-    const upstream = await fetch(`${serviceUrl.replace(/\/$/, "")}/backtest`, {
+    const action = new URL(request.url).searchParams.get("action");
+    const upstreamPath = action === "optimize-atr" ? "/backtest/optimize-atr" : "/backtest";
+    const upstream = await fetch(`${serviceUrl.replace(/\/$/, "")}${upstreamPath}`, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
       cache: "no-store",
-      signal: AbortSignal.timeout(15 * 60 * 1_000),
+      signal: AbortSignal.timeout((action === "optimize-atr" ? 60 : 15) * 60 * 1_000),
     });
     const body = await upstream.text();
     return new Response(body, {

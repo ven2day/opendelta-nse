@@ -66,12 +66,25 @@ export type ProtectedPosition = {
   entryPrice: number;
   quantity: number;
   capitalDeployed: number;
+  exitModel?: "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL";
+  atrLength?: number;
+  atrTimeframe?: string;
+  atrAtSignal?: number;
+  atrPctAtEntry?: number;
+  stopAtrMultiplier?: number;
+  rewardRiskRatio?: number;
+  minimumStopPct?: number;
+  maximumStopPct?: number;
+  dynamicStopPct?: number;
+  dynamicTargetPct?: number;
+  stopLossPrice?: number;
+  rupeeRiskAtEntry?: number;
   targetPrice: number;
   exitTimestamp: string | null;
   exitPrice: number | null;
-  exitReason: "TARGET_EXIT" | "TIME_EXIT" | null;
+  exitReason: "TARGET_EXIT" | "TARGET_GAP" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | null;
   exitFill: "GAP_OPEN" | "TARGET_PRICE" | "NEXT_TRADING_SESSION_OPEN" | null;
-  status: "TARGET_EXIT" | "TIME_EXIT" | "OPEN";
+  status: "TARGET_EXIT" | "TARGET_GAP" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | "OPEN";
   holdingSessions: number;
   tradingSessionsHeld: number;
   barsHeld: number;
@@ -88,6 +101,8 @@ export type ProtectedPosition = {
   slippageCost: number;
   estimatedOpenExitCost: number;
   totalCosts: number;
+  tradingCosts?: number;
+  netPnl?: number;
   realizedPnl: number | null;
   unrealizedPnl: number;
   lastTimestamp: string;
@@ -115,11 +130,27 @@ export type ProtectedRecoverySummary = {
   executedTrades: number;
   skippedMaxOpenLots: number;
   targetExits: number;
+  targetGapExits?: number;
+  stopExits?: number;
+  stopGapExits?: number;
   targetsHit: number;
   timeExits: number;
   openPositions: number;
   openSignals: number;
   targetHitRate: number;
+  winningTrades?: number;
+  losingTrades?: number;
+  winRate?: number;
+  averageDynamicTargetPct?: number | null;
+  averageDynamicStopPct?: number | null;
+  averageRewardRisk?: number | null;
+  grossProfit?: number;
+  grossLoss?: number;
+  tradingCosts?: number;
+  estimatedOpenExitCosts?: number;
+  expectancyPerTrade?: number | null;
+  averageWinner?: number | null;
+  averageLoser?: number | null;
   profitableClosedTrades: number;
   losingClosedTrades: number;
   realizedGrossProfit: number;
@@ -257,9 +288,11 @@ export type RecoveryBacktestResponse = {
     runtimeSeconds: number;
     timezone: string;
     executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
+    exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL";
     backtestSemantics?: "SIGNAL_OBSERVATION" | "POSITION";
     exitProtection?: {
       enabled: boolean;
+      exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL";
       quantityPerTrade: number;
       maxOpenLotsPerSymbol: number;
       maxHoldingTradingDays: number;
@@ -398,13 +431,25 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
   const positions = results.flatMap((result) => result.positions ?? []);
   const skipped = results.flatMap((result) => result.skippedSignals ?? []);
   const closed = positions.filter((position) => position.status !== "OPEN");
-  const targets = positions.filter((position) => position.status === "TARGET_EXIT");
+  const targetExits = positions.filter((position) => position.status === "TARGET_EXIT");
+  const targetGaps = positions.filter((position) => position.status === "TARGET_GAP");
+  const targets = [...targetExits, ...targetGaps];
+  const stopExits = positions.filter((position) => position.status === "STOP_EXIT");
+  const stopGaps = positions.filter((position) => position.status === "STOP_GAP");
   const timeExits = positions.filter((position) => position.status === "TIME_EXIT");
   const open = positions.filter((position) => position.status === "OPEN");
   const realized = finite(closed.map((position) => position.realizedPnl));
   const profits = realized.filter((value) => value > 0);
   const losses = realized.filter((value) => value < 0);
   const gross = closed.map((position) => position.grossPnl);
+  const dynamicExitResults = positions.some((position) => position.exitModel === "FIXED_TP_SL" || position.exitModel === "ATR_DYNAMIC_TP_SL");
+  const costs = finite((dynamicExitResults ? positions : closed).map((position) => position.tradingCosts ?? position.totalCosts));
+  const estimatedOpenExitCosts = dynamicExitResults
+    ? open.reduce((sum, position) => sum + (position.estimatedOpenExitCost ?? 0), 0)
+    : 0;
+  const dynamicTargets = finite(positions.map((position) => position.dynamicTargetPct));
+  const dynamicStops = finite(positions.map((position) => position.dynamicStopPct));
+  const rewardRisks = finite(positions.map((position) => position.rewardRiskRatio));
   const holdingMinutes = positions.map((position) => position.durationMinutes);
   const holdingSessions = positions.map((position) => position.holdingSessions);
   const timeline = positions.flatMap((position) => [
@@ -431,22 +476,38 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
     buySignals: totalValidBuySignals,
     executedTrades: positions.length,
     skippedMaxOpenLots: skipped.length,
-    targetExits: targets.length,
+    targetExits: targetExits.length,
+    targetGapExits: targetGaps.length,
+    stopExits: stopExits.length,
+    stopGapExits: stopGaps.length,
     targetsHit: targets.length,
     timeExits: timeExits.length,
     openPositions: open.length,
     openSignals: open.length,
     targetHitRate: positions.length ? rounded(targets.length / positions.length * 100, 2) ?? 0 : 0,
+    winningTrades: profits.length,
+    losingTrades: losses.length,
+    winRate: closed.length ? rounded(profits.length / closed.length * 100, 2) ?? 0 : 0,
+    averageDynamicTargetPct: rounded(mean(dynamicTargets), 6),
+    averageDynamicStopPct: rounded(mean(dynamicStops), 6),
+    averageRewardRisk: rounded(mean(rewardRisks), 6),
     profitableClosedTrades: profits.length,
     losingClosedTrades: losses.length,
     realizedGrossProfit: rounded(gross.filter((value) => value > 0).reduce((sum, value) => sum + value, 0), 2) ?? 0,
     realizedGrossLoss: rounded(Math.abs(gross.filter((value) => value < 0).reduce((sum, value) => sum + value, 0)), 2) ?? 0,
+    grossProfit: rounded(gross.filter((value) => value > 0).reduce((sum, value) => sum + value, 0), 2) ?? 0,
+    grossLoss: rounded(Math.abs(gross.filter((value) => value < 0).reduce((sum, value) => sum + value, 0)), 2) ?? 0,
+    tradingCosts: rounded(costs.reduce((sum, value) => sum + value, 0), 2) ?? 0,
+    estimatedOpenExitCosts: rounded(estimatedOpenExitCosts, 2) ?? 0,
     netRealizedPnl: rounded(netRealizedPnl, 2) ?? 0,
     unrealizedPnl: rounded(unrealizedPnl, 2) ?? 0,
     combinedPnl: rounded(netRealizedPnl + unrealizedPnl, 2) ?? 0,
     averageProfitPerTrade: rounded(mean(profits), 2),
     averageLossPerTrade: rounded(mean(losses), 2),
+    averageWinner: rounded(mean(profits), 2),
+    averageLoser: rounded(mean(losses), 2),
     profitFactor: losses.length ? rounded(profits.reduce((sum, value) => sum + value, 0) / Math.abs(losses.reduce((sum, value) => sum + value, 0)), 4) : null,
+    expectancyPerTrade: rounded(mean(realized), 2),
     maximumDrawdown: rounded(maximumDrawdown, 2) ?? 0,
     maximumDrawdownPct: peakCapital ? rounded(maximumDrawdown / peakCapital * 100, 4) ?? 0 : 0,
     maximumConcurrentPositions: maximumConcurrent,
@@ -549,20 +610,21 @@ type SortKey = keyof Pick<RecoverySymbolResult,
 function ProtectedPositionTable({ positions }: { positions: ProtectedPosition[] }) {
   if (!positions.length) return <div className="empty-history">No executed positions are available in this view.</div>;
   return <div className="protected-position-table" role="region" aria-label="Protected position results">
-    <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>Target</span><span>Exit</span><span>Exit price</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Realized P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
+    <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>ATR at entry</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>TP</span><span>SL</span><span>Exit</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Net P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
     {positions.map((position) => <div className="protected-position-grid protected-position-row" key={position.tradeId}>
       <span data-label="Signal">{formatIst(position.signalTimestamp)}</span>
       <span data-label="Entry">{formatIst(position.entryTimestamp)}</span>
+      <span data-label="ATR at entry">{position.atrAtSignal === undefined ? "—" : money(position.atrAtSignal)}<small>{position.atrPctAtEntry === undefined ? "" : percent(position.atrPctAtEntry)}</small></span>
       <span data-label="Entry price">{money(position.entryPrice)}</span>
       <span data-label="Quantity">{position.quantity}</span>
       <span data-label="Capital">{money(position.capitalDeployed)}</span>
-      <span data-label="Target">{money(position.targetPrice)}</span>
-      <span data-label="Exit">{formatIst(position.exitTimestamp)}</span>
-      <span data-label="Exit price">{money(position.exitPrice)}</span>
+      <span data-label="Take profit">{money(position.targetPrice)}<small>{position.dynamicTargetPct === undefined ? "" : percent(position.dynamicTargetPct)}</small></span>
+      <span data-label="Stop loss">{position.stopLossPrice === undefined ? "—" : money(position.stopLossPrice)}<small>{position.dynamicStopPct === undefined ? "" : percent(-position.dynamicStopPct)}</small></span>
+      <span data-label="Exit">{formatIst(position.exitTimestamp)}<small>{money(position.exitPrice)}</small></span>
       <span data-label="Exit reason">{position.exitReason?.replaceAll("_", " ") ?? "—"}</span>
       <span data-label="Holding sessions">{position.holdingSessions}<small>{duration(position.durationMinutes)} · {position.barsHeld} bars</small></span>
       <span data-label="MAE / MFE"><b className="negative-value">{percent(position.maxAdversePct)}</b><small className="positive-value">{percent(position.maxFavorablePct)}</small></span>
-      <span data-label="Realized P&L" className={tone(position.realizedPnl)}>{money(position.realizedPnl)}</span>
+      <span data-label="Net P&L" className={tone(position.realizedPnl)}>{money(position.realizedPnl)}<small>{position.tradingCosts === undefined ? "" : `${money(position.tradingCosts)} costs`}</small></span>
       <span data-label="Unrealized P&L" className={tone(position.status === "OPEN" ? position.unrealizedPnl : null)}>{position.status === "OPEN" ? money(position.unrealizedPnl) : "—"}</span>
       <span data-label="Status"><b className={`trade-status ${position.status.toLowerCase()}`}>{position.status.replaceAll("_", " ")}</b></span>
     </div>)}
@@ -588,6 +650,7 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
     ["features", "Feature Analysis", null],
   ] as const;
   const protection = response.metadata.exitProtection;
+  const dynamicExit = response.metadata.exitModel === "ATR_DYNAMIC_TP_SL" || response.metadata.exitModel === "FIXED_TP_SL";
 
   return <>
     <nav className="recovery-result-tabs" aria-label="Protected position result views">
@@ -599,16 +662,20 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
         <div><span>Valid BUY signals</span><strong>{summary.totalValidBuySignals.toLocaleString("en-IN")}</strong></div>
         <div><span>Executed trades</span><strong>{summary.executedTrades.toLocaleString("en-IN")}</strong></div>
         <div><span>Skipped · max lots</span><strong>{summary.skippedMaxOpenLots.toLocaleString("en-IN")}</strong></div>
-        <div><span>Target exits</span><strong>{summary.targetExits.toLocaleString("en-IN")}</strong></div>
+        <div><span>Target exits</span><strong>{(summary.targetExits + (summary.targetGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>
+        {dynamicExit && <div><span>Stop exits</span><strong>{((summary.stopExits ?? 0) + (summary.stopGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
         <div><span>Time exits</span><strong>{summary.timeExits.toLocaleString("en-IN")}</strong></div>
         <div><span>Open positions</span><strong className={summary.openPositions ? "warning-value" : "positive-value"}>{summary.openPositions.toLocaleString("en-IN")}</strong></div>
       </section>
-      <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with exit protection.</strong> Target-hit rate measures target exits, not profitability. Skipped signals are preserved separately and excluded from trade P&amp;L.</span></div>
+      <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with {dynamicExit ? "explicit TP/SL exits" : "legacy exit protection"}.</strong> Win rate and net P&amp;L measure closed-trade profitability; target-hit rate is not used as a substitute. Skipped signals remain separate.</span></div>
 
       <section className="backtest-panel recovery-section">
         <div className="panel-title"><div><span className="section-kicker">Position outcomes</span><h2>Exit and profitability summary</h2></div><span className="date-window">{protection?.quantityPerTrade ?? 50} shares · max {protection?.maxOpenLotsPerSymbol ?? 1} lot · {protection?.maxHoldingTradingDays ?? 5} NSE sessions</span></div>
         <div className="metric-grid protected-metric-grid">
           <div><span>Target-hit rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
+          {dynamicExit && <div><span>Win rate</span><strong>{percent(summary.winRate ?? 0)}</strong></div>}
+          {dynamicExit && <div><span>Target gaps</span><strong>{summary.targetGapExits ?? 0}</strong></div>}
+          {dynamicExit && <div><span>Stop exits / gaps</span><strong>{summary.stopExits ?? 0} / {summary.stopGapExits ?? 0}</strong></div>}
           <div><span>Profitable closed</span><strong className="positive-value">{summary.profitableClosedTrades}</strong></div>
           <div><span>Losing closed</span><strong className="negative-value">{summary.losingClosedTrades}</strong></div>
           <div><span>Realized gross profit</span><strong className="positive-value">{money(summary.realizedGrossProfit)}</strong></div>
@@ -619,6 +686,10 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
           <div><span>Average profit / trade</span><strong className="positive-value">{money(summary.averageProfitPerTrade)}</strong></div>
           <div><span>Average loss / trade</span><strong className="negative-value">{money(summary.averageLossPerTrade)}</strong></div>
           <div><span>Profit factor</span><strong>{number(summary.profitFactor)}</strong></div>
+          {dynamicExit && <div><span>Average TP / SL</span><strong>{percent(summary.averageDynamicTargetPct ?? null)} / {percent(-(summary.averageDynamicStopPct ?? 0))}</strong></div>}
+          {dynamicExit && <div><span>Average reward:risk</span><strong>{number(summary.averageRewardRisk ?? null)}</strong></div>}
+          {dynamicExit && <div><span>Trading costs</span><strong>{money(summary.tradingCosts ?? 0)}</strong></div>}
+          {dynamicExit && <div><span>Expectancy / closed trade</span><strong className={tone(summary.expectancyPerTrade ?? null)}>{money(summary.expectancyPerTrade ?? null)}</strong></div>}
           <div><span>Maximum drawdown</span><strong className="negative-value">{money(-summary.maximumDrawdown)}<small>{percent(-summary.maximumDrawdownPct)}</small></strong></div>
           <div><span>Maximum concurrent</span><strong>{summary.maximumConcurrentPositions}</strong></div>
           <div><span>Peak capital deployed</span><strong>{money(summary.peakCapitalDeployed)}</strong></div>
@@ -648,7 +719,7 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
 
     <section className="backtest-notes recovery-run-metadata">
       <h3>Run metadata and cautions</h3>
-      <p><strong>Mode:</strong> Exit protection ON · {response.metadata.executionModel} · target {number(Number(response.metadata.strategyParameters.targetPct))}% · no stop loss.</p>
+      <p><strong>Mode:</strong> {response.metadata.exitModel?.replaceAll("_", " ") ?? "Legacy exit protection"} · {response.metadata.executionModel}{dynamicExit ? " · TP/SL frozen at entry" : ` · target ${number(Number(response.metadata.strategyParameters.targetPct))}% · no stop loss`}.</p>
       <p><strong>Costs:</strong> buy {number(response.metadata.costModel.buyCostBps)} bps, sell {number(response.metadata.costModel.sellCostBps)} bps, slippage {number(response.metadata.costModel.slippageBpsPerSide)} bps per side.</p>
       <p><strong>P&amp;L:</strong> Combined P&amp;L equals net realized P&amp;L plus estimated net unrealized P&amp;L at the final close. Multi-symbol drawdown conservatively sums independent symbol drawdowns.</p>
       {response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}

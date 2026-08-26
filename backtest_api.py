@@ -23,6 +23,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from atr_exit_optimizer import (
+    AtrOptimizationGrid,
+    evaluate_atr_exit_grid,
+)
 from live_signals import (
     LiveSignalEngine,
     LiveSignalRepository,
@@ -55,6 +59,12 @@ from recovery_feature_analysis import (
     filter_feature_snapshots,
     load_feature_analysis,
     load_feature_snapshots,
+)
+from recovery_dynamic_exit import (
+    DYNAMIC_EXIT_VERSION,
+    DynamicExitConfig,
+    aggregate_dynamic_exit_results,
+    simulate_dynamic_exit_symbol,
 )
 from recovery_position_backtest import (
     POSITION_BACKTEST_VERSION,
@@ -145,8 +155,23 @@ class BacktestRequest(BaseModel):
     buyCostBps: float = Field(default=0, ge=0, le=10_000)
     sellCostBps: float = Field(default=0, ge=0, le=10_000)
     slippageBps: float = Field(default=0, ge=0, le=10_000)
+    exitModel: Literal[
+        "LEGACY_FIXED_TARGET", "FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"
+    ] = "LEGACY_FIXED_TARGET"
     exitProtectionEnabled: bool = False
+    fixedStopLossPct: float = Field(default=1.0, gt=0, le=100)
+    atrLength: int = Field(default=14, ge=1, le=500)
+    stopAtrMultiplier: float = Field(default=1.25, gt=0, le=100)
+    rewardRiskRatio: float = Field(default=1.5, gt=0, le=100)
+    minimumStopPct: float = Field(default=0.75, gt=0, le=100)
+    maximumStopPct: float = Field(default=3.0, gt=0, le=100)
+    positionSizing: Literal["FIXED_QUANTITY", "RISK_BUDGET"] = "FIXED_QUANTITY"
     quantityPerTrade: int = Field(default=50, ge=1, le=1_000_000)
+    rupeeRiskBudget: float = Field(default=2_500, gt=0, le=1_000_000_000)
+    maximumQuantity: int = Field(default=10_000, ge=1, le=1_000_000)
+    maximumCapitalPerPosition: float = Field(
+        default=1_000_000, gt=0, le=100_000_000_000
+    )
     maxOpenLotsPerSymbol: int = Field(default=1, ge=1, le=1_000)
     maxHoldingTradingDays: int = Field(default=5, ge=1, le=1_000)
     timeExit: Literal["NEXT_TRADING_SESSION_OPEN"] = "NEXT_TRADING_SESSION_OPEN"
@@ -162,14 +187,23 @@ class BacktestRequest(BaseModel):
     @model_validator(mode="after")
     def validate_strategy_parameters(self) -> "BacktestRequest":
         if self.strategyMode == "rsi_range":
-            if self.exitProtectionEnabled:
-                raise ValueError("Exit protection is available only for RSI Recovery")
+            if self.exitProtectionEnabled or self.exitModel != "LEGACY_FIXED_TARGET":
+                raise ValueError("Position exit models are available only for RSI Recovery")
             if not self.entryLow < self.entryHigh < self.exitLow < self.exitHigh:
                 raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
             return self
 
-        if self.exitProtectionEnabled and "targetPct" not in self.model_fields_set:
+        if (
+            self.exitProtectionEnabled
+            and "exitModel" not in self.model_fields_set
+            and "targetPct" not in self.model_fields_set
+        ):
             self.targetPct = 0.51
+
+        if self.exitModel != "LEGACY_FIXED_TARGET":
+            self.exitProtectionEnabled = True
+        if self.minimumStopPct > self.maximumStopPct:
+            raise ValueError("Minimum stop percentage cannot exceed maximum stop percentage")
 
         if not self.rsiArmLow < self.rsiArmHigh:
             raise ValueError("RSI arm low must be lower than RSI arm high")
@@ -208,6 +242,102 @@ class BacktestRequest(BaseModel):
             max_open_lots_per_symbol=self.maxOpenLotsPerSymbol,
             max_holding_sessions=self.maxHoldingTradingDays,
             time_exit=self.timeExit,
+        )
+
+    def resolved_exit_model(self) -> str:
+        if (
+            self.exitProtectionEnabled
+            and self.exitModel == "LEGACY_FIXED_TARGET"
+            and "exitModel" not in self.model_fields_set
+        ):
+            return "LEGACY_PROTECTED_TARGET"
+        return self.exitModel
+
+    def dynamic_exit_config(self) -> DynamicExitConfig:
+        model = self.resolved_exit_model()
+        if model not in {"FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"}:
+            raise ValueError("Dynamic exit configuration requested for a legacy exit model")
+        return DynamicExitConfig(
+            exit_model=model,
+            fixed_take_profit_pct=self.targetPct,
+            fixed_stop_loss_pct=self.fixedStopLossPct,
+            atr_length=self.atrLength,
+            stop_atr_multiplier=self.stopAtrMultiplier,
+            reward_risk_ratio=self.rewardRiskRatio,
+            minimum_stop_pct=self.minimumStopPct,
+            maximum_stop_pct=self.maximumStopPct,
+            max_holding_sessions=self.maxHoldingTradingDays,
+            max_open_lots_per_symbol=self.maxOpenLotsPerSymbol,
+            position_sizing=self.positionSizing,
+            quantity_per_trade=self.quantityPerTrade,
+            rupee_risk_budget=self.rupeeRiskBudget,
+            maximum_quantity=self.maximumQuantity,
+            maximum_capital_per_position=self.maximumCapitalPerPosition,
+        )
+
+
+class AtrOptimizationRequest(BacktestRequest):
+    symbols: list[str] = Field(min_length=1, max_length=750)
+    strategyMode: Literal["rsi_recovery"] = "rsi_recovery"
+    exitModel: Literal["ATR_DYNAMIC_TP_SL"] = "ATR_DYNAMIC_TP_SL"
+    atrLengths: list[int] = Field(default=[14], min_length=1, max_length=20)
+    stopAtrMultipliers: list[float] = Field(
+        default=[0.75, 1.0, 1.25, 1.5, 2.0], min_length=1, max_length=20
+    )
+    rewardRiskRatios: list[float] = Field(
+        default=[1.0, 1.25, 1.5, 2.0], min_length=1, max_length=20
+    )
+    maxHoldingSessionsGrid: list[int] = Field(
+        default=[1, 3, 5], min_length=1, max_length=20
+    )
+    minimumStopPcts: list[float] = Field(
+        default=[0.5, 0.75, 1.0], min_length=1, max_length=20
+    )
+    maximumStopPcts: list[float] = Field(
+        default=[2.0, 3.0, 5.0], min_length=1, max_length=20
+    )
+    minimumValidationTrades: int = Field(default=20, ge=1, le=1_000_000)
+
+    @field_validator(
+        "atrLengths", "maxHoldingSessionsGrid"
+    )
+    @classmethod
+    def positive_integer_grid(cls, values: list[int]) -> list[int]:
+        if any(value <= 0 for value in values):
+            raise ValueError("ATR lengths and holding-session grid values must be positive")
+        return values
+
+    @field_validator(
+        "stopAtrMultipliers", "rewardRiskRatios", "minimumStopPcts", "maximumStopPcts"
+    )
+    @classmethod
+    def positive_float_grid(cls, values: list[float]) -> list[float]:
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            raise ValueError("ATR optimization grid values must be finite and positive")
+        return values
+
+    @model_validator(mode="after")
+    def validate_grid_size(self) -> "AtrOptimizationRequest":
+        combinations = (
+            len(set(self.atrLengths))
+            * len(set(self.stopAtrMultipliers))
+            * len(set(self.rewardRiskRatios))
+            * len(set(self.maxHoldingSessionsGrid))
+            * len(set(self.minimumStopPcts))
+            * len(set(self.maximumStopPcts))
+        )
+        if combinations > 5_000:
+            raise ValueError("ATR optimization grid is limited to 5,000 configurations per run")
+        return self
+
+    def optimization_grid(self) -> AtrOptimizationGrid:
+        return AtrOptimizationGrid(
+            atr_lengths=tuple(self.atrLengths),
+            stop_atr_multipliers=tuple(self.stopAtrMultipliers),
+            reward_risk_ratios=tuple(self.rewardRiskRatios),
+            max_holding_sessions=tuple(self.maxHoldingSessionsGrid),
+            minimum_stop_pcts=tuple(self.minimumStopPcts),
+            maximum_stop_pcts=tuple(self.maximumStopPcts),
         )
 
 
@@ -911,6 +1041,14 @@ def run_recovery_backtest(
     run_id = request.runId or str(uuid.uuid4())
     config = request.recovery_config()
     protection = request.protection_config()
+    exit_model = request.resolved_exit_model()
+    dynamic_exit = (
+        request.dynamic_exit_config()
+        if exit_model in {"FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"}
+        else None
+    )
+    legacy_protection = exit_model == "LEGACY_PROTECTED_TARGET"
+    position_backtest = legacy_protection or dynamic_exit is not None
 
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
@@ -925,10 +1063,18 @@ def run_recovery_backtest(
         "Results use the current symbols.csv universe, so delisted securities are not represented (survivorship bias).",
         "Historical target achievement and signal quality do not establish live profitability.",
     ]
-    if protection.enabled:
+    if legacy_protection:
         warnings.extend([
             "Exit protection is ON: valid RSI Recovery signals become fixed-quantity positions subject to the configured per-symbol open-lot limit.",
             "There is no stop loss. Positions that miss the target through the configured holding sessions exit at the next available NSE session's first candle open.",
+            "Skipped max-open-lot signals are preserved separately and never enter trade-profitability calculations.",
+            "Position drawdown is exact per symbol; multi-symbol maximum drawdown is a conservative sum of independent symbol drawdowns rather than a cash-shared portfolio simulation.",
+        ])
+    elif dynamic_exit is not None:
+        warnings.extend([
+            f"{exit_model} is ON: valid RSI Recovery signals become positions with frozen take-profit and stop-loss levels.",
+            "Gap exits use the candle open. If both stop and target are touched inside one OHLC candle, the conservative stop-first assumption is used.",
+            "TP/SL monitoring begins after the entry candle. Time exits use actual NSE session dates and the next available session open.",
             "Skipped max-open-lot signals are preserved separately and never enter trade-profitability calculations.",
             "Position drawdown is exact per symbol; multi-symbol maximum drawdown is a conservative sum of independent symbol drawdowns rather than a cash-shared portfolio simulation.",
         ])
@@ -939,7 +1085,13 @@ def run_recovery_backtest(
         ])
     requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
     worker_count = max(1, min(requested_workers, len(request.symbols), MAX_SYMBOLS_PER_RUN))
-    warmup_bars = max(config.rsi_length + 2, config.ema_fast, config.ema_slow, config.volume_ema) + 5
+    warmup_bars = max(
+        config.rsi_length + 2,
+        config.ema_fast,
+        config.ema_slow,
+        config.volume_ema,
+        dynamic_exit.atr_length if dynamic_exit is not None else 0,
+    ) + 5
 
     def process(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
         try:
@@ -951,13 +1103,23 @@ def run_recovery_backtest(
                 now,
                 warmup_bars=warmup_bars,
             )
-            if protection.enabled:
+            if legacy_protection:
                 result = simulate_protected_recovery_symbol(
                     symbol,
                     candles,
                     timeframe=request.timeframe,
                     recovery_config=config,
                     protection_config=protection,
+                    run_id=run_id,
+                    analysis_start=analysis_start,
+                )
+            elif dynamic_exit is not None:
+                result = simulate_dynamic_exit_symbol(
+                    symbol,
+                    candles,
+                    timeframe=request.timeframe,
+                    recovery_config=config,
+                    exit_config=dynamic_exit,
                     run_id=run_id,
                     analysis_start=analysis_start,
                 )
@@ -994,7 +1156,18 @@ def run_recovery_backtest(
     runtime_seconds = time.perf_counter() - started_clock
     data_from = min((result["firstCandle"] for result in results), default=None)
     data_to = max((result["lastCandle"] for result in results), default=None)
-    summary = aggregate_protected_results(results) if protection.enabled else aggregate_recovery_results(results)
+    if legacy_protection:
+        summary = aggregate_protected_results(results)
+    elif dynamic_exit is not None:
+        summary = aggregate_dynamic_exit_results(results)
+    else:
+        summary = aggregate_recovery_results(results)
+    public_exit_parameters = (
+        dynamic_exit.public_parameters()
+        if dynamic_exit is not None
+        else protection.public_parameters()
+    )
+    public_exit_parameters["exitModel"] = exit_model
     return {
         "metadata": {
             "runId": run_id,
@@ -1017,9 +1190,14 @@ def run_recovery_backtest(
             "timezone": "Asia/Kolkata",
             "executionModel": config.execution_model,
             "strategyParameters": config.public_parameters(),
-            "backtestSemantics": "POSITION" if protection.enabled else "SIGNAL_OBSERVATION",
-            "exitProtection": protection.public_parameters(),
-            "positionBacktestVersion": POSITION_BACKTEST_VERSION if protection.enabled else None,
+            "backtestSemantics": "POSITION" if position_backtest else "SIGNAL_OBSERVATION",
+            "exitModel": exit_model,
+            "exitProtection": public_exit_parameters,
+            "positionBacktestVersion": (
+                DYNAMIC_EXIT_VERSION
+                if dynamic_exit is not None
+                else POSITION_BACKTEST_VERSION if legacy_protection else None
+            ),
             "costModel": {
                 "buyCostBps": config.buy_cost_bps,
                 "sellCostBps": config.sell_cost_bps,
@@ -1041,6 +1219,91 @@ def run_recovery_backtest(
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def run_atr_exit_optimization(
+    request: AtrOptimizationRequest,
+    store: HistoricalDataStore,
+    now_ist: datetime | None = None,
+) -> dict[str, Any]:
+    now = (now_ist or datetime.now(IST)).astimezone(IST)
+    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
+    universe = set(store.universe())
+    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
+    if unavailable:
+        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
+    grid = request.optimization_grid()
+    warmup_bars = max(
+        request.rsiLength + 2,
+        request.emaFast,
+        request.emaSlow,
+        request.volumeEma,
+        max(grid.atr_lengths),
+    ) + 5
+    requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
+    worker_count = max(1, min(requested_workers, len(request.symbols), 8))
+
+    def load(symbol: str) -> tuple[str, pd.DataFrame | None, dict[str, str] | None]:
+        try:
+            candles = store.candles(
+                symbol,
+                request.timeframe,
+                request.durationYears,
+                analysis_start,
+                now,
+                warmup_bars=warmup_bars,
+            )
+            return symbol, candles, None
+        except (DhanAPIError, ValueError, OSError, KeyError) as error:
+            return symbol, None, {"symbol": symbol, "message": str(error)}
+
+    if worker_count == 1:
+        loaded = [load(symbol) for symbol in request.symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="atr-optimizer-load",
+        ) as executor:
+            loaded = list(executor.map(load, request.symbols))
+    symbol_candles = {
+        symbol: candles
+        for symbol, candles, error in loaded
+        if error is None and candles is not None
+    }
+    errors = [error for _, _, error in loaded if error is not None]
+    if not symbol_candles:
+        raise ValueError("No selected symbol produced valid historical candles for optimization")
+    payload = evaluate_atr_exit_grid(
+        symbol_candles,
+        timeframe=request.timeframe,
+        recovery_config=request.recovery_config(),
+        base_exit_config=request.dynamic_exit_config(),
+        grid=grid,
+        analysis_start=analysis_start,
+        analysis_end=now,
+        duration_years=request.durationYears,
+        run_id=request.runId or str(uuid.uuid4()),
+        minimum_validation_trades=request.minimumValidationTrades,
+    )
+    payload["metadata"].update({
+        "strategyMode": "rsi_recovery",
+        "strategyVersion": RECOVERY_STRATEGY_VERSION,
+        "exitModel": "ATR_DYNAMIC_TP_SL",
+        "executionModel": request.executionModel,
+        "durationYears": request.durationYears,
+        "analysisStart": analysis_start.isoformat(),
+        "analysisEnd": now.isoformat(),
+        "symbolsRequested": len(request.symbols),
+        "symbolsProcessed": len(symbol_candles),
+        "symbolsFailed": len(errors),
+        "costModel": {
+            "buyCostBps": request.buyCostBps,
+            "sellCostBps": request.sellCostBps,
+            "slippageBpsPerSide": request.slippageBps,
+        },
+    })
+    payload["errors"] = errors
+    return payload
 
 
 def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
@@ -1573,6 +1836,19 @@ async def backtest(request: BacktestRequest) -> dict[str, Any]:
     async with _run_lock:
         try:
             return await asyncio.to_thread(run_backtest, request, get_store())
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except DhanAPIError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/backtest/optimize-atr")
+async def optimize_atr_exits(request: AtrOptimizationRequest) -> dict[str, Any]:
+    async with _run_lock:
+        try:
+            return await asyncio.to_thread(
+                run_atr_exit_optimization, request, get_store()
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except DhanAPIError as error:

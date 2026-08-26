@@ -185,6 +185,29 @@ class RequestTests(unittest.TestCase):
         request = BacktestRequest(symbols=[" lupin.ns ", "LUPIN", "INFY"])
         self.assertEqual(request.symbols, ["LUPIN", "INFY"])
 
+    def test_exit_model_contract_preserves_legacy_clients(self) -> None:
+        legacy = BacktestRequest(symbols=["LUPIN"], strategyMode="rsi_recovery")
+        self.assertEqual(legacy.resolved_exit_model(), "LEGACY_FIXED_TARGET")
+
+        old_protected_client = BacktestRequest(
+            symbols=["LUPIN"],
+            strategyMode="rsi_recovery",
+            exitProtectionEnabled=True,
+        )
+        self.assertEqual(old_protected_client.resolved_exit_model(), "LEGACY_PROTECTED_TARGET")
+
+        dynamic = BacktestRequest(
+            symbols=["LUPIN"],
+            strategyMode="rsi_recovery",
+            exitModel="ATR_DYNAMIC_TP_SL",
+        )
+        self.assertEqual(dynamic.resolved_exit_model(), "ATR_DYNAMIC_TP_SL")
+        self.assertTrue(dynamic.exitProtectionEnabled)
+
+    def test_atr_optimizer_api_surface_is_registered(self) -> None:
+        paths = {route.path for route in app.routes}
+        self.assertIn("/backtest/optimize-atr", paths)
+
     def test_live_universe_defaults_and_overrides_are_validated(self) -> None:
         request = LiveUniverseRequest()
         self.assertEqual(request.topN, 300)

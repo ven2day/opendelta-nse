@@ -28,6 +28,10 @@ import {
   mergeRecoveryResponses,
   type RecoveryBacktestResponse,
 } from "./recovery-results";
+import {
+  AtrOptimizationResults,
+  type AtrOptimizationResponse,
+} from "./atr-optimization-results";
 
 type BacktestDashboardProps = {
   symbols: string[];
@@ -202,6 +206,14 @@ function formatIst(value: string | null, daily = false) {
 function tone(value: number | null) {
   if (value === null || value === 0) return "neutral-value";
   return value > 0 ? "positive-value" : "negative-value";
+}
+
+function parseOptimizationGrid(value: string, label: string, wholeNumbers = false): number[] {
+  const parsed = Array.from(new Set(value.split(",").map((item) => Number(item.trim()))));
+  if (!parsed.length || parsed.some((item) => !Number.isFinite(item) || item <= 0 || (wholeNumbers && !Number.isInteger(item)))) {
+    throw new Error(`${label} must be a comma-separated list of positive ${wholeNumbers ? "whole numbers" : "numbers"}.`);
+  }
+  return parsed;
 }
 
 function chartDecisionTitle(point: ChartPoint) {
@@ -526,16 +538,36 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [buyCostBps, setBuyCostBps] = useState(0);
   const [sellCostBps, setSellCostBps] = useState(0);
   const [slippageBps, setSlippageBps] = useState(0);
-  const [exitProtectionEnabled, setExitProtectionEnabled] = useState(false);
+  const [exitModel, setExitModel] = useState<"LEGACY_FIXED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL">("LEGACY_FIXED_TARGET");
+  const [fixedStopLossPct, setFixedStopLossPct] = useState(1);
+  const [atrLength, setAtrLength] = useState(14);
+  const [stopAtrMultiplier, setStopAtrMultiplier] = useState(1.25);
+  const [rewardRiskRatio, setRewardRiskRatio] = useState(1.5);
+  const [minimumStopPct, setMinimumStopPct] = useState(0.75);
+  const [maximumStopPct, setMaximumStopPct] = useState(3);
+  const [positionSizing, setPositionSizing] = useState<"FIXED_QUANTITY" | "RISK_BUDGET">("FIXED_QUANTITY");
   const [quantityPerTrade, setQuantityPerTrade] = useState(50);
+  const [rupeeRiskBudget, setRupeeRiskBudget] = useState(2500);
+  const [maximumQuantity, setMaximumQuantity] = useState(10000);
+  const [maximumCapitalPerPosition, setMaximumCapitalPerPosition] = useState(1000000);
   const [maxOpenLotsPerSymbol, setMaxOpenLotsPerSymbol] = useState(1);
   const [maxHoldingTradingDays, setMaxHoldingTradingDays] = useState(5);
+  const [optimizerGrid, setOptimizerGrid] = useState({
+    stopAtrMultipliers: "0.75, 1.00, 1.25, 1.50, 2.00",
+    rewardRiskRatios: "1.00, 1.25, 1.50, 2.00",
+    maxHoldingSessions: "1, 3, 5",
+    minimumStopPcts: "0.50, 0.75, 1.00",
+    maximumStopPcts: "2.00, 3.00, 5.00",
+  });
+  const [optimizing, setOptimizing] = useState(false);
+  const [optimization, setOptimization] = useState<AtrOptimizationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | null>(null);
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<{ completed: number; total: number } | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
+  const exitProtectionEnabled = exitModel !== "LEGACY_FIXED_TARGET";
 
   const choices = useMemo(() => {
     const query = symbolQuery.trim().toUpperCase();
@@ -601,6 +633,28 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
         setError("Quantity, maximum open lots, and maximum holding days must be positive whole numbers.");
         return;
       }
+      if (exitModel === "FIXED_TP_SL" && !(fixedStopLossPct > 0)) {
+        setError("Fixed stop-loss percentage must be greater than 0%.");
+        return;
+      }
+      if (exitModel === "ATR_DYNAMIC_TP_SL" && !(
+        Number.isInteger(atrLength) && atrLength > 0
+        && stopAtrMultiplier > 0
+        && rewardRiskRatio > 0
+        && minimumStopPct > 0
+        && maximumStopPct >= minimumStopPct
+      )) {
+        setError("ATR length and multipliers must be positive, and maximum stop must be at least minimum stop.");
+        return;
+      }
+      if (exitProtectionEnabled && positionSizing === "RISK_BUDGET" && !(
+        rupeeRiskBudget > 0
+        && Number.isInteger(maximumQuantity) && maximumQuantity > 0
+        && maximumCapitalPerPosition > 0
+      )) {
+        setError("Risk budget, maximum quantity, and maximum capital must be positive.");
+        return;
+      }
     }
 
     setLoading(true);
@@ -640,8 +694,19 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           buyCostBps,
           sellCostBps,
           slippageBps,
+          exitModel,
           exitProtectionEnabled,
+          fixedStopLossPct,
+          atrLength,
+          stopAtrMultiplier,
+          rewardRiskRatio,
+          minimumStopPct,
+          maximumStopPct,
+          positionSizing,
           quantityPerTrade,
+          rupeeRiskBudget,
+          maximumQuantity,
+          maximumCapitalPerPosition,
           maxOpenLotsPerSymbol,
           maxHoldingTradingDays,
           timeExit: "NEXT_TRADING_SESSION_OPEN",
@@ -702,6 +767,88 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     }
   };
 
+  const optimizeAtrExits = async () => {
+    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    if (!symbolsToRun.length) {
+      setError("Select at least one symbol before optimizing ATR exits.");
+      return;
+    }
+    try {
+      const controller = new AbortController();
+      runAbortRef.current = controller;
+      setOptimizing(true);
+      setOptimization(null);
+      setError(null);
+      const result = await fetch("/api/backtest?action=optimize-atr", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          symbols: symbolsToRun,
+          strategyMode: "rsi_recovery",
+          universeMode: useAllSymbols ? "all" : "selected",
+          runId: crypto.randomUUID(),
+          durationYears,
+          timeframe,
+          rsiLength,
+          rsiArmLow,
+          rsiArmHigh,
+          rsiRecovery,
+          emaEnabled,
+          emaFast,
+          emaSlow,
+          vwapEnabled,
+          volumeEnabled,
+          volumeEma,
+          minimumConfirmations,
+          targetPct,
+          setupExpiryBars,
+          executionModel,
+          buyCostBps,
+          sellCostBps,
+          slippageBps,
+          exitModel: "ATR_DYNAMIC_TP_SL",
+          atrLength,
+          stopAtrMultiplier,
+          rewardRiskRatio,
+          minimumStopPct,
+          maximumStopPct,
+          positionSizing,
+          quantityPerTrade,
+          rupeeRiskBudget,
+          maximumQuantity,
+          maximumCapitalPerPosition,
+          maxOpenLotsPerSymbol,
+          maxHoldingTradingDays,
+          atrLengths: [atrLength],
+          stopAtrMultipliers: parseOptimizationGrid(optimizerGrid.stopAtrMultipliers, "Stop ATR multipliers"),
+          rewardRiskRatios: parseOptimizationGrid(optimizerGrid.rewardRiskRatios, "Reward:risk values"),
+          maxHoldingSessionsGrid: parseOptimizationGrid(optimizerGrid.maxHoldingSessions, "Holding sessions", true),
+          minimumStopPcts: parseOptimizationGrid(optimizerGrid.minimumStopPcts, "Minimum stops"),
+          maximumStopPcts: parseOptimizationGrid(optimizerGrid.maximumStopPcts, "Maximum stops"),
+        }),
+      });
+      const body = await result.text();
+      let payload: AtrOptimizationResponse & { detail?: string };
+      try {
+        payload = JSON.parse(body) as AtrOptimizationResponse & { detail?: string };
+      } catch {
+        throw new Error(`ATR optimization returned an unreadable response (HTTP ${result.status}).`);
+      }
+      if (!result.ok) throw new Error(payload.detail ?? "ATR optimization could not be completed.");
+      setOptimization(payload);
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        setError("ATR optimization was stopped.");
+      } else {
+        setError(caught instanceof Error ? caught.message : "ATR optimization could not be completed.");
+      }
+    } finally {
+      runAbortRef.current = null;
+      setOptimizing(false);
+    }
+  };
+
   return (
     <div className="site-shell backtest-shell" data-theme={darkMode ? "dark" : "light"}>
       <header className="global-header">
@@ -751,8 +898,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                 <span><b>ENTRY:</b> {executionModel === "SIGNAL_CLOSE" ? "Reference the completed signal candle close." : "Execute at the following candle open."}</span>
                 <span><b>TARGET:</b> {targetPct}% from entry, monitored only from the following candle.</span>
                 {exitProtectionEnabled ? <>
-                  <span><b>POSITION LIMIT:</b> Buy {quantityPerTrade} shares only while fewer than {maxOpenLotsPerSymbol} lot(s) are open for that symbol.</span>
-                  <span><b>TIME EXIT:</b> Hold through {maxHoldingTradingDays} NSE sessions including entry day, then exit at the next available session open. No stop loss.</span>
+                  <span><b>POSITION LIMIT:</b> Use {positionSizing === "FIXED_QUANTITY" ? `${quantityPerTrade} shares` : `a ${rupeeRiskBudget.toLocaleString("en-IN")} INR risk budget`} while fewer than {maxOpenLotsPerSymbol} lot(s) are open for that symbol.</span>
+                  <span><b>EXITS:</b> {exitModel === "ATR_DYNAMIC_TP_SL" ? `Freeze ATR(${atrLength}) TP/SL at entry using ${stopAtrMultiplier}× ATR and ${rewardRiskRatio}:1 reward:risk.` : `Use fixed ${targetPct}% TP and ${fixedStopLossPct}% SL.`}</span>
+                  <span><b>TIME EXIT:</b> Hold through {maxHoldingTradingDays} NSE sessions including entry day, then exit at the next available session open.</span>
                 </> : <span><b>OBSERVATIONS:</b> Every fresh RSI arm/recovery cycle is recorded independently. Open signals do not block later signals; there is no stop loss, end-of-day exit, or leverage.</span>}
               </>}
             </span>
@@ -801,16 +949,17 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
             <div className="recovery-config recovery-simple-config">
               <fieldset className="recovery-config-card target-card">
                 <legend>Execution &amp; target</legend>
-                <label><span>Profit target</span><span className="suffixed-input"><input aria-label="Profit target" type="number" min="0.01" step="0.01" value={targetPct} onChange={(event) => setTargetPct(Number(event.target.value))} /><i>%</i></span></label>
+                <label><span>{exitModel === "ATR_DYNAMIC_TP_SL" ? "Target" : "Profit target"}</span>{exitModel === "ATR_DYNAMIC_TP_SL" ? <strong className="derived-value">ATR-derived</strong> : <span className="suffixed-input"><input aria-label="Profit target" type="number" min="0.01" step="0.01" value={targetPct} onChange={(event) => setTargetPct(Number(event.target.value))} /><i>%</i></span>}</label>
                 <div className="execution-model"><span>Execution model</span><div className="segmented backtest-segmented"><button type="button" className={executionModel === "SIGNAL_CLOSE" ? "active" : ""} onClick={() => setExecutionModel("SIGNAL_CLOSE")}>Signal close</button><button type="button" className={executionModel === "NEXT_BAR_OPEN" ? "active" : ""} onClick={() => setExecutionModel("NEXT_BAR_OPEN")}>Next open</button></div></div>
-                <div className="execution-model"><span>Exit protection</span><div className="segmented backtest-segmented exit-protection-toggle"><button type="button" className={!exitProtectionEnabled ? "active" : ""} onClick={() => setExitProtectionEnabled(false)}>Off</button><button type="button" className={exitProtectionEnabled ? "active" : ""} onClick={() => { setExitProtectionEnabled(true); if (targetPct === 0.5) setTargetPct(0.51); }}>On</button></div></div>
-                <div className="fixed-strategy-rules">{exitProtectionEnabled ? <><span>No stop loss</span><span>Five-session protection</span><span>Next-session open exit</span></> : <><span>No stop loss</span><span>No end-of-day exit</span><span>Hold until target</span></>}</div>
+                <label><span>Exit model</span><select aria-label="Exit model" value={exitModel} onChange={(event) => setExitModel(event.target.value as typeof exitModel)}><option value="LEGACY_FIXED_TARGET">Legacy fixed target</option><option value="FIXED_TP_SL">Fixed TP and SL</option><option value="ATR_DYNAMIC_TP_SL">ATR dynamic TP and SL</option></select></label>
+                <div className="fixed-strategy-rules">{exitModel === "LEGACY_FIXED_TARGET" ? <><span>No stop loss</span><span>No end-of-day exit</span><span>Hold until target</span></> : exitModel === "FIXED_TP_SL" ? <><span>Fixed TP + SL</span><span>Session time exit</span><span>Stop-first OHLC rule</span></> : <><span>ATR-frozen TP + SL</span><span>Session time exit</span><span>Stop-first OHLC rule</span></>}</div>
               </fieldset>
               <fieldset className="recovery-config-card position-config-card">
                 <legend>Position limits</legend>
-                <label><span>Quantity</span><span className="suffixed-input"><input aria-label="Quantity per trade" type="number" min="1" step="1" value={quantityPerTrade} disabled={!exitProtectionEnabled} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label>
+                <label><span>Quantity</span><span className="suffixed-input"><input aria-label="Quantity per trade" type="number" min="1" step="1" value={quantityPerTrade} disabled={!exitProtectionEnabled || positionSizing === "RISK_BUDGET"} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label>
                 <label><span>Maximum open lots</span><input aria-label="Maximum open lots per symbol" type="number" min="1" step="1" value={maxOpenLotsPerSymbol} disabled={!exitProtectionEnabled} onChange={(event) => setMaxOpenLotsPerSymbol(Number(event.target.value))} /></label>
-                <label><span>Maximum holding days</span><span className="suffixed-input"><input aria-label="Maximum holding trading days" type="number" min="1" step="1" value={maxHoldingTradingDays} disabled={!exitProtectionEnabled} onChange={(event) => setMaxHoldingTradingDays(Number(event.target.value))} /><i>NSE sessions</i></span><small>Entry session is day 1. A missed target exits at the next available session open.</small></label>
+                <label><span>Maximum holding sessions</span><span className="suffixed-input"><input aria-label="Maximum holding trading sessions" type="number" min="1" step="1" value={maxHoldingTradingDays} disabled={!exitProtectionEnabled} onChange={(event) => setMaxHoldingTradingDays(Number(event.target.value))} /><i>NSE sessions</i></span><small>Entry session is session 1. A missed target exits at the next available session open.</small></label>
+                {exitModel === "ATR_DYNAMIC_TP_SL" && <small>TP and SL are calculated from each signal&apos;s ATR and frozen at entry.</small>}
               </fieldset>
             </div>
             <details className="advanced-settings">
@@ -830,6 +979,39 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                   <label className="toggle-config"><input type="checkbox" checked={volumeEnabled} onChange={(event) => setVolumeEnabled(event.target.checked)} /><span>Volume</span><span className="suffixed-input"><input aria-label="Volume EMA length" type="number" min="1" step="1" value={volumeEma} onChange={(event) => setVolumeEma(Number(event.target.value))} /><i>EMA</i></span></label>
                   <label><span>Minimum confirmations</span><input type="number" min="0" max="3" step="1" value={minimumConfirmations} onChange={(event) => setMinimumConfirmations(Number(event.target.value))} /><small>RSI recovery remains mandatory and is not scored</small></label>
                 </fieldset>
+                {exitModel === "FIXED_TP_SL" && <fieldset className="recovery-config-card">
+                  <legend>Fixed exits</legend>
+                  <label title="Take-profit price = actual entry × (1 + take-profit %)"><span>Take-profit</span><span className="suffixed-input"><input type="number" min="0.01" step="0.01" value={targetPct} onChange={(event) => setTargetPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label title="Stop-loss price = actual entry × (1 - stop-loss %)"><span>Stop-loss</span><span className="suffixed-input"><input type="number" min="0.01" step="0.01" value={fixedStopLossPct} onChange={(event) => setFixedStopLossPct(Number(event.target.value))} /><i>%</i></span></label>
+                </fieldset>}
+                {exitModel === "ATR_DYNAMIC_TP_SL" && <fieldset className="recovery-config-card">
+                  <legend>ATR dynamic exits</legend>
+                  <label title="Wilder RMA of true range on completed strategy candles"><span>ATR length</span><input type="number" min="1" step="1" value={atrLength} onChange={(event) => setAtrLength(Number(event.target.value))} /></label>
+                  <label title="Raw ATR % × this multiplier, then clamped to the configured stop bounds"><span>Stop ATR multiplier</span><input type="number" min="0.01" step="0.05" value={stopAtrMultiplier} onChange={(event) => setStopAtrMultiplier(Number(event.target.value))} /></label>
+                  <label title="Dynamic take-profit % = dynamic stop % × reward:risk"><span>Reward:risk</span><input type="number" min="0.01" step="0.05" value={rewardRiskRatio} onChange={(event) => setRewardRiskRatio(Number(event.target.value))} /></label>
+                  <label><span>Minimum stop</span><span className="suffixed-input"><input type="number" min="0.01" step="0.05" value={minimumStopPct} onChange={(event) => setMinimumStopPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label><span>Maximum stop</span><span className="suffixed-input"><input type="number" min="0.01" step="0.05" value={maximumStopPct} onChange={(event) => setMaximumStopPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <small>TP and SL use the signal candle ATR and are frozen when the position is created.</small>
+                </fieldset>}
+                {exitProtectionEnabled && <fieldset className="recovery-config-card">
+                  <legend>Position sizing</legend>
+                  <label><span>Method</span><select value={positionSizing} onChange={(event) => setPositionSizing(event.target.value as typeof positionSizing)}><option value="FIXED_QUANTITY">Fixed quantity</option><option value="RISK_BUDGET">Risk budget</option></select></label>
+                  {positionSizing === "FIXED_QUANTITY" ? <label><span>Quantity</span><span className="suffixed-input"><input type="number" min="1" step="1" value={quantityPerTrade} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label> : <>
+                    <label title="Quantity = floor(rupee risk budget ÷ risk per share)"><span>Rupee risk budget</span><span className="suffixed-input"><input type="number" min="1" step="100" value={rupeeRiskBudget} onChange={(event) => setRupeeRiskBudget(Number(event.target.value))} /><i>INR</i></span></label>
+                    <label><span>Maximum quantity</span><input type="number" min="1" step="1" value={maximumQuantity} onChange={(event) => setMaximumQuantity(Number(event.target.value))} /></label>
+                    <label><span>Maximum capital</span><span className="suffixed-input"><input type="number" min="1" step="1000" value={maximumCapitalPerPosition} onChange={(event) => setMaximumCapitalPerPosition(Number(event.target.value))} /><i>INR</i></span></label>
+                  </>}
+                </fieldset>}
+                {exitModel === "ATR_DYNAMIC_TP_SL" && <fieldset className="recovery-config-card optimizer-card">
+                  <legend>ATR exit research</legend>
+                  <label><span>Stop multipliers</span><input value={optimizerGrid.stopAtrMultipliers} onChange={(event) => setOptimizerGrid((current) => ({ ...current, stopAtrMultipliers: event.target.value }))} /></label>
+                  <label><span>Reward:risk grid</span><input value={optimizerGrid.rewardRiskRatios} onChange={(event) => setOptimizerGrid((current) => ({ ...current, rewardRiskRatios: event.target.value }))} /></label>
+                  <label><span>Holding sessions</span><input value={optimizerGrid.maxHoldingSessions} onChange={(event) => setOptimizerGrid((current) => ({ ...current, maxHoldingSessions: event.target.value }))} /></label>
+                  <label><span>Minimum stops %</span><input value={optimizerGrid.minimumStopPcts} onChange={(event) => setOptimizerGrid((current) => ({ ...current, minimumStopPcts: event.target.value }))} /></label>
+                  <label><span>Maximum stops %</span><input value={optimizerGrid.maximumStopPcts} onChange={(event) => setOptimizerGrid((current) => ({ ...current, maximumStopPcts: event.target.value }))} /></label>
+                  <button type="button" className="secondary-action" disabled={optimizing || loading} onClick={optimizeAtrExits}>{optimizing ? <><LoaderCircle className="spin" size={15} />Optimizing…</> : "Optimize ATR exits"}</button>
+                  <small>Uses chronological walk-forward validation and one common configuration across every selected symbol.</small>
+                </fieldset>}
                 <fieldset className="recovery-config-card cost-card">
                   <legend>Estimated costs</legend>
                   <label><span>Buy cost</span><span className="suffixed-input"><input type="number" min="0" step="1" value={buyCostBps} onChange={(event) => setBuyCostBps(Number(event.target.value))} /><i>bps</i></span></label>
@@ -849,6 +1031,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
 
         {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}
         {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Fetching and testing historical candles</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols complete. ` : ""}Intraday universe runs can take much longer the first time; cached runs are faster.</span></div></div>}
+        {optimizing && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Running chronological ATR walk-forward analysis</strong><span>The configurable grid is evaluated with one common setting across all selected symbols. This optional research run can take time.</span></div></div>}
+        {optimization && <AtrOptimizationResults response={optimization} />}
 
         {response && (
           response.metadata.strategyMode === "rsi_recovery" ? <RecoveryResults response={response} /> : <>

@@ -280,6 +280,15 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(backtestText, /Legacy fixed target/);
   assert.match(backtestText, /Fixed TP and SL/);
   assert.match(backtestText, /ATR dynamic TP and SL/);
+  assert.match(backtestText, /RSI profitable exit with risk control/);
+  assert.match(backtestText, /Minimum profitable exit/);
+  assert.match(backtestText, /Profit-exit RSI/);
+  assert.match(backtestText, /Hard stop loss/);
+  assert.match(backtestText, /RSI exit execution model/);
+  assert.match(backtestText, /Compare RSI exit settings/);
+  assert.match(backtestText, /setRsiArmLow\(20\)/);
+  assert.match(backtestText, /minimumProfitPct,/);
+  assert.match(backtestText, /hardStopLossPct,/);
   assert.match(backtestText, /Stop ATR multiplier/);
   assert.match(backtestText, /Reward:risk/);
   assert.match(backtestText, /Rupee risk budget/);
@@ -317,6 +326,10 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(recoveryResultsText, /ATR at entry/);
   assert.match(recoveryResultsText, /Stop loss/);
   assert.match(recoveryResultsText, /summary\.winRate/);
+  assert.match(recoveryResultsText, /RSI profit exits/);
+  assert.match(recoveryResultsText, /RSI overbought exits/);
+  assert.match(recoveryResultsText, /Maximum consecutive losses/);
+  assert.match(recoveryResultsText, /of \{position\.confirmationsEnabled \?\? 3\} passed/);
   assert.match(featureAnalysisText, /Entry-time analysis only/);
   assert.match(featureAnalysisText, /Cliff&apos;s delta/);
   assert.match(featureAnalysisText, /Features are frozen on the closed BUY signal candle/);
@@ -333,6 +346,8 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(backtestApiText, /BACKTEST_SERVICE_URL/);
   assert.match(backtestApiText, /action === "optimize-atr"/);
   assert.match(backtestApiText, /\/backtest\/optimize-atr/);
+  assert.match(backtestApiText, /action === "compare-rsi-exits"/);
+  assert.match(backtestApiText, /\/backtest\/compare-rsi-exits/);
   assert.match(recoveryAnalysisApiText, /getSessionUser/);
   assert.match(recoveryAnalysisApiText, /BACKTEST_SERVICE_URL/);
   assert.match(recoveryAnalysisApiText, /\[PROXY_TOKEN_HEADER\] = proxyToken/);

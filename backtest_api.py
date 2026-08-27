@@ -72,6 +72,16 @@ from recovery_position_backtest import (
     aggregate_protected_results,
     simulate_protected_recovery_symbol,
 )
+from recovery_rsi_profit_exit import (
+    RSI_PROFIT_EXIT_VERSION,
+    RsiProfitExitConfig,
+    aggregate_rsi_profit_exit_results,
+    simulate_rsi_profit_exit_symbol,
+)
+from rsi_exit_optimizer import (
+    RsiExitOptimizationGrid,
+    evaluate_rsi_exit_grid,
+)
 from universe_selection import (
     DEFAULT_MAXIMUM_PRICE,
     DEFAULT_MINIMUM_BUY_OBSERVATIONS,
@@ -156,7 +166,10 @@ class BacktestRequest(BaseModel):
     sellCostBps: float = Field(default=0, ge=0, le=10_000)
     slippageBps: float = Field(default=0, ge=0, le=10_000)
     exitModel: Literal[
-        "LEGACY_FIXED_TARGET", "FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"
+        "LEGACY_FIXED_TARGET",
+        "FIXED_TP_SL",
+        "ATR_DYNAMIC_TP_SL",
+        "RSI_PROFIT_RISK_CONTROL",
     ] = "LEGACY_FIXED_TARGET"
     exitProtectionEnabled: bool = False
     fixedStopLossPct: float = Field(default=1.0, gt=0, le=100)
@@ -175,6 +188,11 @@ class BacktestRequest(BaseModel):
     maxOpenLotsPerSymbol: int = Field(default=1, ge=1, le=1_000)
     maxHoldingTradingDays: int = Field(default=5, ge=1, le=1_000)
     timeExit: Literal["NEXT_TRADING_SESSION_OPEN"] = "NEXT_TRADING_SESSION_OPEN"
+    minimumProfitPct: float = Field(default=0.5, gt=0, le=100)
+    profitExitRsi: float = Field(default=50, ge=0, le=100)
+    upperRsiLevel: float = Field(default=70, ge=0, le=100)
+    hardStopLossPct: float = Field(default=1.5, gt=0, lt=100)
+    rsiExitExecutionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
 
     @field_validator("symbols")
     @classmethod
@@ -202,6 +220,13 @@ class BacktestRequest(BaseModel):
 
         if self.exitModel != "LEGACY_FIXED_TARGET":
             self.exitProtectionEnabled = True
+        if self.exitModel == "RSI_PROFIT_RISK_CONTROL":
+            if "rsiArmLow" not in self.model_fields_set:
+                self.rsiArmLow = 20
+            if "rsiArmHigh" not in self.model_fields_set:
+                self.rsiArmHigh = 35
+            if self.upperRsiLevel < self.profitExitRsi:
+                raise ValueError("Upper RSI level cannot be below the profit-exit RSI")
         if self.minimumStopPct > self.maximumStopPct:
             raise ValueError("Minimum stop percentage cannot exceed maximum stop percentage")
 
@@ -275,6 +300,20 @@ class BacktestRequest(BaseModel):
             maximum_capital_per_position=self.maximumCapitalPerPosition,
         )
 
+    def rsi_profit_exit_config(self) -> RsiProfitExitConfig:
+        if self.resolved_exit_model() != "RSI_PROFIT_RISK_CONTROL":
+            raise ValueError("RSI profit-exit configuration requested for another exit model")
+        return RsiProfitExitConfig(
+            minimum_profit_pct=self.minimumProfitPct,
+            profit_exit_rsi=self.profitExitRsi,
+            upper_rsi_level=self.upperRsiLevel,
+            stop_loss_pct=self.hardStopLossPct,
+            exit_execution_model=self.rsiExitExecutionModel,
+            max_holding_sessions=self.maxHoldingTradingDays,
+            max_open_lots_per_symbol=self.maxOpenLotsPerSymbol,
+            quantity_per_trade=self.quantityPerTrade,
+        )
+
 
 class AtrOptimizationRequest(BacktestRequest):
     symbols: list[str] = Field(min_length=1, max_length=750)
@@ -338,6 +377,85 @@ class AtrOptimizationRequest(BacktestRequest):
             max_holding_sessions=tuple(self.maxHoldingSessionsGrid),
             minimum_stop_pcts=tuple(self.minimumStopPcts),
             maximum_stop_pcts=tuple(self.maximumStopPcts),
+        )
+
+
+class RsiExitComparisonRequest(BacktestRequest):
+    symbols: list[str] = Field(min_length=1, max_length=750)
+    strategyMode: Literal["rsi_recovery"] = "rsi_recovery"
+    exitModel: Literal["RSI_PROFIT_RISK_CONTROL"] = "RSI_PROFIT_RISK_CONTROL"
+    rsiArmZones: list[tuple[float, float]] = Field(
+        default=[(20, 35), (25, 35), (30, 40)], min_length=1, max_length=20
+    )
+    rsiRecoveryThresholds: list[float] = Field(
+        default=[35, 40, 45], min_length=1, max_length=20
+    )
+    profitExitRsiLevels: list[float] = Field(
+        default=[50, 60, 70], min_length=1, max_length=20
+    )
+    minimumProfitPcts: list[float] = Field(
+        default=[0.5, 1.0], min_length=1, max_length=20
+    )
+    hardStopLossPcts: list[float] = Field(
+        default=[1.0, 1.5, 2.0, 3.0], min_length=1, max_length=20
+    )
+    maxHoldingSessionsGrid: list[int] = Field(
+        default=[3, 5, 10], min_length=1, max_length=20
+    )
+    minimumValidationTrades: int = Field(default=20, ge=1, le=1_000_000)
+
+    @field_validator("rsiArmZones")
+    @classmethod
+    def valid_arm_zones(
+        cls, values: list[tuple[float, float]]
+    ) -> list[tuple[float, float]]:
+        if any(not 0 <= low < high <= 100 for low, high in values):
+            raise ValueError("Every RSI arm zone must satisfy 0 <= low < high <= 100")
+        return values
+
+    @field_validator("rsiRecoveryThresholds", "profitExitRsiLevels")
+    @classmethod
+    def valid_rsi_grid(cls, values: list[float]) -> list[float]:
+        if any(not math.isfinite(value) or not 0 <= value <= 100 for value in values):
+            raise ValueError("RSI comparison values must be finite and between 0 and 100")
+        return values
+
+    @field_validator("minimumProfitPcts", "hardStopLossPcts")
+    @classmethod
+    def positive_percentage_grid(cls, values: list[float]) -> list[float]:
+        if any(not math.isfinite(value) or value <= 0 or value >= 100 for value in values):
+            raise ValueError("Profit and stop comparison values must be between 0 and 100")
+        return values
+
+    @field_validator("maxHoldingSessionsGrid")
+    @classmethod
+    def positive_holding_grid(cls, values: list[int]) -> list[int]:
+        if any(value <= 0 for value in values):
+            raise ValueError("Holding-session comparison values must be positive")
+        return values
+
+    @model_validator(mode="after")
+    def validate_grid_size(self) -> "RsiExitComparisonRequest":
+        combinations = (
+            len(set(self.rsiArmZones))
+            * len(set(self.rsiRecoveryThresholds))
+            * len(set(self.profitExitRsiLevels))
+            * len(set(self.minimumProfitPcts))
+            * len(set(self.hardStopLossPcts))
+            * len(set(self.maxHoldingSessionsGrid))
+        )
+        if combinations > 5_000:
+            raise ValueError("RSI exit comparison is limited to 5,000 configurations per run")
+        return self
+
+    def comparison_grid(self) -> RsiExitOptimizationGrid:
+        return RsiExitOptimizationGrid(
+            arm_zones=tuple(self.rsiArmZones),
+            recovery_thresholds=tuple(self.rsiRecoveryThresholds),
+            profit_exit_rsi_levels=tuple(self.profitExitRsiLevels),
+            minimum_profit_pcts=tuple(self.minimumProfitPcts),
+            stop_loss_pcts=tuple(self.hardStopLossPcts),
+            max_holding_sessions=tuple(self.maxHoldingSessionsGrid),
         )
 
 
@@ -1047,8 +1165,13 @@ def run_recovery_backtest(
         if exit_model in {"FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"}
         else None
     )
+    rsi_profit_exit = (
+        request.rsi_profit_exit_config()
+        if exit_model == "RSI_PROFIT_RISK_CONTROL"
+        else None
+    )
     legacy_protection = exit_model == "LEGACY_PROTECTED_TARGET"
-    position_backtest = legacy_protection or dynamic_exit is not None
+    position_backtest = legacy_protection or dynamic_exit is not None or rsi_profit_exit is not None
 
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
@@ -1075,6 +1198,15 @@ def run_recovery_backtest(
             f"{exit_model} is ON: valid RSI Recovery signals become positions with frozen take-profit and stop-loss levels.",
             "Gap exits use the candle open. If both stop and target are touched inside one OHLC candle, the conservative stop-first assumption is used.",
             "TP/SL monitoring begins after the entry candle. Time exits use actual NSE session dates and the next available session open.",
+            "Skipped max-open-lot signals are preserved separately and never enter trade-profitability calculations.",
+            "Position drawdown is exact per symbol; multi-symbol maximum drawdown is a conservative sum of independent symbol drawdowns rather than a cash-shared portfolio simulation.",
+        ])
+    elif rsi_profit_exit is not None:
+        warnings.extend([
+            "RSI profitable exit with risk control is ON: valid RSI Recovery signals become fixed-quantity positions subject to the configured per-symbol open-lot limit.",
+            "Exit priority is hard stop, profitable RSI exit, then next-session time exit. RSI alone never exits a position below the configured minimum profit.",
+            "Stop monitoring and RSI exit evaluation begin after the entry candle. Gap stops fill at the following candle open.",
+            "NEXT_BAR_OPEN RSI exits recheck the actual opening price; a gap that removes the required profit cancels that exit attempt.",
             "Skipped max-open-lot signals are preserved separately and never enter trade-profitability calculations.",
             "Position drawdown is exact per symbol; multi-symbol maximum drawdown is a conservative sum of independent symbol drawdowns rather than a cash-shared portfolio simulation.",
         ])
@@ -1123,6 +1255,16 @@ def run_recovery_backtest(
                     run_id=run_id,
                     analysis_start=analysis_start,
                 )
+            elif rsi_profit_exit is not None:
+                result = simulate_rsi_profit_exit_symbol(
+                    symbol,
+                    candles,
+                    timeframe=request.timeframe,
+                    recovery_config=config,
+                    exit_config=rsi_profit_exit,
+                    run_id=run_id,
+                    analysis_start=analysis_start,
+                )
             else:
                 result = simulate_recovery_symbol(
                     symbol,
@@ -1160,11 +1302,15 @@ def run_recovery_backtest(
         summary = aggregate_protected_results(results)
     elif dynamic_exit is not None:
         summary = aggregate_dynamic_exit_results(results)
+    elif rsi_profit_exit is not None:
+        summary = aggregate_rsi_profit_exit_results(results)
     else:
         summary = aggregate_recovery_results(results)
     public_exit_parameters = (
         dynamic_exit.public_parameters()
         if dynamic_exit is not None
+        else rsi_profit_exit.public_parameters()
+        if rsi_profit_exit is not None
         else protection.public_parameters()
     )
     public_exit_parameters["exitModel"] = exit_model
@@ -1196,6 +1342,8 @@ def run_recovery_backtest(
             "positionBacktestVersion": (
                 DYNAMIC_EXIT_VERSION
                 if dynamic_exit is not None
+                else RSI_PROFIT_EXIT_VERSION
+                if rsi_profit_exit is not None
                 else POSITION_BACKTEST_VERSION if legacy_protection else None
             ),
             "costModel": {
@@ -1290,6 +1438,92 @@ def run_atr_exit_optimization(
         "strategyVersion": RECOVERY_STRATEGY_VERSION,
         "exitModel": "ATR_DYNAMIC_TP_SL",
         "executionModel": request.executionModel,
+        "durationYears": request.durationYears,
+        "analysisStart": analysis_start.isoformat(),
+        "analysisEnd": now.isoformat(),
+        "symbolsRequested": len(request.symbols),
+        "symbolsProcessed": len(symbol_candles),
+        "symbolsFailed": len(errors),
+        "costModel": {
+            "buyCostBps": request.buyCostBps,
+            "sellCostBps": request.sellCostBps,
+            "slippageBpsPerSide": request.slippageBps,
+        },
+    })
+    payload["errors"] = errors
+    return payload
+
+
+def run_rsi_exit_comparison(
+    request: RsiExitComparisonRequest,
+    store: HistoricalDataStore,
+    now_ist: datetime | None = None,
+) -> dict[str, Any]:
+    now = (now_ist or datetime.now(IST)).astimezone(IST)
+    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
+    universe = set(store.universe())
+    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
+    if unavailable:
+        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
+    grid = request.comparison_grid()
+    warmup_bars = max(
+        request.rsiLength + 2,
+        request.emaFast,
+        request.emaSlow,
+        request.volumeEma,
+    ) + 5
+    requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
+    worker_count = max(1, min(requested_workers, len(request.symbols), 8))
+
+    def load(symbol: str) -> tuple[str, pd.DataFrame | None, dict[str, str] | None]:
+        try:
+            candles = store.candles(
+                symbol,
+                request.timeframe,
+                request.durationYears,
+                analysis_start,
+                now,
+                warmup_bars=warmup_bars,
+            )
+            return symbol, candles, None
+        except (DhanAPIError, ValueError, OSError, KeyError) as error:
+            return symbol, None, {"symbol": symbol, "message": str(error)}
+
+    if worker_count == 1:
+        loaded = [load(symbol) for symbol in request.symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="rsi-exit-comparison-load",
+        ) as executor:
+            loaded = list(executor.map(load, request.symbols))
+    symbol_candles = {
+        symbol: candles
+        for symbol, candles, error in loaded
+        if error is None and candles is not None
+    }
+    errors = [error for _, _, error in loaded if error is not None]
+    if not symbol_candles:
+        raise ValueError("No selected symbol produced valid historical candles for RSI exit comparison")
+    payload = evaluate_rsi_exit_grid(
+        symbol_candles,
+        timeframe=request.timeframe,
+        base_recovery_config=request.recovery_config(),
+        base_exit_config=request.rsi_profit_exit_config(),
+        grid=grid,
+        analysis_start=analysis_start,
+        analysis_end=now,
+        duration_years=request.durationYears,
+        run_id=request.runId or str(uuid.uuid4()),
+        minimum_validation_trades=request.minimumValidationTrades,
+    )
+    payload["metadata"].update({
+        "strategyMode": "rsi_recovery_position",
+        "strategyVersion": RECOVERY_STRATEGY_VERSION,
+        "positionBacktestVersion": RSI_PROFIT_EXIT_VERSION,
+        "exitModel": "RSI_PROFIT_RISK_CONTROL",
+        "entryExecutionModel": request.executionModel,
+        "rsiExitExecutionModel": request.rsiExitExecutionModel,
         "durationYears": request.durationYears,
         "analysisStart": analysis_start.isoformat(),
         "analysisEnd": now.isoformat(),
@@ -1848,6 +2082,19 @@ async def optimize_atr_exits(request: AtrOptimizationRequest) -> dict[str, Any]:
         try:
             return await asyncio.to_thread(
                 run_atr_exit_optimization, request, get_store()
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except DhanAPIError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/backtest/compare-rsi-exits")
+async def compare_rsi_exits(request: RsiExitComparisonRequest) -> dict[str, Any]:
+    async with _run_lock:
+        try:
+            return await asyncio.to_thread(
+                run_rsi_exit_comparison, request, get_store()
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error

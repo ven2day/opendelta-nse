@@ -208,6 +208,10 @@ class RequestTests(unittest.TestCase):
         paths = {route.path for route in app.routes}
         self.assertIn("/backtest/optimize-atr", paths)
 
+    def test_rsi_exit_comparison_api_surface_is_registered(self) -> None:
+        paths = {route.path for route in app.routes}
+        self.assertIn("/backtest/compare-rsi-exits", paths)
+
     def test_live_universe_defaults_and_overrides_are_validated(self) -> None:
         request = LiveUniverseRequest()
         self.assertEqual(request.topN, 300)

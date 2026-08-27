@@ -71,3 +71,27 @@ the configured coverage threshold is satisfied.
 
 The login uses a signed, 12-hour, HTTP-only cookie. Credentials and the signing
 secret are read only from server environment variables.
+
+## RSI Recovery position exits
+
+The Backtest page keeps the original `Legacy fixed target` research mode and
+adds position-based exit models without changing the underlying RSI Recovery
+signal generator. `RSI profitable exit with risk control` uses a configurable
+low-zone arm, recovery crossover, enabled EMA/VWAP/volume confirmations, and
+the selected `SIGNAL_CLOSE` or `NEXT_BAR_OPEN` entry execution.
+
+For the RSI profit-exit model, the hard stop is fixed from the executed entry
+and begins monitoring on the following candle. A profitable RSI exit is
+eligible only after a completed candle has RSI at or above the configured
+profit-exit level and the executable price meets the configured minimum
+profit. `NEXT_BAR_OPEN` exits recheck that minimum at the actual next open. If
+neither rule closes the lot, the time exit occurs at the next available NSE
+session open after the configured holding sessions; missing sessions and
+weekends are not counted.
+
+Configured buy/sell costs and per-side slippage are reported separately from
+gross P&L. Closed-trade net P&L is gross P&L minus both sides' costs and
+slippage. Open-trade unrealized P&L uses the last close and includes estimated
+entry and exit costs under the same assumptions. The optional comparison tool
+uses chronological development/validation splits and labels every result as a
+research candidate, not live approval.

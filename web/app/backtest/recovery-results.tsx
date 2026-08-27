@@ -66,7 +66,7 @@ export type ProtectedPosition = {
   entryPrice: number;
   quantity: number;
   capitalDeployed: number;
-  exitModel?: "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL";
+  exitModel?: "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
   atrLength?: number;
   atrTimeframe?: string;
   atrAtSignal?: number;
@@ -79,12 +79,19 @@ export type ProtectedPosition = {
   dynamicTargetPct?: number;
   stopLossPrice?: number;
   rupeeRiskAtEntry?: number;
+  minimumProfitPct?: number;
+  minimumProfitableExitPrice?: number;
+  profitExitRsi?: number;
+  upperRsiLevel?: number;
+  stopLossPct?: number;
+  exitRsi?: number | null;
+  exitExecutionModel?: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
   targetPrice: number;
   exitTimestamp: string | null;
   exitPrice: number | null;
-  exitReason: "TARGET_EXIT" | "TARGET_GAP" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | null;
-  exitFill: "GAP_OPEN" | "TARGET_PRICE" | "NEXT_TRADING_SESSION_OPEN" | null;
-  status: "TARGET_EXIT" | "TARGET_GAP" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | "OPEN";
+  exitReason: "TARGET_EXIT" | "TARGET_GAP" | "RSI_PROFIT_EXIT" | "RSI_OVERBOUGHT_PROFIT_EXIT" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | null;
+  exitFill: string | null;
+  status: "TARGET_EXIT" | "TARGET_GAP" | "RSI_PROFIT_EXIT" | "RSI_OVERBOUGHT_PROFIT_EXIT" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | "OPEN";
   holdingSessions: number;
   tradingSessionsHeld: number;
   barsHeld: number;
@@ -108,6 +115,8 @@ export type ProtectedPosition = {
   lastTimestamp: string;
   lastClose: number;
   confirmationScore: number;
+  confirmationsPassed?: number;
+  confirmationsEnabled?: number;
   requiredConfirmations: number;
   rsiAtEntry: number;
   executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
@@ -131,6 +140,9 @@ export type ProtectedRecoverySummary = {
   skippedMaxOpenLots: number;
   targetExits: number;
   targetGapExits?: number;
+  rsiProfitExits?: number;
+  rsiOverboughtProfitExits?: number;
+  profitableRsiExits?: number;
   stopExits?: number;
   stopGapExits?: number;
   targetsHit: number;
@@ -149,6 +161,7 @@ export type ProtectedRecoverySummary = {
   tradingCosts?: number;
   estimatedOpenExitCosts?: number;
   expectancyPerTrade?: number | null;
+  maximumConsecutiveLosses?: number;
   averageWinner?: number | null;
   averageLoser?: number | null;
   profitableClosedTrades: number;
@@ -288,15 +301,20 @@ export type RecoveryBacktestResponse = {
     runtimeSeconds: number;
     timezone: string;
     executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
-    exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL";
+    exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
     backtestSemantics?: "SIGNAL_OBSERVATION" | "POSITION";
     exitProtection?: {
       enabled: boolean;
-      exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL";
+      exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
       quantityPerTrade: number;
       maxOpenLotsPerSymbol: number;
       maxHoldingTradingDays: number;
       timeExit: "NEXT_TRADING_SESSION_OPEN";
+      minimumProfitPct?: number;
+      profitExitRsi?: number;
+      upperRsiLevel?: number;
+      hardStopLossPct?: number;
+      rsiExitExecutionModel?: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
     };
     positionBacktestVersion?: string | null;
     strategyParameters: Record<string, string | number | boolean>;
@@ -434,6 +452,8 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
   const targetExits = positions.filter((position) => position.status === "TARGET_EXIT");
   const targetGaps = positions.filter((position) => position.status === "TARGET_GAP");
   const targets = [...targetExits, ...targetGaps];
+  const rsiProfitExits = positions.filter((position) => position.status === "RSI_PROFIT_EXIT");
+  const rsiOverboughtProfitExits = positions.filter((position) => position.status === "RSI_OVERBOUGHT_PROFIT_EXIT");
   const stopExits = positions.filter((position) => position.status === "STOP_EXIT");
   const stopGaps = positions.filter((position) => position.status === "STOP_GAP");
   const timeExits = positions.filter((position) => position.status === "TIME_EXIT");
@@ -442,7 +462,7 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
   const profits = realized.filter((value) => value > 0);
   const losses = realized.filter((value) => value < 0);
   const gross = closed.map((position) => position.grossPnl);
-  const dynamicExitResults = positions.some((position) => position.exitModel === "FIXED_TP_SL" || position.exitModel === "ATR_DYNAMIC_TP_SL");
+  const dynamicExitResults = positions.some((position) => position.exitModel === "FIXED_TP_SL" || position.exitModel === "ATR_DYNAMIC_TP_SL" || position.exitModel === "RSI_PROFIT_RISK_CONTROL");
   const costs = finite((dynamicExitResults ? positions : closed).map((position) => position.tradingCosts ?? position.totalCosts));
   const estimatedOpenExitCosts = dynamicExitResults
     ? open.reduce((sum, position) => sum + (position.estimatedOpenExitCost ?? 0), 0)
@@ -470,6 +490,16 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
   const unrealizedPnl = open.reduce((sum, position) => sum + position.unrealizedPnl, 0);
   const maximumDrawdown = results.reduce((sum, result) => sum + (result.maximumDrawdown ?? 0), 0);
   const totalValidBuySignals = positions.length + skipped.length;
+  const orderedClosed = [...closed].sort((left, right) => Date.parse(left.exitTimestamp ?? "") - Date.parse(right.exitTimestamp ?? "") || left.sequenceNumber - right.sequenceNumber);
+  let consecutiveLosses = 0;
+  let maximumConsecutiveLosses = 0;
+  orderedClosed.forEach((position) => {
+    if ((position.realizedPnl ?? 0) < 0) {
+      consecutiveLosses += 1;
+      maximumConsecutiveLosses = Math.max(maximumConsecutiveLosses, consecutiveLosses);
+    } else consecutiveLosses = 0;
+  });
+  const profitableRsiExits = rsiProfitExits.length + rsiOverboughtProfitExits.length;
   return {
     totalValidBuySignals,
     totalBuySignals: totalValidBuySignals,
@@ -478,13 +508,16 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
     skippedMaxOpenLots: skipped.length,
     targetExits: targetExits.length,
     targetGapExits: targetGaps.length,
+    rsiProfitExits: rsiProfitExits.length,
+    rsiOverboughtProfitExits: rsiOverboughtProfitExits.length,
+    profitableRsiExits,
     stopExits: stopExits.length,
     stopGapExits: stopGaps.length,
     targetsHit: targets.length,
     timeExits: timeExits.length,
     openPositions: open.length,
     openSignals: open.length,
-    targetHitRate: positions.length ? rounded(targets.length / positions.length * 100, 2) ?? 0 : 0,
+    targetHitRate: positions.length ? rounded((targets.length + profitableRsiExits) / positions.length * 100, 2) ?? 0 : 0,
     winningTrades: profits.length,
     losingTrades: losses.length,
     winRate: closed.length ? rounded(profits.length / closed.length * 100, 2) ?? 0 : 0,
@@ -508,6 +541,7 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
     averageLoser: rounded(mean(losses), 2),
     profitFactor: losses.length ? rounded(profits.reduce((sum, value) => sum + value, 0) / Math.abs(losses.reduce((sum, value) => sum + value, 0)), 4) : null,
     expectancyPerTrade: rounded(mean(realized), 2),
+    maximumConsecutiveLosses,
     maximumDrawdown: rounded(maximumDrawdown, 2) ?? 0,
     maximumDrawdownPct: peakCapital ? rounded(maximumDrawdown / peakCapital * 100, 4) ?? 0 : 0,
     maximumConcurrentPositions: maximumConcurrent,
@@ -609,19 +643,20 @@ type SortKey = keyof Pick<RecoverySymbolResult,
 
 function ProtectedPositionTable({ positions }: { positions: ProtectedPosition[] }) {
   if (!positions.length) return <div className="empty-history">No executed positions are available in this view.</div>;
+  const rsiExitMode = positions.some((position) => position.exitModel === "RSI_PROFIT_RISK_CONTROL");
   return <div className="protected-position-table" role="region" aria-label="Protected position results">
-    <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>ATR at entry</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>TP</span><span>SL</span><span>Exit</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Net P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
+    <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>{rsiExitMode ? "RSI at entry" : "ATR at entry"}</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>{rsiExitMode ? "Minimum profit" : "TP"}</span><span>SL</span><span>Exit</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Net P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
     {positions.map((position) => <div className="protected-position-grid protected-position-row" key={position.tradeId}>
       <span data-label="Signal">{formatIst(position.signalTimestamp)}</span>
       <span data-label="Entry">{formatIst(position.entryTimestamp)}</span>
-      <span data-label="ATR at entry">{position.atrAtSignal === undefined ? "—" : money(position.atrAtSignal)}<small>{position.atrPctAtEntry === undefined ? "" : percent(position.atrPctAtEntry)}</small></span>
+      <span data-label={rsiExitMode ? "RSI at entry" : "ATR at entry"}>{rsiExitMode ? number(position.rsiAtEntry) : position.atrAtSignal === undefined ? "—" : money(position.atrAtSignal)}<small>{rsiExitMode ? `Exit from RSI ${number(position.profitExitRsi ?? null, 0)}+` : position.atrPctAtEntry === undefined ? "" : percent(position.atrPctAtEntry)}</small></span>
       <span data-label="Entry price">{money(position.entryPrice)}</span>
       <span data-label="Quantity">{position.quantity}</span>
       <span data-label="Capital">{money(position.capitalDeployed)}</span>
-      <span data-label="Take profit">{money(position.targetPrice)}<small>{position.dynamicTargetPct === undefined ? "" : percent(position.dynamicTargetPct)}</small></span>
+      <span data-label={rsiExitMode ? "Minimum profit" : "Take profit"}>{money(position.targetPrice)}<small>{position.dynamicTargetPct === undefined ? "" : percent(position.dynamicTargetPct)}</small></span>
       <span data-label="Stop loss">{position.stopLossPrice === undefined ? "—" : money(position.stopLossPrice)}<small>{position.dynamicStopPct === undefined ? "" : percent(-position.dynamicStopPct)}</small></span>
       <span data-label="Exit">{formatIst(position.exitTimestamp)}<small>{money(position.exitPrice)}</small></span>
-      <span data-label="Exit reason">{position.exitReason?.replaceAll("_", " ") ?? "—"}</span>
+      <span data-label="Exit reason">{position.exitReason?.replaceAll("_", " ") ?? "—"}<small>{position.confirmationScore} of {position.confirmationsEnabled ?? 3} passed · minimum required {position.requiredConfirmations}</small></span>
       <span data-label="Holding sessions">{position.holdingSessions}<small>{duration(position.durationMinutes)} · {position.barsHeld} bars</small></span>
       <span data-label="MAE / MFE"><b className="negative-value">{percent(position.maxAdversePct)}</b><small className="positive-value">{percent(position.maxFavorablePct)}</small></span>
       <span data-label="Net P&L" className={tone(position.realizedPnl)}>{money(position.realizedPnl)}<small>{position.tradingCosts === undefined ? "" : `${money(position.tradingCosts)} costs`}</small></span>
@@ -651,6 +686,8 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
   ] as const;
   const protection = response.metadata.exitProtection;
   const dynamicExit = response.metadata.exitModel === "ATR_DYNAMIC_TP_SL" || response.metadata.exitModel === "FIXED_TP_SL";
+  const rsiExitMode = response.metadata.exitModel === "RSI_PROFIT_RISK_CONTROL";
+  const explicitRiskExit = dynamicExit || rsiExitMode;
 
   return <>
     <nav className="recovery-result-tabs" aria-label="Protected position result views">
@@ -662,20 +699,20 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
         <div><span>Valid BUY signals</span><strong>{summary.totalValidBuySignals.toLocaleString("en-IN")}</strong></div>
         <div><span>Executed trades</span><strong>{summary.executedTrades.toLocaleString("en-IN")}</strong></div>
         <div><span>Skipped · max lots</span><strong>{summary.skippedMaxOpenLots.toLocaleString("en-IN")}</strong></div>
-        <div><span>Target exits</span><strong>{(summary.targetExits + (summary.targetGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>
-        {dynamicExit && <div><span>Stop exits</span><strong>{((summary.stopExits ?? 0) + (summary.stopGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
+        {rsiExitMode ? <><div><span>RSI profit exits</span><strong>{(summary.rsiProfitExits ?? 0).toLocaleString("en-IN")}</strong></div><div><span>RSI overbought exits</span><strong>{(summary.rsiOverboughtProfitExits ?? 0).toLocaleString("en-IN")}</strong></div></> : <div><span>Target exits</span><strong>{(summary.targetExits + (summary.targetGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
+        {explicitRiskExit && <div><span>Stop exits</span><strong>{((summary.stopExits ?? 0) + (summary.stopGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
         <div><span>Time exits</span><strong>{summary.timeExits.toLocaleString("en-IN")}</strong></div>
         <div><span>Open positions</span><strong className={summary.openPositions ? "warning-value" : "positive-value"}>{summary.openPositions.toLocaleString("en-IN")}</strong></div>
       </section>
-      <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with {dynamicExit ? "explicit TP/SL exits" : "legacy exit protection"}.</strong> Win rate and net P&amp;L measure closed-trade profitability; target-hit rate is not used as a substitute. Skipped signals remain separate.</span></div>
+      <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with {rsiExitMode ? "profitable RSI exits, a hard stop, and a time exit" : dynamicExit ? "explicit TP/SL exits" : "legacy exit protection"}.</strong> Win rate and net P&amp;L measure closed-trade profitability; an exit percentage is not used as a substitute. Skipped signals remain separate.</span></div>
 
       <section className="backtest-panel recovery-section">
         <div className="panel-title"><div><span className="section-kicker">Position outcomes</span><h2>Exit and profitability summary</h2></div><span className="date-window">{protection?.quantityPerTrade ?? 50} shares · max {protection?.maxOpenLotsPerSymbol ?? 1} lot · {protection?.maxHoldingTradingDays ?? 5} NSE sessions</span></div>
         <div className="metric-grid protected-metric-grid">
-          <div><span>Target-hit rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
-          {dynamicExit && <div><span>Win rate</span><strong>{percent(summary.winRate ?? 0)}</strong></div>}
+          {!rsiExitMode && <div><span>Target-hit rate</span><strong>{percent(summary.targetHitRate)}</strong></div>}
+          {explicitRiskExit && <div><span>Win rate</span><strong>{percent(summary.winRate ?? 0)}</strong></div>}
           {dynamicExit && <div><span>Target gaps</span><strong>{summary.targetGapExits ?? 0}</strong></div>}
-          {dynamicExit && <div><span>Stop exits / gaps</span><strong>{summary.stopExits ?? 0} / {summary.stopGapExits ?? 0}</strong></div>}
+          {explicitRiskExit && <div><span>Stop exits / gaps</span><strong>{summary.stopExits ?? 0} / {summary.stopGapExits ?? 0}</strong></div>}
           <div><span>Profitable closed</span><strong className="positive-value">{summary.profitableClosedTrades}</strong></div>
           <div><span>Losing closed</span><strong className="negative-value">{summary.losingClosedTrades}</strong></div>
           <div><span>Realized gross profit</span><strong className="positive-value">{money(summary.realizedGrossProfit)}</strong></div>
@@ -686,10 +723,11 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
           <div><span>Average profit / trade</span><strong className="positive-value">{money(summary.averageProfitPerTrade)}</strong></div>
           <div><span>Average loss / trade</span><strong className="negative-value">{money(summary.averageLossPerTrade)}</strong></div>
           <div><span>Profit factor</span><strong>{number(summary.profitFactor)}</strong></div>
-          {dynamicExit && <div><span>Average TP / SL</span><strong>{percent(summary.averageDynamicTargetPct ?? null)} / {percent(-(summary.averageDynamicStopPct ?? 0))}</strong></div>}
+          {explicitRiskExit && <div><span>{rsiExitMode ? "Minimum profit / hard stop" : "Average TP / SL"}</span><strong>{percent(summary.averageDynamicTargetPct ?? null)} / {percent(-(summary.averageDynamicStopPct ?? 0))}</strong></div>}
           {dynamicExit && <div><span>Average reward:risk</span><strong>{number(summary.averageRewardRisk ?? null)}</strong></div>}
-          {dynamicExit && <div><span>Trading costs</span><strong>{money(summary.tradingCosts ?? 0)}</strong></div>}
-          {dynamicExit && <div><span>Expectancy / closed trade</span><strong className={tone(summary.expectancyPerTrade ?? null)}>{money(summary.expectancyPerTrade ?? null)}</strong></div>}
+          {explicitRiskExit && <div><span>Trading costs</span><strong>{money(summary.tradingCosts ?? 0)}</strong></div>}
+          {explicitRiskExit && <div><span>Expectancy / closed trade</span><strong className={tone(summary.expectancyPerTrade ?? null)}>{money(summary.expectancyPerTrade ?? null)}</strong></div>}
+          {rsiExitMode && <div><span>Maximum consecutive losses</span><strong className="negative-value">{summary.maximumConsecutiveLosses ?? 0}</strong></div>}
           <div><span>Maximum drawdown</span><strong className="negative-value">{money(-summary.maximumDrawdown)}<small>{percent(-summary.maximumDrawdownPct)}</small></strong></div>
           <div><span>Maximum concurrent</span><strong>{summary.maximumConcurrentPositions}</strong></div>
           <div><span>Peak capital deployed</span><strong>{money(summary.peakCapitalDeployed)}</strong></div>
@@ -719,7 +757,7 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
 
     <section className="backtest-notes recovery-run-metadata">
       <h3>Run metadata and cautions</h3>
-      <p><strong>Mode:</strong> {response.metadata.exitModel?.replaceAll("_", " ") ?? "Legacy exit protection"} · {response.metadata.executionModel}{dynamicExit ? " · TP/SL frozen at entry" : ` · target ${number(Number(response.metadata.strategyParameters.targetPct))}% · no stop loss`}.</p>
+      <p><strong>Mode:</strong> {response.metadata.exitModel?.replaceAll("_", " ") ?? "Legacy exit protection"} · {response.metadata.executionModel}{rsiExitMode ? ` · RSI exit ${String(protection?.rsiExitExecutionModel ?? "SIGNAL_CLOSE")} · minimum profit ${number(Number(protection?.minimumProfitPct ?? 0.5))}% · hard stop ${number(Number(protection?.hardStopLossPct ?? 1.5))}%` : dynamicExit ? " · TP/SL frozen at entry" : ` · target ${number(Number(response.metadata.strategyParameters.targetPct))}% · no stop loss`}.</p>
       <p><strong>Costs:</strong> buy {number(response.metadata.costModel.buyCostBps)} bps, sell {number(response.metadata.costModel.sellCostBps)} bps, slippage {number(response.metadata.costModel.slippageBpsPerSide)} bps per side.</p>
       <p><strong>P&amp;L:</strong> Combined P&amp;L equals net realized P&amp;L plus estimated net unrealized P&amp;L at the final close. Multi-symbol drawdown conservatively sums independent symbol drawdowns.</p>
       {response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}

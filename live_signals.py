@@ -1284,6 +1284,11 @@ class LiveSignalEngine:
                 "lastReconnectRecoverySeconds": _finite(self._last_recovery_seconds, 3),
                 "oiFilterMode": self.repository.settings().oi_filter_mode,
                 "oiRegime": self._latest_oi_regime,
+                "oiHistory": (
+                    self.oi_service.repository.history_status()
+                    if self.oi_service is not None
+                    else None
+                ),
             }
 
     def list_signals(self, action: str | None = None) -> list[dict[str, Any]]:

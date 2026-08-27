@@ -28,6 +28,7 @@ data/
 reports/
 outputs/
 work/
+.runtime/
 *.tar.gz
 *.zip
 Lastdata.csv

@@ -23,7 +23,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   RecoveryResults,
   mergeRecoveryResponses,
@@ -149,6 +149,16 @@ type BacktestResponse = {
 
 type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse) & { detail?: string };
 type OiFilterMode = "OFF" | "ADVISORY" | "ENFORCED";
+type OiHistoryStatus = {
+  state: string;
+  request?: { fromDate?: string; toDate?: string; strikesEachSide?: number };
+  optionRowsImported?: number;
+  regimeSnapshotsCreated?: number;
+  enforceableSnapshots?: number;
+  historicalDepthAvailable?: boolean;
+  enforcementReady?: boolean;
+  reason?: string;
+};
 type OiFilterComparisonResponse = {
   metadata: { runId: string; generatedAt: string; researchLabel: string; defaultOiMode: "OFF" };
   comparison: {
@@ -612,6 +622,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [hardStopLossPct, setHardStopLossPct] = useState(1.5);
   const [rsiExitExecutionModel, setRsiExitExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
   const [oiFilterMode, setOiFilterMode] = useState<OiFilterMode>("OFF");
+  const [oiHistoryStatus, setOiHistoryStatus] = useState<OiHistoryStatus | null>(null);
   const [oiLookbackBars, setOiLookbackBars] = useState(3);
   const [oiStrikesEachSide, setOiStrikesEachSide] = useState(5);
   const [oiMinimumPriceChangePct, setOiMinimumPriceChangePct] = useState(0.05);
@@ -632,6 +643,25 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [oiStronglyBullishThreshold, setOiStronglyBullishThreshold] = useState(60);
   const [oiElevatedQualityThreshold, setOiElevatedQualityThreshold] = useState(95);
   const [oiFailPolicy, setOiFailPolicy] = useState<"SKIP" | "ALLOW">("SKIP");
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/backtest?action=oi-history-status", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      cache: "no-store",
+    }).then(async (response) => {
+      const body = await response.text();
+      if (!response.ok) throw new Error("Historical OI status is unavailable");
+      return JSON.parse(body) as OiHistoryStatus;
+    }).then((status) => {
+      if (active) setOiHistoryStatus(status);
+    }).catch(() => {
+      if (active) setOiHistoryStatus(null);
+    });
+    return () => { active = false; };
+  }, []);
   const [optimizerGrid, setOptimizerGrid] = useState({
     stopAtrMultipliers: "0.75, 1.00, 1.25, 1.50, 2.00",
     rewardRiskRatios: "1.00, 1.25, 1.50, 2.00",
@@ -1255,6 +1285,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                 <legend>NIFTY OI regime filter</legend>
                 <label><span>Mode</span><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); }}><option value="OFF">OFF — legacy results</option><option value="ADVISORY">ADVISORY — record only</option><option value="ENFORCED">ENFORCED — gate long trades</option></select></label>
                 <small>OFF is the safe default. The filter never creates BUY signals or increases position size.</small>
+                <div className={`oi-history-status ${oiHistoryStatus?.enforcementReady ? "ready" : "limited"}`}>
+                  <strong>Historical OI: {oiHistoryStatus?.state ?? "CHECKING"}</strong>
+                  {oiHistoryStatus?.request?.fromDate && <span>{oiHistoryStatus.request.fromDate} to {oiHistoryStatus.request.toDate} · {oiHistoryStatus.optionRowsImported ?? 0} option rows</span>}
+                  <span>{oiHistoryStatus?.enforcementReady ? `${oiHistoryStatus.enforceableSnapshots ?? 0} enforceable regimes` : oiHistoryStatus?.reason ?? "Checking imported coverage…"}</span>
+                </div>
               </fieldset>
             </div>
             {exitModel === "RSI_PROFIT_RISK_CONTROL" && <div className="research-semantics"><Info size={16} /><span>The setup is armed when RSI enters the low zone. BUY occurs after RSI recovery and confirmation. SELL occurs when RSI recovers above the profit-exit level and the configured minimum profit is available. Stop and time exits prevent indefinite losing positions.</span></div>}

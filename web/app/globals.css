@@ -4287,3 +4287,8 @@ footer {
 .regime-strongly_bullish { background: #14532d; color: #bbf7d0; }
 .regime-insufficient_oi_data,
 .regime-volatility_expansion { background: #854d0e; color: #fef9c3; }
+
+.oi-history-status { display: grid; gap: .2rem; margin-top: .65rem; padding: .6rem .7rem; border: 1px solid var(--border); border-radius: .65rem; font-size: .75rem; }
+.oi-history-status span { color: var(--muted); line-height: 1.35; }
+.oi-history-status.ready { border-color: #22c55e; background: rgb(34 197 94 / .08); }
+.oi-history-status.limited { border-color: #eab308; background: rgb(234 179 8 / .08); }

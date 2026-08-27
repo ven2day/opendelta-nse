@@ -1286,7 +1286,7 @@ def run_recovery_backtest(
                 for row in (active_universe or {}).get("selected", [])
                 if row.get("symbol") and row.get("qualityScore") is not None
             }
-        except (OSError, ValueError, TypeError):
+        except (OSError, RuntimeError, ValueError, TypeError):
             quality_by_symbol = {}
 
     universe = set(store.universe())
@@ -1540,6 +1540,7 @@ def run_recovery_backtest(
                 "version": "nifty-oi-regime-filter-1.0.0",
                 "parameters": oi_config.public(),
                 "decisionOrder": "candidate BUY -> stock confirmations -> NIFTY OI regime -> position controls",
+                "historyStatus": oi_repository.history_status() if oi_repository is not None else None,
             },
             "corporateActionAdjustment": "UNVERIFIED_SOURCE_AS_RECEIVED",
             "gitCommitSha": os.environ.get("GIT_COMMIT_SHA") or None,
@@ -2055,6 +2056,15 @@ def health() -> dict[str, Any]:
         symbols = len(load_symbols(Path(os.environ.get("SYMBOLS_FILE", DEFAULT_SYMBOLS_FILE))))
         return {"status": "ok", "symbols": symbols}
     except (OSError, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/nifty-oi/history/status")
+def nifty_oi_history_status() -> dict[str, Any]:
+    """Expose import coverage without returning credentials or raw contract payloads."""
+    try:
+        return get_oi_repository().history_status()
+    except (OSError, RuntimeError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 

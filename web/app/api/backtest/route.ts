@@ -33,7 +33,10 @@ export async function POST(request: Request): Promise<Response> {
     if (proxyToken) headers[PROXY_TOKEN_HEADER] = proxyToken;
 
     const action = new URL(request.url).searchParams.get("action");
-    const upstreamPath = action === "optimize-atr"
+    const historyStatus = action === "oi-history-status";
+    const upstreamPath = historyStatus
+      ? "/nifty-oi/history/status"
+      : action === "optimize-atr"
       ? "/backtest/optimize-atr"
       : action === "compare-rsi-exits"
         ? "/backtest/compare-rsi-exits"
@@ -41,9 +44,9 @@ export async function POST(request: Request): Promise<Response> {
           ? "/backtest/compare-oi-filter"
         : "/backtest";
     const upstream = await fetch(`${serviceUrl.replace(/\/$/, "")}${upstreamPath}`, {
-      method: "POST",
+      method: historyStatus ? "GET" : "POST",
       headers,
-      body: JSON.stringify(payload),
+      body: historyStatus ? undefined : JSON.stringify(payload),
       cache: "no-store",
       signal: AbortSignal.timeout((action === "optimize-atr" || action === "compare-rsi-exits" || action === "compare-oi-filter" ? 60 : 15) * 60 * 1_000),
     });

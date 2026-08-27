@@ -313,6 +313,12 @@ def option_direction(option_type: str, buildup: BuildUp) -> int:
     return OPTION_DIRECTION[normalized][buildup]
 
 
+def _option_lookback_key(item: OptionOiObservation) -> tuple[Any, ...]:
+    if item.data_source == "DHAN_EXPIRED_OPTIONS":
+        return (item.expiry, item.distance_from_atm, item.option_type)
+    return item.key
+
+
 def select_expiry(
     expiries: Iterable[date | str],
     evaluation_timestamp: datetime,
@@ -393,12 +399,16 @@ def score_options(
         )
         if not candidate_strikes:
             continue
-        previous_by_key = {item.key: item for item in lookback if item.expiry == candidate_expiry}
+        previous_by_key = {
+            _option_lookback_key(item): item
+            for item in lookback
+            if item.expiry == candidate_expiry
+        }
         candidate_pairs: list[tuple[OptionOiObservation, OptionOiObservation]] = []
         for item in expiry_rows:
             if item.strike not in candidate_strikes or not option_contract_is_eligible(item, evaluation, config):
                 continue
-            previous = previous_by_key.get(item.key)
+            previous = previous_by_key.get(_option_lookback_key(item))
             if previous is None:
                 continue
             gap = (_as_ist(item.timestamp) - _as_ist(previous.timestamp)).total_seconds()
@@ -783,6 +793,7 @@ class OiRegimeRepository:
         self.option_file = root / "option-observations.jsonl"
         self.futures_file = root / "futures-observations.jsonl"
         self.regime_file = root / "regime-snapshots.jsonl"
+        self.history_manifest_file = root / "history-import.json"
 
     @staticmethod
     def _append(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
@@ -792,7 +803,12 @@ class OiRegimeRepository:
         descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
         try:
             content = "".join(json.dumps(dict(row), separators=(",", ":"), allow_nan=False) + "\n" for row in rows)
-            os.write(descriptor, content.encode("utf-8"))
+            pending = memoryview(content.encode("utf-8"))
+            while pending:
+                written = os.write(descriptor, pending)
+                if written <= 0:
+                    raise OSError("Unable to append the complete OI observation batch")
+                pending = pending[written:]
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
@@ -805,11 +821,15 @@ class OiRegimeRepository:
         try:
             with path.open("r", encoding="utf-8") as handle:
                 for line in handle:
-                    if line.strip():
+                    if not line.strip():
+                        continue
+                    try:
                         value = json.loads(line)
-                        if isinstance(value, dict):
-                            rows.append(value)
-        except (OSError, json.JSONDecodeError):
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(value, dict):
+                        rows.append(value)
+        except OSError:
             return []
         return rows
 
@@ -830,6 +850,8 @@ class OiRegimeRepository:
         self._json_cache.pop(path, None)
 
     def append_options(self, observations: Sequence[OptionOiObservation]) -> None:
+        if not observations:
+            return
         with self._lock:
             self._append_cached(self.option_file, [item.public() for item in observations])
 
@@ -847,9 +869,33 @@ class OiRegimeRepository:
                 return
             self._append_cached(self.regime_file, [snapshot])
 
+    def append_regimes(self, snapshots: Sequence[Mapping[str, Any]]) -> None:
+        rows = [dict(snapshot) for snapshot in snapshots if snapshot.get("timestamp")]
+        if not rows:
+            return
+        with self._lock:
+            existing = {str(row.get("timestamp")) for row in self._read_cached(self.regime_file)}
+            unique = [row for row in rows if str(row["timestamp"]) not in existing]
+            unique.sort(key=lambda row: _as_ist(row["timestamp"]))
+            self._append_cached(self.regime_file, unique)
+
     def option_history(self) -> list[OptionOiObservation]:
         with self._lock:
-            return [OptionOiObservation.from_public(row) for row in self._read_cached(self.option_file)]
+            observations: dict[tuple[Any, ...], OptionOiObservation] = {}
+            for row in self._read_cached(self.option_file):
+                try:
+                    item = OptionOiObservation.from_public(row)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                key = (
+                    _as_ist(item.timestamp).isoformat(),
+                    item.expiry,
+                    item.option_type,
+                    item.distance_from_atm,
+                    item.strike,
+                )
+                observations[key] = item
+            return sorted(observations.values(), key=lambda item: (_as_ist(item.timestamp), item.expiry, item.distance_from_atm, item.option_type))
 
     def futures_history(self) -> list[FuturesOiObservation]:
         with self._lock:
@@ -887,6 +933,23 @@ class OiRegimeRepository:
     def latest_regime(self) -> dict[str, Any] | None:
         rows = self.regimes()
         return rows[-1] if rows else None
+
+    def history_status(self) -> dict[str, Any]:
+        try:
+            value = json.loads(self.history_manifest_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {
+                "state": "NOT_IMPORTED",
+                "historicalDepthAvailable": False,
+                "enforcementReady": False,
+                "reason": "No historical NIFTY OI import has completed",
+            }
+        return value if isinstance(value, dict) else {
+            "state": "INVALID_MANIFEST",
+            "historicalDepthAvailable": False,
+            "enforcementReady": False,
+            "reason": "Historical NIFTY OI import status is unreadable",
+        }
 
     def observations_at(self, timestamp: datetime, lookback_bars: int) -> tuple[list[OptionOiObservation], list[OptionOiObservation], FuturesOiObservation | None, FuturesOiObservation | None]:
         target = _as_ist(timestamp)

@@ -72,6 +72,28 @@ the configured coverage threshold is satisfied.
 The login uses a signed, 12-hour, HTTP-only cookie. Credentials and the signing
 secret are read only from server environment variables.
 
+## Historical NIFTY OI import
+
+The Backtest and Signals pages read historical OI coverage from the canonical
+repository at `/var/lib/vento-nse/backtest/nifty-oi`. Keep the OI filter set to
+`OFF` while importing. Create `/etc/vento-nse-nifty-expiry-schedule.json` from
+an audited exchange contract calendar; it is a JSON array of
+`{"effectiveFrom":"YYYY-MM-DD","weekday":0}` records, where Monday is `0` and
+Sunday is `6`. The importer deliberately does not guess or embed transition or
+holiday-adjusted expiry dates.
+
+After building the backtest image, import an explicit half-open date range:
+
+```bash
+sudo web/deploy/import-nifty-oi-history.sh "$FROM_DATE" "$TO_DATE"
+```
+
+The command uses only the configured Dhan integration, caches completed API
+responses, resumes safely, and does not restart services. Dhan expired-options
+history does not provide bid/ask or reliable expired-futures OI, so such periods
+remain `INSUFFICIENT_OI_DATA` for strict enforcement. The manifest and coverage
+still appear in both UIs for audit and advisory research.
+
 ## RSI Recovery position exits
 
 The Backtest page keeps the original `Legacy fixed target` research mode and

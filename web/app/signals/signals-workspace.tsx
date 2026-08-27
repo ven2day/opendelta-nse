@@ -43,6 +43,15 @@ type EngineStatus = {
   liveOrdersEnabled: boolean;
   oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
   oiRegime: OiRegime | null;
+  oiHistory: OiHistoryStatus | null;
+};
+
+type OiHistoryStatus = {
+  state: string;
+  request?: { fromDate?: string; toDate?: string };
+  optionRowsImported?: number;
+  enforcementReady?: boolean;
+  reason?: string;
 };
 
 type OiRegime = {
@@ -217,7 +226,7 @@ const EMPTY_STATUS: EngineStatus = {
   connectionStatus: "DISCONNECTED", engineStatus: "STARTING", message: "Loading live-signal runtime", universeVersion: null,
   universeFrozen: false, monitoredSymbols: 0, subscribedSymbols: 0, timeframe: "5m", strategyVersion: "rsi-recovery-1.1.0",
   lastCompletedCandle: null, lastMarketDataTimestamp: null, dataAgeSeconds: null, marketSession: "CLOSED", paperOnly: true, liveOrdersEnabled: false,
-  oiFilterMode: "OFF", oiRegime: null,
+  oiFilterMode: "OFF", oiRegime: null, oiHistory: null,
 };
 
 function money(value: number | null | undefined, digits = 2) {
@@ -476,6 +485,11 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
           <Metric label="Data freshness" value={status.oiRegime?.dataAgeSeconds == null ? "—" : `${number(status.oiRegime.dataAgeSeconds, 0)}s`} />
         </div>
         <small>{status.oiFilterMode === "OFF" ? "Disabled by default; existing signal execution is unchanged." : status.oiRegime?.reason ?? "Waiting for completed five-minute OI observations."}</small>
+        <div className={`oi-history-status ${status.oiHistory?.enforcementReady ? "ready" : "limited"}`}>
+          <strong>Historical OI: {status.oiHistory?.state ?? "NOT IMPORTED"}</strong>
+          {status.oiHistory?.request?.fromDate && <span>{status.oiHistory.request.fromDate} to {status.oiHistory.request.toDate} · {status.oiHistory.optionRowsImported ?? 0} rows</span>}
+          {!status.oiHistory?.enforcementReady && <span>{status.oiHistory?.reason ?? "Historical depth coverage is unavailable."}</span>}
+        </div>
       </section>
 
       {notice && <div className="signal-notice"><BellRing size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={14} /></button></div>}

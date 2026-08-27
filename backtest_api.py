@@ -33,6 +33,7 @@ from live_signals import (
     LiveSignalSettings,
 )
 from market_data_refresh import MarketDataRefreshService
+from dhan_oi import build_oi_service_from_environment
 from main import (
     DEFAULT_SYMBOLS_FILE,
     IST,
@@ -49,6 +50,14 @@ from recovery_backtest import (
     RecoveryConfig,
     aggregate_recovery_results,
     simulate_recovery_symbol,
+    summarize_recovery_trades,
+)
+from nifty_oi_regime import (
+    NiftyOiConfig,
+    OiRegimeRepository,
+    apply_oi_filter_chronologically,
+    chronological_walk_forward_folds,
+    compare_oi_modes,
 )
 from recovery_backtest import (
     STRATEGY_VERSION as RECOVERY_STRATEGY_VERSION,
@@ -100,7 +109,8 @@ VARIABLE_FEE_RATE = 0.00111
 FIXED_FEE_PER_ORDER = 20.0
 SLIPPAGE_RATE = 0.0005
 MINIMUM_NET_PROFIT_PCT = 1.0
-MAX_SYMBOLS_PER_RUN = 10
+MAX_SYMBOLS_PER_RUN = 750
+MAX_BACKTEST_WORKERS = 10
 MAX_CHART_POINTS = 360
 MAX_EVENTS = 300
 INTRADAY_CHUNK_DAYS = 89
@@ -193,6 +203,27 @@ class BacktestRequest(BaseModel):
     upperRsiLevel: float = Field(default=70, ge=0, le=100)
     hardStopLossPct: float = Field(default=1.5, gt=0, lt=100)
     rsiExitExecutionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
+    oiFilterMode: Literal["OFF", "ADVISORY", "ENFORCED"] = "OFF"
+    oiLookbackBars: int = Field(default=3, ge=1, le=100)
+    oiStrikesEachSide: int = Field(default=5, ge=0, le=20)
+    oiMinimumPriceChangePct: float = Field(default=0.05, ge=0, le=100)
+    oiMinimumChangePct: float = Field(default=0.5, ge=0, le=10_000)
+    oiMaximumSpreadPct: float = Field(default=20.0, gt=0, le=1_000)
+    oiStaleDataSeconds: int = Field(default=360, ge=1, le=86_400)
+    oiMinimumValidContractFraction: float = Field(default=0.5, gt=0, le=1)
+    oiMinimumFuturesVolume: float = Field(default=1, ge=0)
+    oiVolatilityPriceRisePct: float = Field(default=0.25, ge=0, le=100)
+    oiVolatilityIvRise: float = Field(default=0.5, ge=0, le=100)
+    oiMinimumCoverage: float = Field(default=0.65, gt=0, le=1)
+    oiOptionsWeight: float = Field(default=0.35, ge=0, le=1)
+    oiFuturesWeight: float = Field(default=0.35, ge=0, le=1)
+    oiSpotWeight: float = Field(default=0.30, ge=0, le=1)
+    oiStronglyBearishThreshold: float = Field(default=-60, ge=-100, le=100)
+    oiBearishThreshold: float = Field(default=-20, ge=-100, le=100)
+    oiBullishThreshold: float = Field(default=20, ge=-100, le=100)
+    oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
+    oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
+    oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
 
     @field_validator("symbols")
     @classmethod
@@ -205,8 +236,8 @@ class BacktestRequest(BaseModel):
     @model_validator(mode="after")
     def validate_strategy_parameters(self) -> "BacktestRequest":
         if self.strategyMode == "rsi_range":
-            if self.exitProtectionEnabled or self.exitModel != "LEGACY_FIXED_TARGET":
-                raise ValueError("Position exit models are available only for RSI Recovery")
+            if self.exitProtectionEnabled or self.exitModel != "LEGACY_FIXED_TARGET" or self.oiFilterMode != "OFF":
+                raise ValueError("Position exit models and the NIFTY OI filter are available only for RSI Recovery")
             if not self.entryLow < self.entryHigh < self.exitLow < self.exitHigh:
                 raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
             return self
@@ -229,6 +260,7 @@ class BacktestRequest(BaseModel):
                 raise ValueError("Upper RSI level cannot be below the profit-exit RSI")
         if self.minimumStopPct > self.maximumStopPct:
             raise ValueError("Minimum stop percentage cannot exceed maximum stop percentage")
+        self.oi_config()
 
         if not self.rsiArmLow < self.rsiArmHigh:
             raise ValueError("RSI arm low must be lower than RSI arm high")
@@ -313,6 +345,35 @@ class BacktestRequest(BaseModel):
             max_open_lots_per_symbol=self.maxOpenLotsPerSymbol,
             quantity_per_trade=self.quantityPerTrade,
         )
+
+    def oi_config(self) -> NiftyOiConfig:
+        return NiftyOiConfig(
+            lookback_bars=self.oiLookbackBars,
+            strikes_each_side=self.oiStrikesEachSide,
+            minimum_price_change_pct=self.oiMinimumPriceChangePct,
+            minimum_oi_change_pct=self.oiMinimumChangePct,
+            maximum_spread_pct=self.oiMaximumSpreadPct,
+            stale_data_seconds=self.oiStaleDataSeconds,
+            minimum_valid_contract_fraction=self.oiMinimumValidContractFraction,
+            minimum_futures_volume=self.oiMinimumFuturesVolume,
+            minimum_component_coverage=self.oiMinimumCoverage,
+            options_weight=self.oiOptionsWeight,
+            futures_weight=self.oiFuturesWeight,
+            spot_weight=self.oiSpotWeight,
+            strongly_bearish_threshold=self.oiStronglyBearishThreshold,
+            bearish_threshold=self.oiBearishThreshold,
+            bullish_threshold=self.oiBullishThreshold,
+            strongly_bullish_threshold=self.oiStronglyBullishThreshold,
+            elevated_quality_threshold=self.oiElevatedQualityThreshold,
+            volatility_price_rise_pct=self.oiVolatilityPriceRisePct,
+            volatility_iv_rise=self.oiVolatilityIvRise,
+            fail_policy=self.oiFailPolicy,
+        ).validate()
+
+
+class OiFilterComparisonRequest(BacktestRequest):
+    symbols: list[str] = Field(min_length=1, max_length=750)
+    strategyMode: Literal["rsi_recovery"] = "rsi_recovery"
 
 
 class AtrOptimizationRequest(BacktestRequest):
@@ -564,6 +625,27 @@ class LiveSignalSettingsRequest(BaseModel):
     recentMinutes: int = Field(default=60, ge=2, le=10_080)
     supportLookbackShort: int = Field(default=20, ge=2, le=500)
     supportLookbackLong: int = Field(default=50, ge=2, le=1_000)
+    oiFilterMode: Literal["OFF", "ADVISORY", "ENFORCED"] = "OFF"
+    oiLookbackBars: int = Field(default=3, ge=1, le=100)
+    oiStrikesEachSide: int = Field(default=5, ge=0, le=20)
+    oiMinimumPriceChangePct: float = Field(default=0.05, ge=0, le=100)
+    oiMinimumChangePct: float = Field(default=0.5, ge=0, le=10_000)
+    oiMaximumSpreadPct: float = Field(default=20.0, gt=0, le=1_000)
+    oiStaleDataSeconds: int = Field(default=360, ge=1, le=86_400)
+    oiMinimumValidContractFraction: float = Field(default=0.5, gt=0, le=1)
+    oiMinimumFuturesVolume: float = Field(default=1, ge=0)
+    oiVolatilityPriceRisePct: float = Field(default=0.25, ge=0, le=100)
+    oiVolatilityIvRise: float = Field(default=0.5, ge=0, le=100)
+    oiMinimumCoverage: float = Field(default=0.65, gt=0, le=1)
+    oiOptionsWeight: float = Field(default=0.35, ge=0, le=1)
+    oiFuturesWeight: float = Field(default=0.35, ge=0, le=1)
+    oiSpotWeight: float = Field(default=0.30, ge=0, le=1)
+    oiStronglyBearishThreshold: float = Field(default=-60, ge=-100, le=100)
+    oiBearishThreshold: float = Field(default=-20, ge=-100, le=100)
+    oiBullishThreshold: float = Field(default=20, ge=-100, le=100)
+    oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
+    oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
+    oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
 
     @model_validator(mode="after")
     def validate_live_settings(self) -> "LiveSignalSettingsRequest":
@@ -586,6 +668,27 @@ class LiveSignalSettingsRequest(BaseModel):
             recent_minutes=self.recentMinutes,
             support_lookback_short=self.supportLookbackShort,
             support_lookback_long=self.supportLookbackLong,
+            oi_filter_mode=self.oiFilterMode,
+            oi_lookback_bars=self.oiLookbackBars,
+            oi_strikes_each_side=self.oiStrikesEachSide,
+            oi_minimum_price_change_pct=self.oiMinimumPriceChangePct,
+            oi_minimum_change_pct=self.oiMinimumChangePct,
+            oi_maximum_spread_pct=self.oiMaximumSpreadPct,
+            oi_stale_data_seconds=self.oiStaleDataSeconds,
+            oi_minimum_valid_contract_fraction=self.oiMinimumValidContractFraction,
+            oi_minimum_futures_volume=self.oiMinimumFuturesVolume,
+            oi_volatility_price_rise_pct=self.oiVolatilityPriceRisePct,
+            oi_volatility_iv_rise=self.oiVolatilityIvRise,
+            oi_minimum_coverage=self.oiMinimumCoverage,
+            oi_options_weight=self.oiOptionsWeight,
+            oi_futures_weight=self.oiFuturesWeight,
+            oi_spot_weight=self.oiSpotWeight,
+            oi_strongly_bearish_threshold=self.oiStronglyBearishThreshold,
+            oi_bearish_threshold=self.oiBearishThreshold,
+            oi_bullish_threshold=self.oiBullishThreshold,
+            oi_strongly_bullish_threshold=self.oiStronglyBullishThreshold,
+            oi_elevated_quality_threshold=self.oiElevatedQualityThreshold,
+            oi_fail_policy=self.oiFailPolicy,
         ).validate()
 
 
@@ -1172,6 +1275,19 @@ def run_recovery_backtest(
     )
     legacy_protection = exit_model == "LEGACY_PROTECTED_TARGET"
     position_backtest = legacy_protection or dynamic_exit is not None or rsi_profit_exit is not None
+    oi_config = request.oi_config()
+    oi_repository = get_oi_repository() if request.oiFilterMode != "OFF" else None
+    quality_by_symbol: dict[str, float] = {}
+    if request.oiFilterMode != "OFF":
+        try:
+            _, active_universe = get_universe_service().get_active_live_universe()
+            quality_by_symbol = {
+                str(row.get("symbol")): float(row["qualityScore"])
+                for row in (active_universe or {}).get("selected", [])
+                if row.get("symbol") and row.get("qualityScore") is not None
+            }
+        except (OSError, ValueError, TypeError):
+            quality_by_symbol = {}
 
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
@@ -1186,6 +1302,13 @@ def run_recovery_backtest(
         "Results use the current symbols.csv universe, so delisted securities are not represented (survivorship bias).",
         "Historical target achievement and signal quality do not establish live profitability.",
     ]
+    if request.oiFilterMode == "ADVISORY":
+        warnings.append("NIFTY OI mode is ADVISORY: causal regimes are attached to candidates but execution is unchanged.")
+    elif request.oiFilterMode == "ENFORCED":
+        warnings.extend([
+            "NIFTY OI mode is ENFORCED after the existing stock signal and confirmation logic; it never creates BUY signals.",
+            "Missing or stale historical OI follows the configured fail policy and is recorded explicitly; no OI values are fabricated.",
+        ])
     if legacy_protection:
         warnings.extend([
             "Exit protection is ON: valid RSI Recovery signals become fixed-quantity positions subject to the configured per-symbol open-lot limit.",
@@ -1216,7 +1339,7 @@ def run_recovery_backtest(
             "Every fresh RSI arm/recovery cycle is an independent signal observation, even while earlier observations for the same symbol remain open; this is not a portfolio-capital simulation.",
         ])
     requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
-    worker_count = max(1, min(requested_workers, len(request.symbols), MAX_SYMBOLS_PER_RUN))
+    worker_count = max(1, min(requested_workers, len(request.symbols), MAX_BACKTEST_WORKERS))
     warmup_bars = max(
         config.rsi_length + 2,
         config.ema_fast,
@@ -1225,7 +1348,7 @@ def run_recovery_backtest(
         dynamic_exit.atr_length if dynamic_exit is not None else 0,
     ) + 5
 
-    def process(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    def prepare(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
         try:
             candles = store.candles(
                 symbol,
@@ -1235,6 +1358,53 @@ def run_recovery_backtest(
                 now,
                 warmup_bars=warmup_bars,
             )
+            observations = (
+                simulate_recovery_symbol(
+                    symbol,
+                    candles,
+                    timeframe=request.timeframe,
+                    config=config,
+                    run_id=run_id,
+                    analysis_start=analysis_start,
+                )
+                if oi_repository is not None
+                else None
+            )
+            return {"symbol": symbol, "candles": candles, "observations": observations}, None
+        except (DhanAPIError, ValueError, OSError, KeyError) as error:
+            return None, {"symbol": symbol, "message": str(error)}
+
+    if worker_count == 1:
+        prepared_rows = [prepare(symbol) for symbol in request.symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="recovery-symbol",
+        ) as executor:
+            prepared_rows = list(executor.map(prepare, request.symbols))
+
+    prepared = [item for item, _ in prepared_rows if item is not None]
+    errors = [error for _, error in prepared_rows if error is not None]
+    if oi_repository is not None and prepared:
+        filtered = apply_oi_filter_chronologically(
+            [item["observations"] for item in prepared],
+            repository=oi_repository,
+            mode=request.oiFilterMode,
+            config=oi_config,
+            quality_by_symbol=quality_by_symbol,
+        )
+        for item, observations in zip(prepared, filtered, strict=True):
+            observations.update(
+                summarize_recovery_trades(str(item["symbol"]), observations["trades"])
+            )
+            item["observations"] = observations
+
+    def finalize(item: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+        symbol = str(item["symbol"])
+        candles = item["candles"]
+        observations = item["observations"]
+        try:
+            oi_skipped = list((observations or {}).get("oiSkippedSignals", []))
             if legacy_protection:
                 result = simulate_protected_recovery_symbol(
                     symbol,
@@ -1244,6 +1414,7 @@ def run_recovery_backtest(
                     protection_config=protection,
                     run_id=run_id,
                     analysis_start=analysis_start,
+                    observations=observations,
                 )
             elif dynamic_exit is not None:
                 result = simulate_dynamic_exit_symbol(
@@ -1254,6 +1425,7 @@ def run_recovery_backtest(
                     exit_config=dynamic_exit,
                     run_id=run_id,
                     analysis_start=analysis_start,
+                    observations=observations,
                 )
             elif rsi_profit_exit is not None:
                 result = simulate_rsi_profit_exit_symbol(
@@ -1264,31 +1436,32 @@ def run_recovery_backtest(
                     exit_config=rsi_profit_exit,
                     run_id=run_id,
                     analysis_start=analysis_start,
+                    observations=observations,
                 )
             else:
-                result = simulate_recovery_symbol(
-                    symbol,
-                    candles,
-                    timeframe=request.timeframe,
-                    config=config,
-                    run_id=run_id,
-                    analysis_start=analysis_start,
+                result = observations or simulate_recovery_symbol(
+                    symbol, candles, timeframe=request.timeframe, config=config,
+                    run_id=run_id, analysis_start=analysis_start,
                 )
+            if oi_repository is not None:
+                result["oiSkippedSignals"] = oi_skipped
+                result["skippedOiSignals"] = len(oi_skipped)
+                result["oiFilterMode"] = request.oiFilterMode
             return result, None
         except (DhanAPIError, ValueError, OSError, KeyError) as error:
             return None, {"symbol": symbol, "message": str(error)}
 
     if worker_count == 1:
-        processed = [process(symbol) for symbol in request.symbols]
+        processed = [finalize(item) for item in prepared]
     else:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="recovery-symbol",
         ) as executor:
-            processed = list(executor.map(process, request.symbols))
+            processed = list(executor.map(finalize, prepared))
 
     results = [result for result, _ in processed if result is not None]
-    errors = [error for _, error in processed if error is not None]
+    errors.extend(error for _, error in processed if error is not None)
     if not results:
         warnings.append(
             "No symbol in this batch produced enough valid historical data; the universe run continued to the next batch."
@@ -1306,6 +1479,9 @@ def run_recovery_backtest(
         summary = aggregate_rsi_profit_exit_results(results)
     else:
         summary = aggregate_recovery_results(results)
+    if request.oiFilterMode != "OFF":
+        summary["skippedOiSignals"] = sum(len(result.get("oiSkippedSignals", [])) for result in results)
+        summary["oiFilterMode"] = request.oiFilterMode
     public_exit_parameters = (
         dynamic_exit.public_parameters()
         if dynamic_exit is not None
@@ -1359,6 +1535,12 @@ def run_recovery_backtest(
                 "maeScore": "clamp(100 + median_completed_MAE_pct*10, 0, 100)",
                 "openPenalty": "open_signal_observations / buy_signal_observations * 100",
             },
+            "oiFilter": {
+                "mode": request.oiFilterMode,
+                "version": "nifty-oi-regime-filter-1.0.0",
+                "parameters": oi_config.public(),
+                "decisionOrder": "candidate BUY -> stock confirmations -> NIFTY OI regime -> position controls",
+            },
             "corporateActionAdjustment": "UNVERIFIED_SOURCE_AS_RECEIVED",
             "gitCommitSha": os.environ.get("GIT_COMMIT_SHA") or None,
         },
@@ -1366,6 +1548,116 @@ def run_recovery_backtest(
         "results": results,
         "errors": errors,
         "warnings": warnings,
+    }
+
+
+def _comparison_trade_pnl(trade: dict[str, Any]) -> float | None:
+    for key in ("netPnl", "realizedNetPnl", "realizedPnl", "pnl"):
+        value = trade.get(key)
+        if value is not None and math.isfinite(float(value)):
+            return float(value)
+    return None
+
+
+def _oi_walk_forward_report(
+    off: dict[str, Any],
+    enforced: dict[str, Any],
+    duration_years: int,
+) -> dict[str, Any]:
+    baseline = [trade for result in off.get("results", []) for trade in result.get("trades", [])]
+    accepted = [trade for result in enforced.get("results", []) for trade in result.get("trades", [])]
+    accepted_ids = {str(trade.get("tradeId") or "") for trade in accepted}
+    timestamps = [
+        trade.get("signalTimestamp") or trade.get("entryTimestamp")
+        for trade in baseline
+        if trade.get("signalTimestamp") or trade.get("entryTimestamp")
+    ]
+    folds = chronological_walk_forward_folds(timestamps, duration_years)
+    rows: list[dict[str, Any]] = []
+    for number, fold in enumerate(folds, start=1):
+        validation_from = datetime.fromisoformat(fold["validationFrom"])
+        validation_to = datetime.fromisoformat(fold["validationTo"])
+        validation = [
+            trade for trade in baseline
+            if validation_from
+            <= datetime.fromisoformat(str(trade.get("signalTimestamp") or trade.get("entryTimestamp")))
+            <= validation_to
+        ]
+        validation_accepted = [
+            trade for trade in validation
+            if str(trade.get("tradeId") or "") in accepted_ids
+        ]
+        baseline_pnl = sum(value for trade in validation if (value := _comparison_trade_pnl(trade)) is not None)
+        enforced_pnl = sum(value for trade in validation_accepted if (value := _comparison_trade_pnl(trade)) is not None)
+        rows.append({
+            "fold": number,
+            **fold,
+            "configurationScope": "COMMON_UNIVERSE_CONFIGURATION",
+            "validationCandidateTrades": len(validation),
+            "validationAcceptedTrades": len(validation_accepted),
+            "validationBaselineNetPnl": _finite(baseline_pnl, 2),
+            "validationEnforcedNetPnl": _finite(enforced_pnl, 2),
+            "validationNetPnlChange": _finite(enforced_pnl - baseline_pnl, 2),
+        })
+    return {
+        "method": "9M_DEVELOPMENT_3M_UNTOUCHED_VALIDATION" if duration_years == 1 else "12M_DEVELOPMENT_3M_VALIDATION_ROLLING_3M",
+        "thresholdOptimization": "DEVELOPMENT_ONLY",
+        "stockSpecificOptimization": False,
+        "folds": rows,
+        "complete": bool(rows) and all(row["validationCandidateTrades"] > 0 for row in rows),
+    }
+
+
+def run_oi_filter_comparison(
+    request: OiFilterComparisonRequest,
+    store: HistoricalDataStore,
+    now_ist: datetime | None = None,
+) -> dict[str, Any]:
+    """Run one immutable candidate specification through OFF, ADVISORY and ENFORCED."""
+    evaluation_time = (now_ist or datetime.now(IST)).astimezone(IST)
+    comparison_run_id = request.runId or str(uuid.uuid4())
+    runs: dict[str, dict[str, Any]] = {}
+    for mode in ("OFF", "ADVISORY", "ENFORCED"):
+        mode_request = request.model_copy(
+            update={"oiFilterMode": mode, "runId": comparison_run_id}
+        )
+        runs[mode] = run_recovery_backtest(mode_request, store, evaluation_time)
+    comparison = compare_oi_modes(runs["OFF"], runs["ADVISORY"], runs["ENFORCED"])
+    comparison["rejectedTrades"] = [
+        item
+        for result in runs["ENFORCED"].get("results", [])
+        for item in result.get("oiSkippedSignals", [])
+    ]
+    walk_forward = _oi_walk_forward_report(
+        runs["OFF"], runs["ENFORCED"], request.durationYears
+    )
+    return {
+        "metadata": {
+            "runId": comparison_run_id,
+            "generatedAt": evaluation_time.isoformat(),
+            "researchLabel": "Research candidate — paper trading required",
+            "candidateSpecificationIdentical": True,
+            "defaultOiMode": "OFF",
+        },
+        "comparison": comparison,
+        "walkForwardValidation": walk_forward,
+        "acceptance": {
+            "passed": False,
+            "defaultMayBeEnabled": False,
+            "reason": (
+                "The filter remains OFF until complete chronological validation demonstrates all profitability, "
+                "drawdown, stop-rate, trade-count, fold-stability and symbol-concentration criteria."
+            ),
+        },
+        "runs": {
+            mode: {
+                "metadata": bundle.get("metadata"),
+                "summary": bundle.get("summary"),
+                "errors": bundle.get("errors"),
+                "warnings": bundle.get("warnings"),
+            }
+            for mode, bundle in runs.items()
+        },
     }
 
 
@@ -1638,6 +1930,7 @@ _feature_snapshot_cache: tuple[int, pd.DataFrame] | None = None
 _universe_service: UniverseService | None = None
 _live_signal_engine: LiveSignalEngine | None = None
 _market_data_refresh_service: MarketDataRefreshService | None = None
+_oi_repository: OiRegimeRepository | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -1654,6 +1947,19 @@ def get_report_directory() -> Path:
     if not directory.is_absolute():
         raise RuntimeError("BACKTEST_REPORT_DIR must be an absolute path")
     return directory
+
+
+def get_oi_repository() -> OiRegimeRepository:
+    global _oi_repository
+    if _oi_repository is None:
+        default_root = Path(
+            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")
+        ).expanduser() / "nifty-oi"
+        root = Path(os.environ.get("NIFTY_OI_DIR", str(default_root))).expanduser()
+        if not root.is_absolute():
+            raise RuntimeError("NIFTY_OI_DIR must be an absolute path")
+        _oi_repository = OiRegimeRepository(root)
+    return _oi_repository
 
 
 def get_universe_service() -> UniverseService:
@@ -1688,6 +1994,10 @@ def get_live_signal_engine() -> LiveSignalEngine:
             LiveSignalRepository(root),
             get_store(),
             get_universe_service(),
+            oi_service=build_oi_service_from_environment(
+                get_store().config,
+                get_oi_repository().root,
+            ),
         )
     return _live_signal_engine
 
@@ -2070,6 +2380,19 @@ async def backtest(request: BacktestRequest) -> dict[str, Any]:
     async with _run_lock:
         try:
             return await asyncio.to_thread(run_backtest, request, get_store())
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except DhanAPIError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/backtest/compare-oi-filter")
+async def compare_oi_filter(request: OiFilterComparisonRequest) -> dict[str, Any]:
+    async with _run_lock:
+        try:
+            return await asyncio.to_thread(
+                run_oi_filter_comparison, request, get_store()
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except DhanAPIError as error:

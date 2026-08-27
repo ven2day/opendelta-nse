@@ -221,6 +221,11 @@ def _skipped_signal(candidate: dict[str, Any], execution_model: str) -> dict[str
         "signalTimestamp": candidate["signalTimestamp"],
         "entryTimestamp": candidate["entryTimestamp"] if known else None,
         "entryPrice": candidate["entryPrice"] if known else None,
+        "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
+        "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
+        "oiConfidence": candidate.get("oiConfidence"),
+        "oiDecision": candidate.get("oiDecision"),
+        "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
         "quantity": 0,
         "capitalDeployed": 0.0,
         "status": "SKIPPED_MAX_OPEN_LOTS",
@@ -308,6 +313,11 @@ def _finish_position(
         "confirmationScore": candidate["confirmationScore"],
         "requiredConfirmations": candidate["requiredConfirmations"],
         "rsiAtEntry": candidate["rsiAtEntry"],
+        "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
+        "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
+        "oiConfidence": candidate.get("oiConfidence"),
+        "oiDecision": candidate.get("oiDecision"),
+        "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
     }
 
 

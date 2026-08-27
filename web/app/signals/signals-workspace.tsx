@@ -41,6 +41,20 @@ type EngineStatus = {
   marketSession: string;
   paperOnly: boolean;
   liveOrdersEnabled: boolean;
+  oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
+  oiRegime: OiRegime | null;
+};
+
+type OiRegime = {
+  regime: string;
+  combinedScore: number | null;
+  confidence: string;
+  sourceTimestamp: string | null;
+  dataAgeSeconds: number | null;
+  reason: string;
+  options?: { score?: number | null };
+  futures?: { score?: number | null };
+  spot?: { score?: number | null };
 };
 
 type Settings = {
@@ -55,6 +69,27 @@ type Settings = {
   recentMinutes: number;
   supportLookbackShort: number;
   supportLookbackLong: number;
+  oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
+  oiLookbackBars: number;
+  oiStrikesEachSide: number;
+  oiMinimumPriceChangePct: number;
+  oiMinimumChangePct: number;
+  oiMaximumSpreadPct: number;
+  oiStaleDataSeconds: number;
+  oiMinimumValidContractFraction: number;
+  oiMinimumFuturesVolume: number;
+  oiVolatilityPriceRisePct: number;
+  oiVolatilityIvRise: number;
+  oiMinimumCoverage: number;
+  oiOptionsWeight: number;
+  oiFuturesWeight: number;
+  oiSpotWeight: number;
+  oiStronglyBearishThreshold: number;
+  oiBearishThreshold: number;
+  oiBullishThreshold: number;
+  oiStronglyBullishThreshold: number;
+  oiElevatedQualityThreshold: number;
+  oiFailPolicy: "SKIP" | "ALLOW";
 };
 
 type Signal = {
@@ -134,6 +169,14 @@ type Signal = {
     mfePct: number | null;
     lastClose: number;
   };
+  oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
+  oiRegimeAtSignal: string | null;
+  oiScoreAtSignal: number | null;
+  oiConfidence: string | null;
+  oiDecision: string;
+  oiDecisionReason: string;
+  oiSourceTimestamp: string | null;
+  executionEligible: boolean;
 };
 
 type PaperTrade = {
@@ -174,6 +217,7 @@ const EMPTY_STATUS: EngineStatus = {
   connectionStatus: "DISCONNECTED", engineStatus: "STARTING", message: "Loading live-signal runtime", universeVersion: null,
   universeFrozen: false, monitoredSymbols: 0, subscribedSymbols: 0, timeframe: "5m", strategyVersion: "rsi-recovery-1.1.0",
   lastCompletedCandle: null, lastMarketDataTimestamp: null, dataAgeSeconds: null, marketSession: "CLOSED", paperOnly: true, liveOrdersEnabled: false,
+  oiFilterMode: "OFF", oiRegime: null,
 };
 
 function money(value: number | null | undefined, digits = 2) {
@@ -259,6 +303,14 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
         <Metric label="15m momentum" value={percent(signal.momentum15m, 3)} />
         <Metric label="30m momentum" value={percent(signal.momentum30m, 3)} />
       </div><div className="confirmation-pills"><span className={signal.emaConfirmation ? "pass" : "fail"}>EMA</span><span className={signal.vwapConfirmation ? "pass" : "fail"}>VWAP</span><span className={signal.volumeConfirmation ? "pass" : "fail"}>VOLUME</span></div></section>
+      <section><h3>NIFTY OI regime at signal</h3><div className="signal-detail-grid">
+        <Metric label="Mode" value={signal.oiFilterMode} />
+        <Metric label="Regime" value={(signal.oiRegimeAtSignal ?? "OFF").replaceAll("_", " ")} tone={`regime-${(signal.oiRegimeAtSignal ?? "neutral").toLowerCase()}`} />
+        <Metric label="Combined score" value={number(signal.oiScoreAtSignal)} />
+        <Metric label="Confidence" value={signal.oiConfidence ?? "—"} />
+        <Metric label="Decision" value={signal.oiDecision.replaceAll("_", " ")} />
+        <Metric label="Source timestamp" value={formatIst(signal.oiSourceTimestamp)} />
+      </div><small>{signal.oiDecisionReason}</small></section>
       <section><h3>Support and target room</h3><div className="signal-detail-grid">
         <Metric label="Recent support" value={money(levels.support)} />
         <Metric label="Distance to support" value={percent(levels.distanceToSupportPct)} />
@@ -270,7 +322,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
     </div>
     <div className="signal-card-foot">
       <div><span>Entry range method: {signal.buyRange.method.replaceAll("_", " ")} heuristic</span><small>{signal.buyRange.formula}</small></div>
-      {!readOnly && signal.manualAction !== "PAPER_BUY" && <div className="signal-actions"><button className="paper-buy-button" onClick={() => onPaper(signal)}><IndianRupee size={14} />Paper buy</button>{signal.manualAction !== "WATCH" && <button onClick={() => onWatch(signal)}><Eye size={14} />Watch</button>}<button onClick={() => onIgnore(signal)}><X size={14} />Ignore</button></div>}
+      {!readOnly && signal.manualAction !== "PAPER_BUY" && <div className="signal-actions"><button className="paper-buy-button" disabled={signal.oiFilterMode === "ENFORCED" && !signal.executionEligible} title={signal.executionEligible ? "Record a paper BUY" : signal.oiDecisionReason} onClick={() => onPaper(signal)}><IndianRupee size={14} />Paper buy</button>{signal.manualAction !== "WATCH" && <button onClick={() => onWatch(signal)}><Eye size={14} />Watch</button>}<button onClick={() => onIgnore(signal)}><X size={14} />Ignore</button></div>}
       {signal.manualAction !== "NO_ACTION" && <span className={`manual-action ${signal.manualAction.toLowerCase()}`}>{signal.manualAction.replace("_", " ")}</span>}
     </div>
   </article>;
@@ -413,6 +465,19 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
         <button className="icon-button" onClick={() => void load()} aria-label="Refresh signals"><RefreshCw size={16} /></button><button className="icon-button" onClick={() => { setDraftSettings(settings); setSettingsOpen(true); }} aria-label="Signals settings"><Settings2 size={16} /></button>
       </section>
 
+      <section className={`backtest-panel oi-regime-card regime-${(status.oiRegime?.regime ?? "insufficient_oi_data").toLowerCase()}`} aria-label="Current NIFTY OI market regime">
+        <div className="panel-title"><div><span className="section-kicker">NIFTY OI filter · {status.oiFilterMode}</span><h2>{(status.oiRegime?.regime ?? (status.oiFilterMode === "OFF" ? "OFF" : "INSUFFICIENT_OI_DATA")).replaceAll("_", " ")}</h2></div><span className="date-window">{formatIst(status.oiRegime?.sourceTimestamp)}</span></div>
+        <div className="signals-study-grid">
+          <Metric label="Combined score" value={number(status.oiRegime?.combinedScore)} />
+          <Metric label="Confidence" value={status.oiRegime?.confidence ?? "—"} />
+          <Metric label="Options OI" value={number(status.oiRegime?.options?.score)} />
+          <Metric label="Futures OI" value={number(status.oiRegime?.futures?.score)} />
+          <Metric label="NIFTY trend" value={number(status.oiRegime?.spot?.score)} />
+          <Metric label="Data freshness" value={status.oiRegime?.dataAgeSeconds == null ? "—" : `${number(status.oiRegime.dataAgeSeconds, 0)}s`} />
+        </div>
+        <small>{status.oiFilterMode === "OFF" ? "Disabled by default; existing signal execution is unchanged." : status.oiRegime?.reason ?? "Waiting for completed five-minute OI observations."}</small>
+      </section>
+
       {notice && <div className="signal-notice"><BellRing size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={14} /></button></div>}
       {error && <div className="backtest-error" role="alert">{error}</div>}
       <section className="signals-study-grid">
@@ -434,9 +499,31 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
 
     {settingsOpen && draftSettings && <div className="signal-modal-backdrop" role="presentation"><section className="signal-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close"><X /></button><span className="section-kicker">Paper decision support only</span><h2 id="settings-title">Signals settings</h2><p>These controls change entry suggestions and paper sizing. They do not change RSI Recovery v1.1.0.</p>
-      <div className="signal-settings-grid"><label><span>Entry range method</span><select value={draftSettings.entryRangeMethod} onChange={(event) => setDraftSettings({ ...draftSettings, entryRangeMethod: event.target.value as Settings["entryRangeMethod"] })}><option value="FIXED_PERCENT">Fixed percent</option><option value="ATR_BASED">ATR based</option></select></label>
+      <div className="signal-settings-grid"><label><span>NIFTY OI regime filter</span><select value={draftSettings.oiFilterMode} onChange={(event) => setDraftSettings({ ...draftSettings, oiFilterMode: event.target.value as Settings["oiFilterMode"] })}><option value="OFF">OFF — legacy behaviour</option><option value="ADVISORY">ADVISORY — record only</option><option value="ENFORCED">ENFORCED — gate long trades</option></select></label><label><span>Entry range method</span><select value={draftSettings.entryRangeMethod} onChange={(event) => setDraftSettings({ ...draftSettings, entryRangeMethod: event.target.value as Settings["entryRangeMethod"] })}><option value="FIXED_PERCENT">Fixed percent</option><option value="ATR_BASED">ATR based</option></select></label>
         {draftSettings.entryRangeMethod === "FIXED_PERCENT" ? <><label><span>Lower tolerance %</span><input type="number" min="0" step="0.01" value={draftSettings.fixedLowerPct} onChange={(event) => setDraftSettings({ ...draftSettings, fixedLowerPct: Number(event.target.value) })} /></label><label><span>Upper chase tolerance %</span><input type="number" min="0" step="0.01" value={draftSettings.fixedUpperPct} onChange={(event) => setDraftSettings({ ...draftSettings, fixedUpperPct: Number(event.target.value) })} /></label></> : <><label><span>Lower ATR multiplier</span><input type="number" min="0" step="0.05" value={draftSettings.atrLowerMultiplier} onChange={(event) => setDraftSettings({ ...draftSettings, atrLowerMultiplier: Number(event.target.value) })} /></label><label><span>Upper ATR multiplier</span><input type="number" min="0" step="0.05" value={draftSettings.atrUpperMultiplier} onChange={(event) => setDraftSettings({ ...draftSettings, atrUpperMultiplier: Number(event.target.value) })} /></label></>}
         <label><span>Default paper allocation</span><input type="number" min="1" step="1000" value={draftSettings.paperAllocation} onChange={(event) => setDraftSettings({ ...draftSettings, paperAllocation: Number(event.target.value) })} /></label><label><span>Stale-data threshold seconds</span><input type="number" min="10" value={draftSettings.staleDataSeconds} onChange={(event) => setDraftSettings({ ...draftSettings, staleDataSeconds: Number(event.target.value) })} /></label></div>
+      <details className="advanced-settings"><summary>Advanced OI settings</summary><div className="signal-settings-grid">
+        <label><span>Completed 5m lookback</span><input type="number" min="1" max="100" value={draftSettings.oiLookbackBars} onChange={(event) => setDraftSettings({ ...draftSettings, oiLookbackBars: Number(event.target.value) })} /></label>
+        <label><span>Strikes each side of ATM</span><input type="number" min="0" max="20" value={draftSettings.oiStrikesEachSide} onChange={(event) => setDraftSettings({ ...draftSettings, oiStrikesEachSide: Number(event.target.value) })} /></label>
+        <label><span>Minimum premium change %</span><input type="number" min="0" step="0.01" value={draftSettings.oiMinimumPriceChangePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumPriceChangePct: Number(event.target.value) })} /></label>
+        <label><span>Minimum OI change %</span><input type="number" min="0" step="0.1" value={draftSettings.oiMinimumChangePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumChangePct: Number(event.target.value) })} /></label>
+        <label><span>Maximum spread %</span><input type="number" min="0.01" step="0.5" value={draftSettings.oiMaximumSpreadPct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMaximumSpreadPct: Number(event.target.value) })} /></label>
+        <label><span>OI stale after seconds</span><input type="number" min="1" step="30" value={draftSettings.oiStaleDataSeconds} onChange={(event) => setDraftSettings({ ...draftSettings, oiStaleDataSeconds: Number(event.target.value) })} /></label>
+        <label><span>Minimum valid contracts</span><input type="number" min="0.01" max="1" step="0.05" value={draftSettings.oiMinimumValidContractFraction} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumValidContractFraction: Number(event.target.value) })} /></label>
+        <label><span>Minimum futures volume</span><input type="number" min="0" step="1" value={draftSettings.oiMinimumFuturesVolume} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumFuturesVolume: Number(event.target.value) })} /></label>
+        <label><span>IV expansion premium rise %</span><input type="number" min="0" step="0.05" value={draftSettings.oiVolatilityPriceRisePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiVolatilityPriceRisePct: Number(event.target.value) })} /></label>
+        <label><span>IV expansion IV rise</span><input type="number" min="0" step="0.1" value={draftSettings.oiVolatilityIvRise} onChange={(event) => setDraftSettings({ ...draftSettings, oiVolatilityIvRise: Number(event.target.value) })} /></label>
+        <label><span>Minimum coverage</span><input type="number" min="0.01" max="1" step="0.05" value={draftSettings.oiMinimumCoverage} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumCoverage: Number(event.target.value) })} /></label>
+        <label><span>Options weight</span><input type="number" min="0" max="1" step="0.05" value={draftSettings.oiOptionsWeight} onChange={(event) => setDraftSettings({ ...draftSettings, oiOptionsWeight: Number(event.target.value) })} /></label>
+        <label><span>Futures weight</span><input type="number" min="0" max="1" step="0.05" value={draftSettings.oiFuturesWeight} onChange={(event) => setDraftSettings({ ...draftSettings, oiFuturesWeight: Number(event.target.value) })} /></label>
+        <label><span>Spot trend weight</span><input type="number" min="0" max="1" step="0.05" value={draftSettings.oiSpotWeight} onChange={(event) => setDraftSettings({ ...draftSettings, oiSpotWeight: Number(event.target.value) })} /></label>
+        <label><span>Strong bearish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiStronglyBearishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiStronglyBearishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Bearish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiBearishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiBearishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Bullish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiBullishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiBullishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Strong bullish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiStronglyBullishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiStronglyBullishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Elevated stock quality</span><input type="number" min="0" max="100" value={draftSettings.oiElevatedQualityThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiElevatedQualityThreshold: Number(event.target.value) })} /></label>
+        <label><span>Missing-data policy</span><select value={draftSettings.oiFailPolicy} onChange={(event) => setDraftSettings({ ...draftSettings, oiFailPolicy: event.target.value as Settings["oiFailPolicy"] })}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow (explicit override)</option></select></label>
+      </div></details>
       <div className="allocation-presets">{[10000, 25000, 50000, 100000].map((value) => <button key={value} className={draftSettings.paperAllocation === value ? "active" : ""} onClick={() => setDraftSettings({ ...draftSettings, paperAllocation: value })}>{money(value, 0)}</button>)}</div><div className="modal-actions"><button onClick={() => setSettingsOpen(false)}>Cancel</button><button className="paper-buy-button" disabled={working} onClick={() => void saveSettings()}>Save paper settings</button></div>
     </section></div>}
 

@@ -148,8 +148,43 @@ type BacktestResponse = {
 };
 
 type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse) & { detail?: string };
+type OiFilterMode = "OFF" | "ADVISORY" | "ENFORCED";
+type OiFilterComparisonResponse = {
+  metadata: { runId: string; generatedAt: string; researchLabel: string; defaultOiMode: "OFF" };
+  comparison: {
+    tradesAccepted: number;
+    tradesRejected: number;
+    tradesRejectedByStrongBearishOi: number;
+    tradesRejectedByBearishOi: number;
+    tradesRejectedByVolatilityExpansion: number;
+    tradesSkippedForMissingData: number;
+    rejectedTradesThatWouldHaveWon: number;
+    rejectedTradesThatWouldHaveLost: number;
+    falseRejectionRate: number;
+    stopExitsAvoided: number;
+    netPnlChange: number | null;
+    profitFactorChange: number | null;
+    expectancyChange: number | null;
+    drawdownChange: number | null;
+    winRateChange: number | null;
+    tradeCountChange: number | null;
+    advisoryExecutionIdentical: boolean;
+  };
+  walkForwardValidation: { method: string; complete: boolean; folds: Array<Record<string, string | number | boolean | null>> };
+  acceptance: { passed: boolean; defaultMayBeEnabled: boolean; reason: string };
+  runs: Record<OiFilterMode, { summary: Record<string, unknown>; errors: Array<{ symbol: string; message: string }> }>;
+  detail?: string;
+};
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
+
+function isRecoveryResponse(value: BacktestResponse | RecoveryBacktestResponse | null): value is RecoveryBacktestResponse {
+  return value?.metadata.strategyMode === "rsi_recovery";
+}
+
+function isRangeResponse(value: BacktestResponse | RecoveryBacktestResponse | null): value is BacktestResponse {
+  return value?.metadata.strategyMode === "rsi_range";
+}
 
 async function readBacktestPayload(result: Response, batchStart: string): Promise<BacktestPayload> {
   const body = await result.text();
@@ -576,6 +611,27 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [upperRsiLevel, setUpperRsiLevel] = useState(70);
   const [hardStopLossPct, setHardStopLossPct] = useState(1.5);
   const [rsiExitExecutionModel, setRsiExitExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
+  const [oiFilterMode, setOiFilterMode] = useState<OiFilterMode>("OFF");
+  const [oiLookbackBars, setOiLookbackBars] = useState(3);
+  const [oiStrikesEachSide, setOiStrikesEachSide] = useState(5);
+  const [oiMinimumPriceChangePct, setOiMinimumPriceChangePct] = useState(0.05);
+  const [oiMinimumChangePct, setOiMinimumChangePct] = useState(0.5);
+  const [oiMaximumSpreadPct, setOiMaximumSpreadPct] = useState(20);
+  const [oiStaleDataSeconds, setOiStaleDataSeconds] = useState(360);
+  const [oiMinimumValidContractFraction, setOiMinimumValidContractFraction] = useState(0.5);
+  const [oiMinimumFuturesVolume, setOiMinimumFuturesVolume] = useState(1);
+  const [oiVolatilityPriceRisePct, setOiVolatilityPriceRisePct] = useState(0.25);
+  const [oiVolatilityIvRise, setOiVolatilityIvRise] = useState(0.5);
+  const [oiMinimumCoverage, setOiMinimumCoverage] = useState(0.65);
+  const [oiOptionsWeight, setOiOptionsWeight] = useState(0.35);
+  const [oiFuturesWeight, setOiFuturesWeight] = useState(0.35);
+  const [oiSpotWeight, setOiSpotWeight] = useState(0.30);
+  const [oiStronglyBearishThreshold, setOiStronglyBearishThreshold] = useState(-60);
+  const [oiBearishThreshold, setOiBearishThreshold] = useState(-20);
+  const [oiBullishThreshold, setOiBullishThreshold] = useState(20);
+  const [oiStronglyBullishThreshold, setOiStronglyBullishThreshold] = useState(60);
+  const [oiElevatedQualityThreshold, setOiElevatedQualityThreshold] = useState(95);
+  const [oiFailPolicy, setOiFailPolicy] = useState<"SKIP" | "ALLOW">("SKIP");
   const [optimizerGrid, setOptimizerGrid] = useState({
     stopAtrMultipliers: "0.75, 1.00, 1.25, 1.50, 2.00",
     rewardRiskRatios: "1.00, 1.25, 1.50, 2.00",
@@ -595,6 +651,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   });
   const [comparingRsiExits, setComparingRsiExits] = useState(false);
   const [rsiComparison, setRsiComparison] = useState<RsiExitComparisonResponse | null>(null);
+  const [comparingOi, setComparingOi] = useState(false);
+  const [oiComparison, setOiComparison] = useState<OiFilterComparisonResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | null>(null);
@@ -608,7 +666,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     return symbols.filter((symbol) => !selectedSymbols.includes(symbol) && (!query || symbol.includes(query))).slice(0, 12);
   }, [selectedSymbols, symbolQuery, symbols]);
 
-  const rangeResponse = response?.metadata.strategyMode === "rsi_range" ? response : null;
+  const rangeResponse = isRangeResponse(response) ? response : null;
   const detail = rangeResponse?.results.find((result) => result.symbol === detailSymbol) ?? rangeResponse?.results[0] ?? null;
   const profitableCount = rangeResponse?.results.filter((result) => result.verdict === "profitable").length ?? 0;
 
@@ -705,6 +763,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     setResponse(null);
     setOptimization(null);
     setRsiComparison(null);
+    setOiComparison(null);
     setDetailSymbol(null);
     setRunProgress({ completed: 0, total: symbolsToRun.length });
     const controller = new AbortController();
@@ -713,9 +772,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     const runId = crypto.randomUUID();
     try {
       let aggregate: BacktestResponse | RecoveryBacktestResponse | null = null;
+      // OI portfolio capacity must be evaluated in one chronological cross-symbol stream.
       const batchSize = 10;
-      for (let offset = 0; offset < symbolsToRun.length; offset += batchSize) {
-        const batch = symbolsToRun.slice(offset, offset + batchSize);
+      const effectiveBatchSize = strategyMode === "rsi_recovery" && oiFilterMode !== "OFF" ? symbolsToRun.length : batchSize;
+      for (let offset = 0; offset < symbolsToRun.length; offset += effectiveBatchSize) {
+        const batch = symbolsToRun.slice(offset, offset + effectiveBatchSize);
         const strategyPayload = strategyMode === "rsi_range" ? {
           entryLow,
           entryHigh,
@@ -759,6 +820,27 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           upperRsiLevel,
           hardStopLossPct,
           rsiExitExecutionModel,
+          oiFilterMode,
+          oiLookbackBars,
+          oiStrikesEachSide,
+          oiMinimumPriceChangePct,
+          oiMinimumChangePct,
+          oiMaximumSpreadPct,
+          oiStaleDataSeconds,
+          oiMinimumValidContractFraction,
+          oiMinimumFuturesVolume,
+          oiVolatilityPriceRisePct,
+          oiVolatilityIvRise,
+          oiMinimumCoverage,
+          oiOptionsWeight,
+          oiFuturesWeight,
+          oiSpotWeight,
+          oiStronglyBearishThreshold,
+          oiBearishThreshold,
+          oiBullishThreshold,
+          oiStronglyBullishThreshold,
+          oiElevatedQualityThreshold,
+          oiFailPolicy,
           timeExit: "NEXT_TRADING_SESSION_OPEN",
         };
         const result = await fetch("/api/backtest", {
@@ -782,18 +864,19 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
         }
 
         if (strategyMode === "rsi_recovery") {
-          if (payload.metadata.strategyMode !== "rsi_recovery") throw new Error("Backtest service returned the wrong strategy mode.");
+          if (!isRecoveryResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           aggregate = mergeRecoveryResponses(
-            aggregate?.metadata.strategyMode === "rsi_recovery" ? aggregate : null,
+            isRecoveryResponse(aggregate) ? aggregate : null,
             payload,
           );
         } else {
-          if (payload.metadata.strategyMode !== "rsi_range") throw new Error("Backtest service returned the wrong strategy mode.");
-          aggregate = aggregate?.metadata.strategyMode === "rsi_range" ? {
-            metadata: aggregate.metadata,
-            results: [...aggregate.results, ...payload.results],
-            errors: [...aggregate.errors, ...payload.errors],
-            warnings: Array.from(new Set([...aggregate.warnings, ...payload.warnings])),
+          if (!isRangeResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
+          const previous = aggregate as BacktestResponse | null;
+          aggregate = previous ? {
+            metadata: previous.metadata,
+            results: [...previous.results, ...payload.results],
+            errors: [...previous.errors, ...payload.errors],
+            warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
           } : payload;
         }
 
@@ -976,10 +1059,68 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     }
   };
 
+  const compareOiFilter = async () => {
+    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    if (!symbolsToRun.length) {
+      setError("Select at least one symbol before comparing the OI filter.");
+      return;
+    }
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    setComparingOi(true);
+    setOiComparison(null);
+    setError(null);
+    try {
+      const result = await fetch("/api/backtest?action=compare-oi-filter", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          symbols: symbolsToRun,
+          strategyMode: "rsi_recovery",
+          universeMode: useAllSymbols ? "all" : "selected",
+          runId: crypto.randomUUID(),
+          durationYears,
+          timeframe,
+          rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery,
+          emaEnabled, emaFast, emaSlow, vwapEnabled, volumeEnabled, volumeEma,
+          minimumConfirmations, targetPct, setupExpiryBars, executionModel,
+          buyCostBps, sellCostBps, slippageBps, exitModel,
+          exitProtectionEnabled, fixedStopLossPct, atrLength, stopAtrMultiplier,
+          rewardRiskRatio, minimumStopPct, maximumStopPct, positionSizing,
+          quantityPerTrade, rupeeRiskBudget, maximumQuantity, maximumCapitalPerPosition,
+          maxOpenLotsPerSymbol, maxHoldingTradingDays, minimumProfitPct,
+          profitExitRsi, upperRsiLevel, hardStopLossPct, rsiExitExecutionModel,
+          oiFilterMode: "OFF",
+          oiLookbackBars, oiStrikesEachSide, oiMinimumPriceChangePct,
+          oiMinimumChangePct, oiMaximumSpreadPct, oiStaleDataSeconds,
+          oiMinimumValidContractFraction, oiMinimumFuturesVolume,
+          oiVolatilityPriceRisePct, oiVolatilityIvRise,
+          oiMinimumCoverage, oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
+          oiStronglyBearishThreshold, oiBearishThreshold, oiBullishThreshold,
+          oiStronglyBullishThreshold, oiElevatedQualityThreshold, oiFailPolicy,
+          timeExit: "NEXT_TRADING_SESSION_OPEN",
+        }),
+      });
+      const responseBody = await result.text();
+      const payload = JSON.parse(responseBody) as OiFilterComparisonResponse;
+      if (!result.ok) throw new Error(payload.detail ?? "OI filter comparison could not be completed.");
+      setOiComparison(payload);
+    } catch (caught) {
+      if (!(caught instanceof DOMException && caught.name === "AbortError")) {
+        setError(caught instanceof Error ? caught.message : "OI filter comparison could not be completed.");
+      }
+    } finally {
+      runAbortRef.current = null;
+      setComparingOi(false);
+    }
+  };
+
   const changeExitModel = (model: typeof exitModel) => {
     setExitModel(model);
     setOptimization(null);
     setRsiComparison(null);
+    setOiComparison(null);
     if (model === "RSI_PROFIT_RISK_CONTROL") {
       setRsiArmLow(20);
       setRsiArmHigh(35);
@@ -1110,6 +1251,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                 {exitModel === "ATR_DYNAMIC_TP_SL" && <small>TP and SL are calculated from each signal&apos;s ATR and frozen at entry.</small>}
                 {exitModel === "RSI_PROFIT_RISK_CONTROL" && <><label><span>Profit-exit RSI</span><input aria-label="Profit-exit RSI" type="number" min="0" max="100" step="1" value={profitExitRsi} onChange={(event) => setProfitExitRsi(Number(event.target.value))} /></label><label><span>Hard stop</span><span className="suffixed-input"><input aria-label="Hard stop loss" type="number" min="0.01" max="99.99" step="0.05" value={hardStopLossPct} onChange={(event) => setHardStopLossPct(Number(event.target.value))} /><i>%</i></span></label></>}
               </fieldset>
+              <fieldset className="recovery-config-card oi-mode-card">
+                <legend>NIFTY OI regime filter</legend>
+                <label><span>Mode</span><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); }}><option value="OFF">OFF — legacy results</option><option value="ADVISORY">ADVISORY — record only</option><option value="ENFORCED">ENFORCED — gate long trades</option></select></label>
+                <small>OFF is the safe default. The filter never creates BUY signals or increases position size.</small>
+              </fieldset>
             </div>
             {exitModel === "RSI_PROFIT_RISK_CONTROL" && <div className="research-semantics"><Info size={16} /><span>The setup is armed when RSI enters the low zone. BUY occurs after RSI recovery and confirmation. SELL occurs when RSI recovers above the profit-exit level and the configured minimum profit is available. Stop and time exits prevent indefinite losing positions.</span></div>}
             <details className="advanced-settings">
@@ -1128,6 +1274,26 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                   <label className="toggle-config"><input type="checkbox" checked={vwapEnabled} onChange={(event) => setVwapEnabled(event.target.checked)} /><span>VWAP</span><small>Close &gt; session VWAP</small></label>
                   <label className="toggle-config"><input type="checkbox" checked={volumeEnabled} onChange={(event) => setVolumeEnabled(event.target.checked)} /><span>Volume</span><span className="suffixed-input"><input aria-label="Volume EMA length" type="number" min="1" step="1" value={volumeEma} onChange={(event) => setVolumeEma(Number(event.target.value))} /><i>EMA</i></span></label>
                   <label><span>Minimum confirmations</span><input type="number" min="0" max="3" step="1" value={minimumConfirmations} onChange={(event) => setMinimumConfirmations(Number(event.target.value))} /><small>RSI recovery remains mandatory and is not scored</small></label>
+                </fieldset>
+                <fieldset className="recovery-config-card oi-advanced-card">
+                  <legend>NIFTY OI scoring</legend>
+                  <label><span>Completed-bar lookback</span><span className="suffixed-input"><input type="number" min="1" max="100" step="1" value={oiLookbackBars} onChange={(event) => setOiLookbackBars(Number(event.target.value))} /><i>5m bars</i></span></label>
+                  <label><span>Strikes around ATM</span><span className="suffixed-input"><input type="number" min="0" max="20" step="1" value={oiStrikesEachSide} onChange={(event) => setOiStrikesEachSide(Number(event.target.value))} /><i>each side</i></span></label>
+                  <label><span>Minimum premium change</span><span className="suffixed-input"><input type="number" min="0" step="0.01" value={oiMinimumPriceChangePct} onChange={(event) => setOiMinimumPriceChangePct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label><span>Minimum OI change</span><span className="suffixed-input"><input type="number" min="0" step="0.1" value={oiMinimumChangePct} onChange={(event) => setOiMinimumChangePct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label><span>Maximum spread</span><span className="suffixed-input"><input type="number" min="0.01" step="0.5" value={oiMaximumSpreadPct} onChange={(event) => setOiMaximumSpreadPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label><span>Stale after</span><span className="suffixed-input"><input type="number" min="1" step="30" value={oiStaleDataSeconds} onChange={(event) => setOiStaleDataSeconds(Number(event.target.value))} /><i>seconds</i></span></label>
+                  <label><span>Minimum valid contracts</span><input type="number" min="0.01" max="1" step="0.05" value={oiMinimumValidContractFraction} onChange={(event) => setOiMinimumValidContractFraction(Number(event.target.value))} /></label>
+                  <label><span>Minimum futures volume</span><input type="number" min="0" step="1" value={oiMinimumFuturesVolume} onChange={(event) => setOiMinimumFuturesVolume(Number(event.target.value))} /></label>
+                  <label><span>IV expansion premium rise</span><span className="suffixed-input"><input type="number" min="0" step="0.05" value={oiVolatilityPriceRisePct} onChange={(event) => setOiVolatilityPriceRisePct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label><span>IV expansion IV rise</span><input type="number" min="0" step="0.1" value={oiVolatilityIvRise} onChange={(event) => setOiVolatilityIvRise(Number(event.target.value))} /></label>
+                  <label><span>Minimum component coverage</span><input type="number" min="0.01" max="1" step="0.05" value={oiMinimumCoverage} onChange={(event) => setOiMinimumCoverage(Number(event.target.value))} /></label>
+                  <label><span>Options / futures / spot weights</span><span className="inline-number-range"><input aria-label="Options OI weight" type="number" min="0" max="1" step="0.05" value={oiOptionsWeight} onChange={(event) => setOiOptionsWeight(Number(event.target.value))} /><i>/</i><input aria-label="Futures OI weight" type="number" min="0" max="1" step="0.05" value={oiFuturesWeight} onChange={(event) => setOiFuturesWeight(Number(event.target.value))} /><i>/</i><input aria-label="NIFTY spot weight" type="number" min="0" max="1" step="0.05" value={oiSpotWeight} onChange={(event) => setOiSpotWeight(Number(event.target.value))} /></span></label>
+                  <label><span>Regime thresholds</span><span className="inline-number-range"><input aria-label="Strong bearish threshold" type="number" min="-100" max="100" value={oiStronglyBearishThreshold} onChange={(event) => setOiStronglyBearishThreshold(Number(event.target.value))} /><i>/</i><input aria-label="Bearish threshold" type="number" min="-100" max="100" value={oiBearishThreshold} onChange={(event) => setOiBearishThreshold(Number(event.target.value))} /><i>/</i><input aria-label="Bullish threshold" type="number" min="-100" max="100" value={oiBullishThreshold} onChange={(event) => setOiBullishThreshold(Number(event.target.value))} /><i>/</i><input aria-label="Strong bullish threshold" type="number" min="-100" max="100" value={oiStronglyBullishThreshold} onChange={(event) => setOiStronglyBullishThreshold(Number(event.target.value))} /></span></label>
+                  <label><span>Elevated quality threshold</span><input type="number" min="0" max="100" step="1" value={oiElevatedQualityThreshold} onChange={(event) => setOiElevatedQualityThreshold(Number(event.target.value))} /></label>
+                  <label><span>Missing-data policy</span><select value={oiFailPolicy} onChange={(event) => setOiFailPolicy(event.target.value as typeof oiFailPolicy)}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow long (explicit override)</option></select></label>
+                  <button type="button" className="secondary-action" disabled={comparingOi || loading} onClick={compareOiFilter}>{comparingOi ? <><LoaderCircle className="spin" size={15} />Comparing…</> : "Compare OI filter"}</button>
+                  <small>Runs identical candidates through OFF, ADVISORY and ENFORCED. Rejected outcomes are research-only.</small>
                 </fieldset>
                 {exitModel === "FIXED_TP_SL" && <fieldset className="recovery-config-card">
                   <legend>Fixed exits</legend>
@@ -1202,9 +1368,28 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
         {optimization && <AtrOptimizationResults response={optimization} />}
         {comparingRsiExits && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing RSI exit settings chronologically</strong><span>Training and validation stay separate, costs are included, and one common configuration is applied to all selected symbols.</span></div></div>}
         {rsiComparison && <RsiExitComparisonResults response={rsiComparison} />}
+        {comparingOi && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing NIFTY OI modes chronologically</strong><span>OFF, ADVISORY and ENFORCED reuse one candidate specification and one market-regime configuration.</span></div></div>}
+        {oiComparison && <section className="backtest-panel oi-comparison-panel">
+          <div className="panel-title"><div><span className="section-kicker">{oiComparison.metadata.researchLabel}</span><h2>OI filter comparison</h2></div><span className="cost-note">Default remains {oiComparison.metadata.defaultOiMode}</span></div>
+          <div className="metric-grid">
+            <div><span>Accepted</span><strong>{number(oiComparison.comparison.tradesAccepted, 0)}</strong></div>
+            <div><span>Rejected</span><strong>{number(oiComparison.comparison.tradesRejected, 0)}</strong></div>
+            <div><span>Strong-bearish rejects</span><strong>{number(oiComparison.comparison.tradesRejectedByStrongBearishOi, 0)}</strong></div>
+            <div><span>Bearish rejects</span><strong>{number(oiComparison.comparison.tradesRejectedByBearishOi, 0)}</strong></div>
+            <div><span>Volatility rejects</span><strong>{number(oiComparison.comparison.tradesRejectedByVolatilityExpansion, 0)}</strong></div>
+            <div><span>Missing-data skips</span><strong>{number(oiComparison.comparison.tradesSkippedForMissingData, 0)}</strong></div>
+            <div><span>Rejected winners</span><strong>{number(oiComparison.comparison.rejectedTradesThatWouldHaveWon, 0)}</strong></div>
+            <div><span>Avoided losers</span><strong>{number(oiComparison.comparison.rejectedTradesThatWouldHaveLost, 0)}</strong></div>
+            <div><span>False-rejection rate</span><strong>{percent(oiComparison.comparison.falseRejectionRate)}</strong></div>
+            <div><span>Stop exits avoided</span><strong>{number(oiComparison.comparison.stopExitsAvoided, 0)}</strong></div>
+            <div><span>Net P&amp;L change</span><strong className={tone(oiComparison.comparison.netPnlChange)}>{money(oiComparison.comparison.netPnlChange)}</strong></div>
+            <div><span>Profit-factor change</span><strong className={tone(oiComparison.comparison.profitFactorChange)}>{number(oiComparison.comparison.profitFactorChange)}</strong></div>
+          </div>
+          <div className={`backtest-message ${oiComparison.acceptance.passed ? "open-position" : "error"}`}><Info size={17} /><span><strong>Acceptance: {oiComparison.acceptance.passed ? "passed" : "not proven"}.</strong> {oiComparison.acceptance.reason} Advisory parity: {oiComparison.comparison.advisoryExecutionIdentical ? "identical" : "mismatch detected"}. Walk-forward folds: {oiComparison.walkForwardValidation.folds.length}.</span></div>
+        </section>}
 
         {response && (
-          response.metadata.strategyMode === "rsi_recovery" ? <RecoveryResults response={response} /> : <>
+          isRecoveryResponse(response) ? <RecoveryResults response={response} /> : <>
             <section className="backtest-overview">
               <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>
               <div><span>Profitable</span><strong className="positive-value">{profitableCount}</strong></div>

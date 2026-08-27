@@ -127,6 +127,11 @@ def _skipped_signal(candidate: dict[str, Any], execution_model: str) -> dict[str
         "quantity": 0,
         "capitalDeployed": 0.0,
         "targetPrice": candidate["targetPrice"] if entry_known_at_signal else None,
+        "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
+        "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
+        "oiConfidence": candidate.get("oiConfidence"),
+        "oiDecision": candidate.get("oiDecision"),
+        "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
         "status": "SKIPPED_MAX_OPEN_LOTS",
         "exitReason": "SKIPPED_MAX_OPEN_LOTS",
         "reason": "A valid RSI Recovery signal occurred while the configured maximum open lots was already reached.",
@@ -207,6 +212,11 @@ def _finish_position(
         "requiredConfirmations": candidate["requiredConfirmations"],
         "rsiAtEntry": candidate["rsiAtEntry"],
         "executionModel": candidate["executionModel"],
+        "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
+        "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
+        "oiConfidence": candidate.get("oiConfidence"),
+        "oiDecision": candidate.get("oiDecision"),
+        "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
     }
 
 
@@ -296,9 +306,10 @@ def simulate_protected_recovery_symbol(
     protection_config: PositionProtectionConfig,
     run_id: str,
     analysis_start: datetime | None = None,
+    observations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply position exits to the unchanged RSI Recovery observation stream."""
-    observations = simulate_recovery_symbol(
+    observations = observations or simulate_recovery_symbol(
         symbol,
         candles,
         timeframe=timeframe,

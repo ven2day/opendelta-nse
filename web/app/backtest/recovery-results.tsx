@@ -55,6 +55,11 @@ export type RecoveryTrade = {
   grossReturnPct: number;
   estimatedCostPct: number;
   netReturnPct: number;
+  oiRegimeAtSignal?: string | null;
+  oiScoreAtSignal?: number | null;
+  oiConfidence?: string | null;
+  oiDecision?: string | null;
+  oiSourceTimestamp?: string | null;
 };
 
 export type ProtectedPosition = {
@@ -120,6 +125,11 @@ export type ProtectedPosition = {
   requiredConfirmations: number;
   rsiAtEntry: number;
   executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
+  oiRegimeAtSignal?: string | null;
+  oiScoreAtSignal?: number | null;
+  oiConfidence?: string | null;
+  oiDecision?: string | null;
+  oiSourceTimestamp?: string | null;
 };
 
 export type SkippedRecoverySignal = {
@@ -184,6 +194,8 @@ export type ProtectedRecoverySummary = {
   averageHoldingSessions: number | null;
   medianHoldingSessions: number | null;
   candleRowsProcessed: number;
+  skippedOiSignals?: number;
+  oiFilterMode?: "OFF" | "ADVISORY" | "ENFORCED";
 };
 
 type SpeedBucket = { count: number; pct: number };
@@ -278,6 +290,8 @@ export type RecoverySummary = {
   averageOpenMaePct: number | null;
   worstOpenMaePct: number | null;
   candleRowsProcessed: number;
+  skippedOiSignals?: number;
+  oiFilterMode?: "OFF" | "ADVISORY" | "ENFORCED";
 };
 
 export type RecoveryBacktestResponse = {
@@ -330,6 +344,12 @@ export type RecoveryBacktestResponse = {
       speedScore: string;
       maeScore: string;
       openPenalty: string;
+    };
+    oiFilter?: {
+      mode: "OFF" | "ADVISORY" | "ENFORCED";
+      version: string;
+      parameters: Record<string, unknown>;
+      decisionOrder: string;
     };
     corporateActionAdjustment: string;
     gitCommitSha: string | null;
@@ -647,7 +667,7 @@ function ProtectedPositionTable({ positions }: { positions: ProtectedPosition[] 
   return <div className="protected-position-table" role="region" aria-label="Protected position results">
     <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>{rsiExitMode ? "RSI at entry" : "ATR at entry"}</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>{rsiExitMode ? "Minimum profit" : "TP"}</span><span>SL</span><span>Exit</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Net P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
     {positions.map((position) => <div className="protected-position-grid protected-position-row" key={position.tradeId}>
-      <span data-label="Signal">{formatIst(position.signalTimestamp)}</span>
+      <span data-label="Signal">{formatIst(position.signalTimestamp)}{position.oiRegimeAtSignal && <small className={`oi-regime-label regime-${position.oiRegimeAtSignal.toLowerCase()}`}>{position.oiRegimeAtSignal.replaceAll("_", " ")} · {number(position.oiScoreAtSignal ?? null)}</small>}</span>
       <span data-label="Entry">{formatIst(position.entryTimestamp)}</span>
       <span data-label={rsiExitMode ? "RSI at entry" : "ATR at entry"}>{rsiExitMode ? number(position.rsiAtEntry) : position.atrAtSignal === undefined ? "—" : money(position.atrAtSignal)}<small>{rsiExitMode ? `Exit from RSI ${number(position.profitExitRsi ?? null, 0)}+` : position.atrPctAtEntry === undefined ? "" : percent(position.atrPctAtEntry)}</small></span>
       <span data-label="Entry price">{money(position.entryPrice)}</span>
@@ -661,7 +681,7 @@ function ProtectedPositionTable({ positions }: { positions: ProtectedPosition[] 
       <span data-label="MAE / MFE"><b className="negative-value">{percent(position.maxAdversePct)}</b><small className="positive-value">{percent(position.maxFavorablePct)}</small></span>
       <span data-label="Net P&L" className={tone(position.realizedPnl)}>{money(position.realizedPnl)}<small>{position.tradingCosts === undefined ? "" : `${money(position.tradingCosts)} costs`}</small></span>
       <span data-label="Unrealized P&L" className={tone(position.status === "OPEN" ? position.unrealizedPnl : null)}>{position.status === "OPEN" ? money(position.unrealizedPnl) : "—"}</span>
-      <span data-label="Status"><b className={`trade-status ${position.status.toLowerCase()}`}>{position.status.replaceAll("_", " ")}</b></span>
+      <span data-label="Status"><b className={`trade-status ${position.status.toLowerCase()}`}>{position.status.replaceAll("_", " ")}</b>{position.oiDecision && <small title={position.oiSourceTimestamp ? `OI source ${formatIst(position.oiSourceTimestamp)}` : "No OI source timestamp"}>{position.oiDecision.replaceAll("_", " ")} · {position.oiConfidence ?? "—"}</small>}</span>
     </div>)}
   </div>;
 }
@@ -703,6 +723,7 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
         {explicitRiskExit && <div><span>Stop exits</span><strong>{((summary.stopExits ?? 0) + (summary.stopGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
         <div><span>Time exits</span><strong>{summary.timeExits.toLocaleString("en-IN")}</strong></div>
         <div><span>Open positions</span><strong className={summary.openPositions ? "warning-value" : "positive-value"}>{summary.openPositions.toLocaleString("en-IN")}</strong></div>
+        {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {(response.summary as RecoverySummary).skippedOiSignals ?? 0}</strong></div>}
       </section>
       <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with {rsiExitMode ? "profitable RSI exits, a hard stop, and a time exit" : dynamicExit ? "explicit TP/SL exits" : "legacy exit protection"}.</strong> Win rate and net P&amp;L measure closed-trade profitability; an exit percentage is not used as a substitute. Skipped signals remain separate.</span></div>
 
@@ -834,6 +855,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
         <div><span>Open Signals</span><strong className={summary.stillOpen ? "warning-value" : "positive-value"}>{summary.stillOpen.toLocaleString("en-IN")}</strong></div>
         <div><span>Max Concurrent Signals</span><strong>{summary.maximumConcurrentSignalsUniverse.toLocaleString("en-IN")}</strong></div>
         <div><span>Max Concurrent Same Symbol</span><strong>{summary.maximumConcurrentSignalsSameSymbol.toLocaleString("en-IN")}</strong></div>
+        {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {summary.skippedOiSignals ?? 0}</strong></div>}
       </section>
       <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open.</span></div>
 
@@ -909,7 +931,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
         </div>
         {detail.trades.length ? <div className="recovery-trade-list">
           <div className="recovery-trade-grid recovery-trade-head"><span>Entry</span><span>Entry price</span><span>Target</span><span>Target hit</span><span>Time / bars</span><span>Confirmations</span><span>EMA</span><span>VWAP</span><span>Volume</span><span>MAE</span><span>MFE</span><span>Status</span></div>
-          {detail.trades.map((trade) => <div className="recovery-trade-grid recovery-trade-row" key={trade.tradeId} title={`Trade ${trade.tradeId}. RSI recovery mandatory; ${trade.confirmationScore}/${trade.requiredConfirmations} enabled confirmations passed. Independent signal observation; no stop loss or end-of-day exit. Target monitoring started after its own entry candle.`}>
+          {detail.trades.map((trade) => <div className="recovery-trade-grid recovery-trade-row" key={trade.tradeId} title={`Trade ${trade.tradeId}. RSI recovery mandatory; ${trade.confirmationScore}/${trade.requiredConfirmations} enabled confirmations passed. OI regime ${trade.oiRegimeAtSignal ?? "OFF"}; score ${trade.oiScoreAtSignal ?? "unavailable"}; confidence ${trade.oiConfidence ?? "unavailable"}; decision ${trade.oiDecision ?? "OI_OFF"}; source ${trade.oiSourceTimestamp ?? "unavailable"}. Independent signal observation; no stop loss or end-of-day exit. Target monitoring started after its own entry candle.`}>
             <span data-label="Entry"><b>#{trade.sequenceNumber}</b> {formatIst(trade.entryTimestamp)}<small>Signal {formatIst(trade.signalTimestamp)}</small></span><span data-label="Entry price">{money(trade.entryPrice)}</span><span data-label="Target">{money(trade.targetPrice)}</span><span data-label="Target hit">{formatIst(trade.targetHitTimestamp)}</span><span data-label="Time / bars">{duration(trade.durationMinutes)}<small>{trade.barsHeld} bars · {trade.tradingSessionsHeld} sessions</small></span><span data-label="Confirmations"><b>{trade.confirmationScore}/{trade.requiredConfirmations}</b><small>RSI {number(trade.rsiAtEntry)}</small></span><span data-label="EMA" className={trade.emaConfirmation ? "positive-value" : "neutral-value"}>{trade.emaEnabled ? (trade.emaConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="VWAP" className={trade.vwapConfirmation ? "positive-value" : "neutral-value"}>{trade.vwapEnabled ? (trade.vwapConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="Volume" className={trade.volumeConfirmation ? "positive-value" : "neutral-value"}>{trade.volumeEnabled ? (trade.volumeConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="MAE" className="negative-value">{percent(trade.maxAdversePct)}</span><span data-label="MFE" className="positive-value">{percent(trade.maxFavorablePct)}</span><span data-label="Status"><b className={`trade-status ${trade.status === "OPEN" ? "open" : "hit"}`}>{trade.status === "OPEN" ? "OPEN" : "TARGET HIT"}</b>{trade.status === "OPEN" && <small>{percent(trade.currentPnlPct)} · {duration(trade.durationMinutes)}</small>}</span>
           </div>)}
         </div> : <div className="empty-history">No valid armed-RSI recovery BUY occurred for this symbol in the selected window.</div>}

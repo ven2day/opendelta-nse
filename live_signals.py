@@ -27,6 +27,7 @@ from recovery_backtest import (
     rsi_recovery_crossovers,
 )
 from recovery_feature_analysis import calculate_entry_feature_frame
+from nifty_oi_regime import NiftyOiConfig, decide_long_trade, insufficient_regime
 
 TIMEFRAME = "5m"
 TIMEFRAME_MINUTES = 5
@@ -117,6 +118,27 @@ class LiveSignalSettings:
     recent_minutes: int = 60
     support_lookback_short: int = 20
     support_lookback_long: int = 50
+    oi_filter_mode: Literal["OFF", "ADVISORY", "ENFORCED"] = "OFF"
+    oi_lookback_bars: int = 3
+    oi_strikes_each_side: int = 5
+    oi_minimum_price_change_pct: float = 0.05
+    oi_minimum_change_pct: float = 0.50
+    oi_maximum_spread_pct: float = 20.0
+    oi_stale_data_seconds: int = 360
+    oi_minimum_valid_contract_fraction: float = 0.50
+    oi_minimum_futures_volume: float = 1.0
+    oi_volatility_price_rise_pct: float = 0.25
+    oi_volatility_iv_rise: float = 0.50
+    oi_minimum_coverage: float = 0.65
+    oi_options_weight: float = 0.35
+    oi_futures_weight: float = 0.35
+    oi_spot_weight: float = 0.30
+    oi_strongly_bearish_threshold: float = -60.0
+    oi_bearish_threshold: float = -20.0
+    oi_bullish_threshold: float = 20.0
+    oi_strongly_bullish_threshold: float = 60.0
+    oi_elevated_quality_threshold: float = 95.0
+    oi_fail_policy: Literal["SKIP", "ALLOW"] = "SKIP"
 
     def validate(self) -> LiveSignalSettings:
         if self.timeframe != "5m":
@@ -135,7 +157,34 @@ class LiveSignalSettings:
             raise ValueError("Fresh minutes must be lower than recent minutes")
         if self.support_lookback_short < 2 or self.support_lookback_long < self.support_lookback_short:
             raise ValueError("Support lookbacks must be ordered and at least two bars")
+        if self.oi_filter_mode not in {"OFF", "ADVISORY", "ENFORCED"}:
+            raise ValueError("NIFTY OI filter mode must be OFF, ADVISORY, or ENFORCED")
+        self.oi_config()
         return self
+
+    def oi_config(self) -> NiftyOiConfig:
+        return NiftyOiConfig(
+            lookback_bars=self.oi_lookback_bars,
+            strikes_each_side=self.oi_strikes_each_side,
+            minimum_price_change_pct=self.oi_minimum_price_change_pct,
+            minimum_oi_change_pct=self.oi_minimum_change_pct,
+            maximum_spread_pct=self.oi_maximum_spread_pct,
+            stale_data_seconds=self.oi_stale_data_seconds,
+            minimum_valid_contract_fraction=self.oi_minimum_valid_contract_fraction,
+            minimum_futures_volume=self.oi_minimum_futures_volume,
+            minimum_component_coverage=self.oi_minimum_coverage,
+            options_weight=self.oi_options_weight,
+            futures_weight=self.oi_futures_weight,
+            spot_weight=self.oi_spot_weight,
+            strongly_bearish_threshold=self.oi_strongly_bearish_threshold,
+            bearish_threshold=self.oi_bearish_threshold,
+            bullish_threshold=self.oi_bullish_threshold,
+            strongly_bullish_threshold=self.oi_strongly_bullish_threshold,
+            volatility_price_rise_pct=self.oi_volatility_price_rise_pct,
+            volatility_iv_rise=self.oi_volatility_iv_rise,
+            elevated_quality_threshold=self.oi_elevated_quality_threshold,
+            fail_policy=self.oi_fail_policy,
+        ).validate()
 
     def public(self) -> dict[str, Any]:
         return {
@@ -151,6 +200,28 @@ class LiveSignalSettings:
             "recentMinutes": self.recent_minutes,
             "supportLookbackShort": self.support_lookback_short,
             "supportLookbackLong": self.support_lookback_long,
+            "oiFilterMode": self.oi_filter_mode,
+            "oiLookbackBars": self.oi_lookback_bars,
+            "oiStrikesEachSide": self.oi_strikes_each_side,
+            "oiMinimumPriceChangePct": self.oi_minimum_price_change_pct,
+            "oiMinimumChangePct": self.oi_minimum_change_pct,
+            "oiMaximumSpreadPct": self.oi_maximum_spread_pct,
+            "oiStaleDataSeconds": self.oi_stale_data_seconds,
+            "oiMinimumValidContractFraction": self.oi_minimum_valid_contract_fraction,
+            "oiMinimumFuturesVolume": self.oi_minimum_futures_volume,
+            "oiVolatilityPriceRisePct": self.oi_volatility_price_rise_pct,
+            "oiVolatilityIvRise": self.oi_volatility_iv_rise,
+            "oiMinimumCoverage": self.oi_minimum_coverage,
+            "oiOptionsWeight": self.oi_options_weight,
+            "oiFuturesWeight": self.oi_futures_weight,
+            "oiSpotWeight": self.oi_spot_weight,
+            "oiStronglyBearishThreshold": self.oi_strongly_bearish_threshold,
+            "oiBearishThreshold": self.oi_bearish_threshold,
+            "oiBullishThreshold": self.oi_bullish_threshold,
+            "oiStronglyBullishThreshold": self.oi_strongly_bullish_threshold,
+            "oiElevatedQualityThreshold": self.oi_elevated_quality_threshold,
+            "oiFailPolicy": self.oi_fail_policy,
+            "oiFilterDefault": "OFF",
             "targetPct": DEFAULT_TARGET_PCT,
             "execution": "PAPER_ONLY",
         }
@@ -171,6 +242,27 @@ def settings_from_payload(payload: Mapping[str, Any]) -> LiveSignalSettings:
         recent_minutes=int(payload.get("recentMinutes", defaults.recent_minutes)),
         support_lookback_short=int(payload.get("supportLookbackShort", defaults.support_lookback_short)),
         support_lookback_long=int(payload.get("supportLookbackLong", defaults.support_lookback_long)),
+        oi_filter_mode=str(payload.get("oiFilterMode", defaults.oi_filter_mode)).upper(),  # type: ignore[arg-type]
+        oi_lookback_bars=int(payload.get("oiLookbackBars", defaults.oi_lookback_bars)),
+        oi_strikes_each_side=int(payload.get("oiStrikesEachSide", defaults.oi_strikes_each_side)),
+        oi_minimum_price_change_pct=float(payload.get("oiMinimumPriceChangePct", defaults.oi_minimum_price_change_pct)),
+        oi_minimum_change_pct=float(payload.get("oiMinimumChangePct", defaults.oi_minimum_change_pct)),
+        oi_maximum_spread_pct=float(payload.get("oiMaximumSpreadPct", defaults.oi_maximum_spread_pct)),
+        oi_stale_data_seconds=int(payload.get("oiStaleDataSeconds", defaults.oi_stale_data_seconds)),
+        oi_minimum_valid_contract_fraction=float(payload.get("oiMinimumValidContractFraction", defaults.oi_minimum_valid_contract_fraction)),
+        oi_minimum_futures_volume=float(payload.get("oiMinimumFuturesVolume", defaults.oi_minimum_futures_volume)),
+        oi_volatility_price_rise_pct=float(payload.get("oiVolatilityPriceRisePct", defaults.oi_volatility_price_rise_pct)),
+        oi_volatility_iv_rise=float(payload.get("oiVolatilityIvRise", defaults.oi_volatility_iv_rise)),
+        oi_minimum_coverage=float(payload.get("oiMinimumCoverage", defaults.oi_minimum_coverage)),
+        oi_options_weight=float(payload.get("oiOptionsWeight", defaults.oi_options_weight)),
+        oi_futures_weight=float(payload.get("oiFuturesWeight", defaults.oi_futures_weight)),
+        oi_spot_weight=float(payload.get("oiSpotWeight", defaults.oi_spot_weight)),
+        oi_strongly_bearish_threshold=float(payload.get("oiStronglyBearishThreshold", defaults.oi_strongly_bearish_threshold)),
+        oi_bearish_threshold=float(payload.get("oiBearishThreshold", defaults.oi_bearish_threshold)),
+        oi_bullish_threshold=float(payload.get("oiBullishThreshold", defaults.oi_bullish_threshold)),
+        oi_strongly_bullish_threshold=float(payload.get("oiStronglyBullishThreshold", defaults.oi_strongly_bullish_threshold)),
+        oi_elevated_quality_threshold=float(payload.get("oiElevatedQualityThreshold", defaults.oi_elevated_quality_threshold)),
+        oi_fail_policy=str(payload.get("oiFailPolicy", defaults.oi_fail_policy)).upper(),  # type: ignore[arg-type]
     ).validate()
 
 
@@ -296,9 +388,23 @@ class DhanQuoteTick:
     timestamp: datetime
 
 
-def parse_dhan_quote_packets(message: bytes) -> list[DhanQuoteTick]:
-    """Parse Dhan v2 little-endian Quote packets; unrelated feed packets are ignored."""
-    ticks: list[DhanQuoteTick] = []
+@dataclass(frozen=True)
+class DhanFeedPacket:
+    response_code: int
+    exchange_segment: int
+    security_id: str
+    timestamp: datetime
+    price: float | None = None
+    cumulative_volume: int | None = None
+    open_interest: int | None = None
+    bid: float | None = None
+    ask: float | None = None
+
+
+def parse_dhan_feed_packets(message: bytes, received_at: datetime | None = None) -> list[DhanFeedPacket]:
+    """Parse causal quote, OI, and full packets from the Dhan v2 binary feed."""
+    received = (received_at or _now_ist()).astimezone(IST)
+    packets: list[DhanFeedPacket] = []
     offset = 0
     while offset + 8 <= len(message):
         response_code = message[offset]
@@ -307,22 +413,67 @@ def parse_dhan_quote_packets(message: bytes) -> list[DhanQuoteTick]:
         security_id = str(struct.unpack_from("<I", message, offset + 4)[0])
         if packet_length < 8 or offset + packet_length > len(message):
             break
-        if response_code == 4 and packet_length >= 50:
+        if response_code == 4 and packet_length >= 26:
             price = float(struct.unpack_from("<f", message, offset + 8)[0])
             last_trade_epoch = int(struct.unpack_from("<I", message, offset + 14)[0])
             volume = int(struct.unpack_from("<I", message, offset + 22)[0])
             if price > 0 and last_trade_epoch > 0 and volume >= 0:
-                ticks.append(
-                    DhanQuoteTick(
-                        exchange_segment=exchange_segment,
-                        security_id=security_id,
-                        price=price,
-                        cumulative_volume=volume,
-                        timestamp=datetime.fromtimestamp(last_trade_epoch, tz=IST),
-                    )
-                )
+                packets.append(DhanFeedPacket(
+                    response_code=response_code,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                    price=price,
+                    cumulative_volume=volume,
+                    timestamp=datetime.fromtimestamp(last_trade_epoch, tz=IST),
+                ))
+        elif response_code == 5 and packet_length >= 12:
+            oi = int(struct.unpack_from("<I", message, offset + 8)[0])
+            if oi >= 0:
+                packets.append(DhanFeedPacket(
+                    response_code=response_code,
+                    exchange_segment=exchange_segment,
+                    security_id=security_id,
+                    open_interest=oi,
+                    timestamp=received,
+                ))
+        elif response_code == 8 and packet_length >= 82:
+            price = float(struct.unpack_from("<f", message, offset + 8)[0])
+            last_trade_epoch = int(struct.unpack_from("<I", message, offset + 14)[0])
+            volume = int(struct.unpack_from("<I", message, offset + 22)[0])
+            oi = int(struct.unpack_from("<I", message, offset + 34)[0])
+            bid = float(struct.unpack_from("<f", message, offset + 74)[0])
+            ask = float(struct.unpack_from("<f", message, offset + 78)[0])
+            # Full packets contain current OI/depth without their own exchange timestamp;
+            # reception time is the conservative availability timestamp for causal use.
+            timestamp = received
+            packets.append(DhanFeedPacket(
+                response_code=response_code,
+                exchange_segment=exchange_segment,
+                security_id=security_id,
+                timestamp=timestamp,
+                price=price if price > 0 else None,
+                cumulative_volume=volume if volume >= 0 else None,
+                open_interest=oi if oi >= 0 else None,
+                bid=bid if bid > 0 else None,
+                ask=ask if ask > 0 else None,
+            ))
         offset += packet_length
-    return ticks
+    return packets
+
+
+def parse_dhan_quote_packets(message: bytes) -> list[DhanQuoteTick]:
+    """Parse Dhan v2 little-endian Quote packets; unrelated feed packets are ignored."""
+    return [
+        DhanQuoteTick(
+            exchange_segment=packet.exchange_segment,
+            security_id=packet.security_id,
+            price=packet.price,
+            cumulative_volume=packet.cumulative_volume,
+            timestamp=packet.timestamp,
+        )
+        for packet in parse_dhan_feed_packets(message)
+        if packet.price is not None and packet.cumulative_volume is not None
+    ]
 
 
 class FiveMinuteCandleBuilder:
@@ -560,6 +711,8 @@ class LiveSignalRepository:
             signal = next((item for item in self._signals if item.get("signalId") == signal_id), None)
             if signal is None:
                 raise KeyError("Signal was not found")
+            if signal.get("oiFilterMode") == "ENFORCED" and not bool(signal.get("executionEligible", True)):
+                raise ValueError(f"Paper BUY blocked by NIFTY OI policy: {signal.get('oiDecision') or 'unknown decision'}")
             existing = next((item for item in self._paper if item.get("signalId") == signal_id), None)
             if existing is not None:
                 raise ValueError("This signal already has a paper-trade observation")
@@ -703,6 +856,7 @@ class LiveSignalEngine:
         clock: Callable[[], datetime] = _now_ist,
         warmup_bars: int = DEFAULT_WARMUP_BARS,
         feed_factory: Callable[..., Any] | None = None,
+        oi_service: Any | None = None,
     ) -> None:
         self.repository = repository
         self.data_store = data_store
@@ -710,6 +864,7 @@ class LiveSignalEngine:
         self.clock = clock
         self.warmup_bars = warmup_bars
         self.feed_factory = feed_factory
+        self.oi_service = oi_service
         self.strategy_config = RecoveryConfig()
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -729,6 +884,7 @@ class LiveSignalEngine:
         self._recovering = False
         self._recovery_started: datetime | None = None
         self._last_recovery_seconds: float | None = None
+        self._latest_oi_regime: dict[str, Any] | None = None
         self._builder = FiveMinuteCandleBuilder(self.process_completed_candle)
 
     def start(self) -> None:
@@ -893,6 +1049,9 @@ class LiveSignalEngine:
 
     def on_disconnected(self, reconnecting: bool = True, reason: str | None = None) -> None:
         self._builder.connection_lost()
+        self._latest_oi_regime = None
+        if self.oi_service is not None and hasattr(self.oi_service, "invalidate_live_state"):
+            self.oi_service.invalidate_live_state()
         self._last_disconnect = self.clock().astimezone(IST)
         detail = f": {reason[:160]}" if reason else ""
         self._set_state(
@@ -910,6 +1069,18 @@ class LiveSignalEngine:
             self._latest_prices[symbol] = {"price": tick.price, "timestamp": timestamp.isoformat()}
             self._last_market_data = timestamp.isoformat()
         self._builder.add_tick(symbol, tick)
+
+    def on_feed_packet(self, packet: DhanFeedPacket) -> None:
+        if self.oi_service is not None and hasattr(self.oi_service, "on_market_feed"):
+            self.oi_service.on_market_feed(packet)
+        if packet.price is not None and packet.cumulative_volume is not None:
+            self.on_tick(DhanQuoteTick(
+                exchange_segment=packet.exchange_segment,
+                security_id=packet.security_id,
+                price=packet.price,
+                cumulative_volume=packet.cumulative_volume,
+                timestamp=packet.timestamp,
+            ))
 
     def flush_due(self) -> None:
         self._builder.flush_due(self.clock())
@@ -938,6 +1109,16 @@ class LiveSignalEngine:
             self._last_completed = stamp.isoformat()
         self.repository.append_candle(symbol, candle)
         self.repository.process_completed_candle(symbol, candle)
+        if settings.oi_filter_mode != "OFF":
+            if self.oi_service is None:
+                self._latest_oi_regime = insufficient_regime(
+                    stamp.to_pydatetime(), reason="NIFTY OI service is unavailable"
+                )
+            else:
+                self.oi_service.config = settings.oi_config()
+                if hasattr(self.oi_service, "complete_live_bar"):
+                    self.oi_service.complete_live_bar(stamp.to_pydatetime())
+                self._latest_oi_regime = self.oi_service.refresh(stamp.to_pydatetime(), strict_causal=True)
         if self._recovering:
             self._set_state(engine="RECOVERING", message="Completed candle stored while missing-candle recovery is active; BUY evaluation paused")
             return None
@@ -976,6 +1157,18 @@ class LiveSignalEngine:
         historical = self._historical_context.get(symbol, {})
         stamp = _as_ist(candle["timestamp"])
         signal_id = deterministic_signal_id(symbol, stamp)
+        oi_regime = self._latest_oi_regime or insufficient_regime(
+            stamp.to_pydatetime(), reason="OI filter is disabled or no regime has been collected"
+        )
+        quality_score = historical.get("qualityScore")
+        open_positions = sum(item.get("status") == "OPEN" for item in self.repository.paper_trades())
+        oi_decision = decide_long_trade(
+            settings.oi_filter_mode,
+            oi_regime,
+            stock_quality_score=float(quality_score) if quality_score is not None else None,
+            open_portfolio_positions=open_positions,
+            config=settings.oi_config(),
+        )
         return {
             "signalId": signal_id,
             "schemaVersion": LIVE_SIGNAL_SCHEMA_VERSION,
@@ -1033,6 +1226,15 @@ class LiveSignalEngine:
             "indicativeTargets": indicative_targets(low, midpoint, high),
             "supportResistance": support,
             "marketContext": {"available": False, "reason": "Live NIFTY context is optional and not used by BUY generation"},
+            "oiFilterMode": settings.oi_filter_mode,
+            "oiRegime": oi_regime,
+            "oiRegimeAtSignal": oi_regime.get("regime"),
+            "oiScoreAtSignal": oi_regime.get("combinedScore"),
+            "oiConfidence": oi_regime.get("confidence"),
+            "oiDecision": oi_decision["decision"],
+            "oiDecisionReason": oi_decision["reason"],
+            "oiSourceTimestamp": oi_regime.get("sourceTimestamp"),
+            "executionEligible": bool(oi_decision["allowed"]),
             "manualAction": "NO_ACTION",
             "decisionTimestamp": None,
             "ignoreReason": None,
@@ -1080,6 +1282,8 @@ class LiveSignalEngine:
                 "paperOnly": True,
                 "liveOrdersEnabled": False,
                 "lastReconnectRecoverySeconds": _finite(self._last_recovery_seconds, 3),
+                "oiFilterMode": self.repository.settings().oi_filter_mode,
+                "oiRegime": self._latest_oi_regime,
             }
 
     def list_signals(self, action: str | None = None) -> list[dict[str, Any]]:
@@ -1160,11 +1364,70 @@ class DhanMarketFeed:
         return f"{self.feed_url}?{urlencode({'version': '2', 'token': self.client.access_token(), 'clientId': self.config.client_id, 'authType': '2'})}"
 
     def _subscriptions(self) -> list[dict[str, str]]:
-        return [
+        instruments = [
             {"ExchangeSegment": "NSE_EQ", "SecurityId": security_id}
             for (segment, security_id), _ in self.engine._security_to_symbol.items()
             if segment == 1
         ]
+        settings = self.engine.repository.settings()
+        if settings.oi_filter_mode != "OFF" and self.engine.oi_service is not None:
+            try:
+                self.engine.oi_service.config = settings.oi_config()
+                instruments.extend(self.engine.oi_service.prepare_live_subscriptions(self.engine.clock()))
+            except (DhanAPIError, OSError, ValueError, KeyError, TypeError) as error:
+                self.engine._latest_oi_regime = insufficient_regime(
+                    self.engine.clock(), reason=f"NIFTY OI subscriptions could not be prepared safely: {error}"
+                )
+        unique: dict[tuple[str, str], dict[str, str]] = {}
+        for item in instruments:
+            unique[(item["ExchangeSegment"], item["SecurityId"])] = item
+        return list(unique.values())
+
+    @staticmethod
+    def _send_subscriptions(connection: Any, instruments: list[dict[str, str]], subscribed: set[tuple[str, str]]) -> None:
+        additions = [
+            item for item in instruments
+            if (item["ExchangeSegment"], item["SecurityId"]) not in subscribed
+        ]
+        for start in range(0, len(additions), 100):
+            batch = additions[start : start + 100]
+            connection.send(json.dumps({"RequestCode": 21, "InstrumentCount": len(batch), "InstrumentList": batch}))
+            subscribed.update((item["ExchangeSegment"], item["SecurityId"]) for item in batch)
+
+    @staticmethod
+    def _remove_stale_oi_subscriptions(
+        connection: Any,
+        desired: list[dict[str, str]],
+        subscribed: set[tuple[str, str]],
+    ) -> None:
+        desired_keys = {(item["ExchangeSegment"], item["SecurityId"]) for item in desired}
+        stale = [
+            {"ExchangeSegment": segment, "SecurityId": security_id}
+            for segment, security_id in subscribed
+            if segment != "NSE_EQ" and (segment, security_id) not in desired_keys
+        ]
+        for start in range(0, len(stale), 100):
+            batch = stale[start : start + 100]
+            connection.send(json.dumps({"RequestCode": 22, "InstrumentCount": len(batch), "InstrumentList": batch}))
+            subscribed.difference_update((item["ExchangeSegment"], item["SecurityId"]) for item in batch)
+
+    def _refresh_oi_subscriptions(self, connection: Any, subscribed: set[tuple[str, str]]) -> None:
+        if self.engine.oi_service is None:
+            return
+        settings = self.engine.repository.settings()
+        if settings.oi_filter_mode == "OFF":
+            self._remove_stale_oi_subscriptions(connection, [], subscribed)
+            return
+        try:
+            self.engine.oi_service.config = settings.oi_config()
+            updates = self.engine.oi_service.poll_subscription_updates(self.engine.clock())
+            if updates:
+                self._remove_stale_oi_subscriptions(connection, updates, subscribed)
+            self._send_subscriptions(connection, updates, subscribed)
+        except (DhanAPIError, OSError, ValueError, KeyError, TypeError) as error:
+            self.engine._latest_oi_regime = insufficient_regime(
+                self.engine.clock(), reason=f"NIFTY OI subscription refresh failed safely: {error}"
+            )
 
     def run(self, stop: threading.Event) -> None:
         from websockets.sync.client import connect
@@ -1185,9 +1448,8 @@ class DhanMarketFeed:
                 self.engine._set_state(connection="RECONNECTING", engine="CONNECTING", message="Connecting to Dhan v2 quote stream")
                 connection = connect(self._url(), open_timeout=30, ping_interval=20, ping_timeout=20, max_size=4 * 1024 * 1024)
                 instruments = self._subscriptions()
-                for start in range(0, len(instruments), 100):
-                    batch = instruments[start : start + 100]
-                    connection.send(json.dumps({"RequestCode": 17, "InstrumentCount": len(batch), "InstrumentList": batch}))
+                subscribed: set[tuple[str, str]] = set()
+                self._send_subscriptions(connection, instruments, subscribed)
                 self.engine.on_connected()
                 backoff = 1.0
                 while not stop.is_set():
@@ -1195,11 +1457,13 @@ class DhanMarketFeed:
                         message = connection.recv(timeout=1.0)
                     except TimeoutError:
                         self.engine.flush_due()
+                        self._refresh_oi_subscriptions(connection, subscribed)
                         continue
                     if isinstance(message, bytes):
-                        for tick in parse_dhan_quote_packets(message):
-                            self.engine.on_tick(tick)
+                        for packet in parse_dhan_feed_packets(message, received_at=self.engine.clock()):
+                            self.engine.on_feed_packet(packet)
                     self.engine.flush_due()
+                    self._refresh_oi_subscriptions(connection, subscribed)
             except Exception as error:  # noqa: BLE001 - websocket provider errors share the reconnect policy
                 self.engine.on_disconnected(reconnecting=not stop.is_set(), reason=str(error))
                 if stop.wait(backoff):

@@ -4271,3 +4271,19 @@ footer {
   .signals-healthbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .signals-shell .signals-tabs { flex-wrap: wrap; }
 }
+.oi-regime-label {
+  display: inline-flex;
+  margin-top: 0.25rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.42rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.regime-strongly_bearish { background: #7f1d1d; color: #fecaca; }
+.regime-bearish { background: #9a3412; color: #ffedd5; }
+.regime-neutral { background: #374151; color: #e5e7eb; }
+.regime-bullish { background: #166534; color: #dcfce7; }
+.regime-strongly_bullish { background: #14532d; color: #bbf7d0; }
+.regime-insufficient_oi_data,
+.regime-volatility_expansion { background: #854d0e; color: #fef9c3; }

@@ -158,6 +158,11 @@ def _skipped_signal(candidate: dict[str, Any], execution_model: str) -> dict[str
         "rsiArmTimestamp": candidate.get("rsiArmTimestamp"),
         "rsiAtSignal": candidate.get("rsiAtEntry"),
         "confirmationScore": candidate.get("confirmationScore"),
+        "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
+        "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
+        "oiConfidence": candidate.get("oiConfidence"),
+        "oiDecision": candidate.get("oiDecision"),
+        "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
         "quantity": 0,
         "capitalDeployed": 0.0,
         "status": "SKIPPED_MAX_OPEN_LOTS",
@@ -268,6 +273,11 @@ def _finish_position(
         "unrealizedPnl": _finite(net_pnl, 2) if not closed else 0.0,
         "lastTimestamp": _iso(candles.index[end_index]),
         "lastClose": _finite(last_close, 4),
+        "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
+        "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
+        "oiConfidence": candidate.get("oiConfidence"),
+        "oiDecision": candidate.get("oiDecision"),
+        "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
     }
 
 

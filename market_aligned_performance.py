@@ -277,8 +277,6 @@ class MarketFeatureCache:
         source_fingerprint = file_stat_fingerprint(source_path)
         if source_fingerprint == "MISSING":
             return None
-        if time.time() - source_path.stat().st_mtime > max_source_age_seconds:
-            return None
         key = self._key(
             symbol=symbol,
             timeframe=timeframe,
@@ -453,10 +451,11 @@ def _load_worker_candles(
 ) -> tuple[pd.DataFrame, int, float, float]:
     from backtest_api import HistoricalDataStore, prepare_candles
 
-    if (
-        source_path.is_file()
-        and time.time() - source_path.stat().st_mtime <= max_source_age_seconds
-    ):
+    # Backtests consume a stable, versioned local snapshot. Refreshing hundreds
+    # of symbols here made results depend on network timing and bypassed the
+    # explicit market-data refresh workflow. The source fingerprint below still
+    # invalidates every affected feature as soon as that workflow updates a file.
+    if source_path.is_file():
         read_started = time.perf_counter()
         raw = pd.read_csv(source_path, index_col="Timestamp", parse_dates=["Timestamp"])
         read_seconds = time.perf_counter() - read_started

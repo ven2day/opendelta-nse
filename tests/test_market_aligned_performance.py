@@ -195,13 +195,17 @@ def test_result_cache_defaults_inside_writable_backtest_directory(
     assert _market_result_cache_root(store) == store.cache_directory / "result-cache"
 
 
-def test_support_worker_builds_then_reuses_local_feature_cache(tmp_path: Path) -> None:
+def test_support_worker_builds_then_reuses_stable_local_feature_cache(
+    tmp_path: Path, monkeypatch,
+) -> None:
     recovery, market = configs()
     cache_directory = tmp_path / "raw"
     cache_directory.mkdir()
     source = cache_directory / "TEST-5-1y.csv.gz"
     candles = trend_frame(step=0.04, periods=80)
     candles.to_csv(source, index_label="Timestamp", compression="gzip")
+    source_mtime = source.stat().st_mtime
+    monkeypatch.setattr(performance.time, "time", lambda: source_mtime + 7_200)
     task = {
         "symbol": "TEST",
         "cacheDirectory": str(cache_directory),

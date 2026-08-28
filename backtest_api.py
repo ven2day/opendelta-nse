@@ -1999,6 +1999,18 @@ def _market_worker_default() -> int:
     return max(1, min(available - 1, 8))
 
 
+def _market_result_cache_root(store: "HistoricalDataStore") -> Path:
+    configured = os.environ.get("BACKTEST_RESULT_CACHE_DIRECTORY")
+    root = (
+        Path(configured).expanduser()
+        if configured
+        else store.cache_directory / "result-cache"
+    )
+    if not root.is_absolute():
+        raise ValueError("BACKTEST_RESULT_CACHE_DIRECTORY must be an absolute path")
+    return root
+
+
 def _market_task_batches(tasks: list[dict[str, Any]], workers: int) -> list[list[dict[str, Any]]]:
     if not tasks:
         return []
@@ -2389,15 +2401,7 @@ def run_market_aligned_backtest(
             breadth_path=breadth_path,
             now=now,
         )
-        cache_root_value = os.environ.get("BACKTEST_RESULT_CACHE_DIRECTORY")
-        cache_root = (
-            Path(cache_root_value).expanduser()
-            if cache_root_value
-            else store.cache_directory.parent / "result-cache"
-        )
-        if not cache_root.is_absolute():
-            raise ValueError("BACKTEST_RESULT_CACHE_DIRECTORY must be an absolute path")
-        result_cache = BacktestResultCache(cache_root)
+        result_cache = BacktestResultCache(_market_result_cache_root(store))
         if request.cachePolicy == "USE_CACHE":
             cached_response = result_cache.load(fingerprint)
             if cached_response is not None:

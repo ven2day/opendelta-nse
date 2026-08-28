@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
 import market_aligned_performance as performance
+from backtest_api import _market_result_cache_root
 from main import IST
 from market_aligned_rsi_scalper import (
     MarketAlignedConfig,
@@ -170,6 +172,14 @@ def test_completed_result_cache_is_atomic_and_marks_reuse(tmp_path: Path) -> Non
     assert loaded["results"] == response["results"]
     assert loaded["metadata"]["cachedResult"] is True
     assert loaded["metadata"]["originalRunTimestamp"] == response["metadata"]["completedAt"]
+
+
+def test_result_cache_defaults_inside_writable_backtest_directory(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.delenv("BACKTEST_RESULT_CACHE_DIRECTORY", raising=False)
+    store = SimpleNamespace(cache_directory=tmp_path / "backtest")
+    assert _market_result_cache_root(store) == store.cache_directory / "result-cache"
 
 
 def test_support_worker_builds_then_reuses_local_feature_cache(tmp_path: Path) -> None:

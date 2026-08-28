@@ -98,6 +98,7 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(html, /\d{2} [A-Z][a-z]{2} \d{2}:\d{2} (?:AM|PM)/);
   assert.doesNotMatch(html, /symbols refreshed/);
   assert.match(html, /Add NSE symbol/);
+  assert.doesNotMatch(html, /Export CSV/);
   assert.doesNotMatch(html, /NSE ready/);
   assert.doesNotMatch(html, /All prices|Extra large/);
   assert.match(html, /IST/);
@@ -232,7 +233,8 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(dashboardText, /\/api\/market-data\?format=csv/);
   assert.match(dashboardText, /cache: "no-store"/);
   assert.match(dashboardText, /&refresh=\$\{Date\.now\(\)\}/);
-  assert.match(dashboardText, /&download=\$\{Date\.now\(\)\}/);
+  assert.doesNotMatch(dashboardText, /&download=\$\{Date\.now\(\)\}/);
+  assert.doesNotMatch(dashboardText, /Export CSV/);
   assert.match(dashboardText, /DATA_REFRESH_INTERVAL_MS = 60 \* 60 \* 1_000/);
   assert.match(dashboardText, /STATUS_REFRESH_INTERVAL_MS = 10_000/);
   assert.match(dashboardText, /Refresh all NSE data from Dhan/);

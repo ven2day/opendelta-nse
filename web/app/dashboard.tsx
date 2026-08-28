@@ -6,7 +6,6 @@ import {
   ArrowUp,
   ChevronLeft,
   ChevronRight,
-  Download,
   LayoutDashboard,
   LogOut,
   Moon,
@@ -865,17 +864,6 @@ export function Dashboard({
                   </span>
                 )}
               </form>
-              <a
-                className="download-button"
-                href={LIVE_DATA_URL}
-                download
-                onClick={(event) => {
-                  event.currentTarget.href = `${LIVE_DATA_URL}&download=${Date.now()}`;
-                }}
-              >
-                <Download size={16} />
-                Export CSV
-              </a>
             </div>
           </div>
 

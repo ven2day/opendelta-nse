@@ -44,6 +44,7 @@ grep -q 'Minimum current price' "${dashboard_html}"
 grep -q 'Maximum current price' "${dashboard_html}"
 grep -q 'Dhan market data' "${dashboard_html}"
 grep -q 'Refresh all NSE data from Dhan' "${dashboard_html}"
+grep -q 'Add NSE symbol' "${dashboard_html}"
 grep -Eq '[0-9]{2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2} (AM|PM)' "${dashboard_html}"
 ! grep -q 'Last refresh' "${dashboard_html}"
 ! grep -q 'NSE ready' "${dashboard_html}"
@@ -59,10 +60,11 @@ grep -q '₹' "${dashboard_html}"
 echo "verified dashboard HTML"
 
 curl -fsS -b "${cookie_jar}" "${base_url}/api/market-data?format=csv" > "${live_csv}"
-grep -q '^rank,symbol,trading_date,previous_date,previous_close,entry_price,change_percent,previous_rsi_14,rsi_14,volume_24h,support_1_price,support_1_time,support_2_price,support_2_time,resistance_1_price,resistance_1_time,resistance_2_price,resistance_2_time' "${live_csv}"
-[[ "$(awk 'END { print NR - 1 }' "${live_csv}")" -eq 750 ]]
+grep -q '^rank,symbol,company_name,trading_date,previous_date,previous_close,entry_price,change_percent,previous_rsi_14,rsi_14,volume_24h,support_1_price,support_1_time,support_2_price,support_2_time,resistance_1_price,resistance_1_time,resistance_2_price,resistance_2_time' "${live_csv}"
+registry_count="$(awk 'END { print NR - 1 }' /var/lib/vento-nse/data/symbols.csv)"
+[[ "$(awk 'END { print NR - 1 }' "${live_csv}")" -eq "${registry_count}" ]]
 
-session_count="$(awk -F, 'NR > 1 && $3 != "" { sessions[$3] = 1 } END { print length(sessions) }' "${live_csv}")"
+session_count="$(awk -F, 'NR > 1 && $4 != "" { sessions[$4] = 1 } END { print length(sessions) }' "${live_csv}")"
 [[ "${session_count}" -eq 1 ]]
 echo "verified live market CSV"
 

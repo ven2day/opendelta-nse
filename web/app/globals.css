@@ -2261,6 +2261,7 @@ footer {
 
 .backtest-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 10px;
   margin-top: 20px;
@@ -3865,6 +3866,115 @@ footer {
   color: var(--primary);
 }
 
+.market-advanced-content {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 10px;
+}
+
+.range-advanced-content {
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.json-configuration {
+  width: 100%;
+  overflow: hidden;
+}
+
+.json-configuration-body {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 12px;
+}
+
+.json-configuration-toolbar {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.json-configuration-toolbar button,
+.json-configuration-errors button {
+  min-height: 34px;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 11px;
+  color: var(--text);
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.json-configuration-toolbar button:hover,
+.json-configuration-errors button:hover {
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+}
+
+.json-configuration-toolbar button.primary {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
+
+.json-configuration textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 280px;
+  min-height: 150px;
+  max-height: 400px;
+  resize: vertical;
+  overflow: auto;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px;
+  color: var(--text);
+  background: var(--panel);
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+}
+
+.json-configuration textarea:focus {
+  border-color: var(--primary);
+  outline: 3px solid color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+.json-configuration-errors,
+.json-configuration-message {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border-radius: 8px;
+  padding: 9px 11px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.json-configuration-errors {
+  border: 1px solid color-mix(in srgb, #ef4444 45%, var(--border));
+  color: #ef8f8f;
+  background: color-mix(in srgb, #ef4444 9%, var(--panel));
+}
+
+.json-configuration-message {
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 8%, var(--panel));
+}
+
+.json-configuration-body > small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .advanced-recovery-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 10px;
@@ -4723,6 +4833,7 @@ footer {
 @media (max-width: 820px) {
   .market-settings-grid,
   .oi-mode-explainer { grid-template-columns: 1fr; }
+  .json-configuration-toolbar button { flex: 1 1 145px; }
   .parameter-description { min-height: 0; }
   .market-preset-bar,
   .market-section-heading { align-items: flex-start; flex-direction: column; }

@@ -3,13 +3,14 @@
 import { useState } from "react";
 import definitionsJson from "../../../strategy-parameters.json";
 
-export type ParameterStrategy = "rsi_range" | "rsi_recovery" | "market_aligned_rsi_scalper";
+export type ParameterStrategy = string;
 export type ParameterDefinition = {
   key: string;
   label: string;
   description: string;
   type: "number" | "integer" | "select" | "time" | "boolean";
   default: number | string | boolean;
+  options?: Array<number | string>;
   minimum: number | null;
   maximum: number | null;
   step: number | null;

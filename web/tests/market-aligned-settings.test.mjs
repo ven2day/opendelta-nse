@@ -55,6 +55,8 @@ test("recommended, strict and custom preset behavior is explicit", async () => {
 
 test("expert settings start collapsed and normal controls stay understandable", async () => {
   const { dashboard } = await sources();
+  assert.match(dashboard, /<details className="advanced-settings market-advanced-settings">/);
+  assert.doesNotMatch(dashboard, /<details className="advanced-settings market-advanced-settings" open/);
   assert.match(dashboard, /<details className="expert-oi-settings">/);
   assert.doesNotMatch(dashboard, /<details className="expert-oi-settings" open/);
   for (const heading of ["Main settings", "Entry filters", "Risk and execution", "Open Interest", "Expert OI settings"]) {
@@ -66,8 +68,9 @@ test("expert settings start collapsed and normal controls stay understandable", 
 
 test("strategy configurations are saved separately and submitted separately", async () => {
   const { dashboard } = await sources();
-  assert.match(dashboard, /vento-nse-backtest-preset:rsi_recovery/);
-  assert.match(dashboard, /vento-nse-backtest-preset:market_aligned_rsi_scalper/);
+  assert.match(dashboard, /vento-nse-backtest-preset:\$\{strategyMode\}/);
+  assert.match(dashboard, /vento-nse-backtest-preset:\$\{next\}/);
+  assert.match(dashboard, /currentStrategyValues\(strategyMode\)/);
   assert.match(dashboard, /marketAlignedConfiguration:/);
   assert.match(dashboard, /switchStrategy\("rsi_recovery"\)/);
   assert.match(dashboard, /switchStrategy\("market_aligned_rsi_scalper"\)/);
@@ -80,6 +83,8 @@ test("responsive styles prevent horizontal overflow and keep fields grouped", as
   assert.match(styles, /\.market-settings-grid > \*[^{]*\{[^}]*min-width: 0/s);
   assert.match(styles, /\.parameter-input-row[^{]*\{[^}]*grid-template-columns: minmax\(0, 1fr\) auto/s);
   assert.match(styles, /@media \(max-width: 820px\)[\s\S]*\.market-settings-grid,[\s\S]*grid-template-columns: 1fr/);
+  assert.match(styles, /\.json-configuration textarea[^{]*\{[^}]*width: 100%[^}]*max-height: 400px[^}]*overflow: auto/s);
+  assert.match(styles, /\.json-configuration-toolbar[^{]*\{[^}]*flex-wrap: wrap/s);
   assert.doesNotMatch(styles, /\.market-aligned-settings[^}]*font-size:\s*(?:[0-9]|1[01])px/s);
 });
 

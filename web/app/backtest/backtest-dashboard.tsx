@@ -1849,8 +1849,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               </div>
             </section>
 
-            <section className="market-settings-card market-main-settings" aria-labelledby="market-main-settings-title">
-              <div className="market-section-heading"><div><span className="section-kicker">Common controls</span><h2 id="market-main-settings-title">Main settings</h2></div><span>Strategy, universe, duration and timeframe are selected above.</span></div>
+            <details className="market-settings-card market-settings-section market-main-settings" open>
+              <summary><span><span className="section-kicker">Common controls</span><h2 id="market-main-settings-title">Main settings</h2><small>Execution, sizing, session times and primary limits</small></span><ChevronDown size={17} /></summary>
               <div className="market-settings-grid">
                 <label className="parameter-field"><span className="parameter-label">Execution model</span><small className="parameter-description">Choose the price used after a completed signal bar.</small><select value={executionModel} onChange={(event) => setExecutionModel(event.target.value as typeof executionModel)}><option value="SIGNAL_CLOSE">Signal close</option><option value="NEXT_BAR_OPEN">Next bar open</option></select></label>
                 {marketNumber("quantityPerTrade", quantityPerTrade, setQuantityPerTrade)}
@@ -1866,7 +1866,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 {marketNumber("minimumAlignmentScore", minimumAlignmentScore, setMinimumAlignmentScore, { presetControlled: true })}
                 <label className="parameter-field"><span className="parameter-label">OI mode</span><small className="parameter-description">ADVISORY records point-in-time OI without blocking a trade.</small><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); markMarketPresetCustom(); }}><option value="OFF">OFF — no OI context</option><option value="ADVISORY">ADVISORY — record only (default)</option><option value="RESEARCH_FILTER">RESEARCH FILTER — experimental</option><option value="ENFORCED">ENFORCED — validated data only</option></select></label>
               </div>
-            </section>
+              <small className="market-main-settings-note">Strategy, universe, duration and timeframe are selected above.</small>
+            </details>
 
             <details className="advanced-settings market-advanced-settings">
               <summary>Advanced settings</summary>

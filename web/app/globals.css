@@ -4850,6 +4850,9 @@ footer {
 .open-interest-settings > .oi-mode-explainer,
 .open-interest-settings > .oi-history-status { margin: 14px; }
 
+.market-main-settings > summary h2 { margin: 0; font-size: 17px; }
+.market-main-settings-note { display: block; margin: 0 14px 14px; color: var(--muted); overflow-wrap: anywhere; }
+
 .oi-mode-explainer {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

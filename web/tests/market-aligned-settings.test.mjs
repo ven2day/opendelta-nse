@@ -66,6 +66,13 @@ test("expert settings start collapsed and normal controls stay understandable", 
   assert.match(dashboard, /<b>ADVISORY<\/b> — OI is displayed but cannot block trades/);
 });
 
+test("Market-Aligned main settings can be collapsed after initial review", async () => {
+  const dashboard = await readFile(new URL("app/backtest/backtest-dashboard.tsx", root), "utf8");
+  assert.match(dashboard, /<details className="market-settings-card market-settings-section market-main-settings" open>/);
+  assert.match(dashboard, /<summary><span><span className="section-kicker">Common controls<\/span><h2 id="market-main-settings-title">Main settings<\/h2>/);
+  assert.match(dashboard, /<ChevronDown size=\{17\} \/><\/summary>/);
+});
+
 test("strategy configurations are saved separately and submitted separately", async () => {
   const { dashboard } = await sources();
   assert.match(dashboard, /vento-nse-backtest-preset:\$\{strategyMode\}/);

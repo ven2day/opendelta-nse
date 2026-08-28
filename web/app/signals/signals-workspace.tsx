@@ -312,14 +312,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
         <Metric label="15m momentum" value={percent(signal.momentum15m, 3)} />
         <Metric label="30m momentum" value={percent(signal.momentum30m, 3)} />
       </div><div className="confirmation-pills"><span className={signal.emaConfirmation ? "pass" : "fail"}>EMA</span><span className={signal.vwapConfirmation ? "pass" : "fail"}>VWAP</span><span className={signal.volumeConfirmation ? "pass" : "fail"}>VOLUME</span></div></section>
-      <section><h3>NIFTY OI regime at signal</h3><div className="signal-detail-grid">
-        <Metric label="Mode" value={signal.oiFilterMode} />
-        <Metric label="Regime" value={(signal.oiRegimeAtSignal ?? "OFF").replaceAll("_", " ")} tone={`regime-${(signal.oiRegimeAtSignal ?? "neutral").toLowerCase()}`} />
-        <Metric label="Combined score" value={number(signal.oiScoreAtSignal)} />
-        <Metric label="Confidence" value={signal.oiConfidence ?? "—"} />
-        <Metric label="Decision" value={signal.oiDecision.replaceAll("_", " ")} />
-        <Metric label="Source timestamp" value={formatIst(signal.oiSourceTimestamp)} />
-      </div><small>{signal.oiDecisionReason}</small></section>
+      <section><h3>Strategy isolation</h3><div className="signal-detail-grid"><Metric label="Strategy" value="RSI Recovery Scalping" /><Metric label="OI execution gate" value="NOT APPLIED" /></div><small>The separate Market-Aligned RSI Scalper owns OI and market-alignment gates. This signal preserves RSI Recovery behavior.</small></section>
       <section><h3>Support and target room</h3><div className="signal-detail-grid">
         <Metric label="Recent support" value={money(levels.support)} />
         <Metric label="Distance to support" value={percent(levels.distanceToSupportPct)} />
@@ -331,7 +324,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
     </div>
     <div className="signal-card-foot">
       <div><span>Entry range method: {signal.buyRange.method.replaceAll("_", " ")} heuristic</span><small>{signal.buyRange.formula}</small></div>
-      {!readOnly && signal.manualAction !== "PAPER_BUY" && <div className="signal-actions"><button className="paper-buy-button" disabled={signal.oiFilterMode === "ENFORCED" && !signal.executionEligible} title={signal.executionEligible ? "Record a paper BUY" : signal.oiDecisionReason} onClick={() => onPaper(signal)}><IndianRupee size={14} />Paper buy</button>{signal.manualAction !== "WATCH" && <button onClick={() => onWatch(signal)}><Eye size={14} />Watch</button>}<button onClick={() => onIgnore(signal)}><X size={14} />Ignore</button></div>}
+      {!readOnly && signal.manualAction !== "PAPER_BUY" && <div className="signal-actions"><button className="paper-buy-button" title="Record a paper BUY" onClick={() => onPaper(signal)}><IndianRupee size={14} />Paper buy</button>{signal.manualAction !== "WATCH" && <button onClick={() => onWatch(signal)}><Eye size={14} />Watch</button>}<button onClick={() => onIgnore(signal)}><X size={14} />Ignore</button></div>}
       {signal.manualAction !== "NO_ACTION" && <span className={`manual-action ${signal.manualAction.toLowerCase()}`}>{signal.manualAction.replace("_", " ")}</span>}
     </div>
   </article>;
@@ -474,22 +467,9 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
         <button className="icon-button" onClick={() => void load()} aria-label="Refresh signals"><RefreshCw size={16} /></button><button className="icon-button" onClick={() => { setDraftSettings(settings); setSettingsOpen(true); }} aria-label="Signals settings"><Settings2 size={16} /></button>
       </section>
 
-      <section className={`backtest-panel oi-regime-card regime-${(status.oiRegime?.regime ?? "insufficient_oi_data").toLowerCase()}`} aria-label="Current NIFTY OI market regime">
-        <div className="panel-title"><div><span className="section-kicker">NIFTY OI filter · {status.oiFilterMode}</span><h2>{(status.oiRegime?.regime ?? (status.oiFilterMode === "OFF" ? "OFF" : "INSUFFICIENT_OI_DATA")).replaceAll("_", " ")}</h2></div><span className="date-window">{formatIst(status.oiRegime?.sourceTimestamp)}</span></div>
-        <div className="signals-study-grid">
-          <Metric label="Combined score" value={number(status.oiRegime?.combinedScore)} />
-          <Metric label="Confidence" value={status.oiRegime?.confidence ?? "—"} />
-          <Metric label="Options OI" value={number(status.oiRegime?.options?.score)} />
-          <Metric label="Futures OI" value={number(status.oiRegime?.futures?.score)} />
-          <Metric label="NIFTY trend" value={number(status.oiRegime?.spot?.score)} />
-          <Metric label="Data freshness" value={status.oiRegime?.dataAgeSeconds == null ? "—" : `${number(status.oiRegime.dataAgeSeconds, 0)}s`} />
-        </div>
-        <small>{status.oiFilterMode === "OFF" ? "Disabled by default; existing signal execution is unchanged." : status.oiRegime?.reason ?? "Waiting for completed five-minute OI observations."}</small>
-        <div className={`oi-history-status ${status.oiHistory?.enforcementReady ? "ready" : "limited"}`}>
-          <strong>Historical OI: {status.oiHistory?.state ?? "NOT IMPORTED"}</strong>
-          {status.oiHistory?.request?.fromDate && <span>{status.oiHistory.request.fromDate} to {status.oiHistory.request.toDate} · {status.oiHistory.optionRowsImported ?? 0} rows</span>}
-          {!status.oiHistory?.enforcementReady && <span>{status.oiHistory?.reason ?? "Historical depth coverage is unavailable."}</span>}
-        </div>
+      <section className="backtest-panel oi-regime-card" aria-label="RSI Recovery strategy isolation">
+        <div className="panel-title"><div><span className="section-kicker">RSI Recovery Scalping</span><h2>Existing live behavior preserved</h2></div><span className="date-window">OI gate: OFF</span></div>
+        <small>NIFTY OI and full market-alignment gates belong only to Market-Aligned RSI Scalper. They are available in Backtest research and do not block, create, or resize RSI Recovery Signals trades.</small>
       </section>
 
       {notice && <div className="signal-notice"><BellRing size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={14} /></button></div>}
@@ -513,10 +493,10 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
 
     {settingsOpen && draftSettings && <div className="signal-modal-backdrop" role="presentation"><section className="signal-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close"><X /></button><span className="section-kicker">Paper decision support only</span><h2 id="settings-title">Signals settings</h2><p>These controls change entry suggestions and paper sizing. They do not change RSI Recovery v1.1.0.</p>
-      <div className="signal-settings-grid"><label><span>NIFTY OI regime filter</span><select value={draftSettings.oiFilterMode} onChange={(event) => setDraftSettings({ ...draftSettings, oiFilterMode: event.target.value as Settings["oiFilterMode"] })}><option value="OFF">OFF — legacy behaviour</option><option value="ADVISORY">ADVISORY — record only</option><option value="ENFORCED">ENFORCED — gate long trades</option></select></label><label><span>Entry range method</span><select value={draftSettings.entryRangeMethod} onChange={(event) => setDraftSettings({ ...draftSettings, entryRangeMethod: event.target.value as Settings["entryRangeMethod"] })}><option value="FIXED_PERCENT">Fixed percent</option><option value="ATR_BASED">ATR based</option></select></label>
+      <div className="signal-settings-grid"><label><span>Entry range method</span><select value={draftSettings.entryRangeMethod} onChange={(event) => setDraftSettings({ ...draftSettings, entryRangeMethod: event.target.value as Settings["entryRangeMethod"] })}><option value="FIXED_PERCENT">Fixed percent</option><option value="ATR_BASED">ATR based</option></select></label>
         {draftSettings.entryRangeMethod === "FIXED_PERCENT" ? <><label><span>Lower tolerance %</span><input type="number" min="0" step="0.01" value={draftSettings.fixedLowerPct} onChange={(event) => setDraftSettings({ ...draftSettings, fixedLowerPct: Number(event.target.value) })} /></label><label><span>Upper chase tolerance %</span><input type="number" min="0" step="0.01" value={draftSettings.fixedUpperPct} onChange={(event) => setDraftSettings({ ...draftSettings, fixedUpperPct: Number(event.target.value) })} /></label></> : <><label><span>Lower ATR multiplier</span><input type="number" min="0" step="0.05" value={draftSettings.atrLowerMultiplier} onChange={(event) => setDraftSettings({ ...draftSettings, atrLowerMultiplier: Number(event.target.value) })} /></label><label><span>Upper ATR multiplier</span><input type="number" min="0" step="0.05" value={draftSettings.atrUpperMultiplier} onChange={(event) => setDraftSettings({ ...draftSettings, atrUpperMultiplier: Number(event.target.value) })} /></label></>}
         <label><span>Default paper allocation</span><input type="number" min="1" step="1000" value={draftSettings.paperAllocation} onChange={(event) => setDraftSettings({ ...draftSettings, paperAllocation: Number(event.target.value) })} /></label><label><span>Stale-data threshold seconds</span><input type="number" min="10" value={draftSettings.staleDataSeconds} onChange={(event) => setDraftSettings({ ...draftSettings, staleDataSeconds: Number(event.target.value) })} /></label></div>
-      <details className="advanced-settings"><summary>Advanced OI settings</summary><div className="signal-settings-grid">
+      {status.strategyVersion === "market-aligned-rsi-scalper-1.0.0" && <details className="advanced-settings"><summary>Advanced OI settings</summary><div className="signal-settings-grid">
         <label><span>Completed 5m lookback</span><input type="number" min="1" max="100" value={draftSettings.oiLookbackBars} onChange={(event) => setDraftSettings({ ...draftSettings, oiLookbackBars: Number(event.target.value) })} /></label>
         <label><span>Strikes each side of ATM</span><input type="number" min="0" max="20" value={draftSettings.oiStrikesEachSide} onChange={(event) => setDraftSettings({ ...draftSettings, oiStrikesEachSide: Number(event.target.value) })} /></label>
         <label><span>Minimum premium change %</span><input type="number" min="0" step="0.01" value={draftSettings.oiMinimumPriceChangePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumPriceChangePct: Number(event.target.value) })} /></label>
@@ -537,7 +517,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
         <label><span>Strong bullish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiStronglyBullishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiStronglyBullishThreshold: Number(event.target.value) })} /></label>
         <label><span>Elevated stock quality</span><input type="number" min="0" max="100" value={draftSettings.oiElevatedQualityThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiElevatedQualityThreshold: Number(event.target.value) })} /></label>
         <label><span>Missing-data policy</span><select value={draftSettings.oiFailPolicy} onChange={(event) => setDraftSettings({ ...draftSettings, oiFailPolicy: event.target.value as Settings["oiFailPolicy"] })}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow (explicit override)</option></select></label>
-      </div></details>
+      </div></details>}
       <div className="allocation-presets">{[10000, 25000, 50000, 100000].map((value) => <button key={value} className={draftSettings.paperAllocation === value ? "active" : ""} onClick={() => setDraftSettings({ ...draftSettings, paperAllocation: value })}>{money(value, 0)}</button>)}</div><div className="modal-actions"><button onClick={() => setSettingsOpen(false)}>Cancel</button><button className="paper-buy-button" disabled={working} onClick={() => void saveSettings()}>Save paper settings</button></div>
     </section></div>}
 

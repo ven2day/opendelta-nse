@@ -8,7 +8,7 @@ export type RecoveryTrade = {
   tradeId: string;
   sequenceNumber: number;
   runId: string;
-  strategyMode: "rsi_recovery";
+  strategyMode: "rsi_recovery" | "market_aligned_rsi_scalper";
   symbol: string;
   timeframe: string;
   signalTimestamp: string;
@@ -195,7 +195,7 @@ export type ProtectedRecoverySummary = {
   medianHoldingSessions: number | null;
   candleRowsProcessed: number;
   skippedOiSignals?: number;
-  oiFilterMode?: "OFF" | "ADVISORY" | "ENFORCED";
+  oiFilterMode?: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
 };
 
 type SpeedBucket = { count: number; pct: number };
@@ -291,13 +291,20 @@ export type RecoverySummary = {
   worstOpenMaePct: number | null;
   candleRowsProcessed: number;
   skippedOiSignals?: number;
-  oiFilterMode?: "OFF" | "ADVISORY" | "ENFORCED";
+  oiFilterMode?: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
+  candidateBuySignals?: number;
+  marketAlignmentRejectedSignals?: number;
+  oiRejectedSignals?: number;
 };
 
 export type RecoveryBacktestResponse = {
   metadata: {
     runId: string;
-    strategyMode: "rsi_recovery";
+    strategyMode: "rsi_recovery" | "market_aligned_rsi_scalper";
+    strategyKey?: "rsi_recovery" | "market_aligned_rsi_scalper";
+    strategyName?: string;
+    strategyDescription?: string;
+    configuration?: Record<string, unknown>;
     strategyVersion: string;
     startedAt: string;
     completedAt: string;
@@ -346,7 +353,7 @@ export type RecoveryBacktestResponse = {
       openPenalty: string;
     };
     oiFilter?: {
-      mode: "OFF" | "ADVISORY" | "ENFORCED";
+      mode: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
       version: string;
       parameters: Record<string, unknown>;
       decisionOrder: string;
@@ -794,6 +801,7 @@ export function RecoveryResults({ response }: { response: RecoveryBacktestRespon
 }
 
 function SignalRecoveryResults({ response }: { response: RecoveryBacktestResponse }) {
+  const marketAligned = response.metadata.strategyMode === "market_aligned_rsi_scalper";
   const [activeView, setActiveView] = useState<"overview" | "signals" | "open" | "features">("overview");
   const [sortKey, setSortKey] = useState<SortKey>("qualityScore");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -835,20 +843,22 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
 
   return (
     <>
-      <nav className="recovery-result-tabs" aria-label="RSI Recovery result views">
+      <nav className="recovery-result-tabs" aria-label={`${response.metadata.strategyName ?? "RSI Recovery Scalping"} result views`}>
         {([
           ["overview", "Overview"],
           ["signals", "Signals"],
           ["open", "Open Signals"],
-          ["features", "Feature Analysis"],
-        ] as const).map(([key, label]) => {
+          ...(!marketAligned ? [["features", "Feature Analysis"]] : []),
+        ] as Array<["overview" | "signals" | "open" | "features", string]>).map(([key, label]) => {
           const count = key === "signals" ? summary.buySignals : key === "open" ? summary.stillOpen : null;
           return <button key={key} type="button" className={activeView === key ? "active" : ""} onClick={() => setActiveView(key)}>{label}{count === null ? "" : ` (${count.toLocaleString("en-IN")})`}</button>;
         })}
       </nav>
 
       {activeView === "overview" && <>
-      <section className="recovery-top-cards" aria-label="RSI Recovery summary">
+      <section className="recovery-top-cards" aria-label={`${response.metadata.strategyName ?? "RSI Recovery Scalping"} summary`}>
+        {marketAligned && <div><span>RSI candidates</span><strong>{(summary.candidateBuySignals ?? summary.buySignals).toLocaleString("en-IN")}</strong></div>}
+        {marketAligned && <div><span>Alignment rejected</span><strong>{(summary.marketAlignmentRejectedSignals ?? 0).toLocaleString("en-IN")}</strong></div>}
         <div><span>BUY Signals</span><strong>{summary.buySignals.toLocaleString("en-IN")}</strong></div>
         <div><span>Targets Hit</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
         <div><span>Hit Rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
@@ -857,7 +867,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
         <div><span>Max Concurrent Same Symbol</span><strong>{summary.maximumConcurrentSignalsSameSymbol.toLocaleString("en-IN")}</strong></div>
         {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {summary.skippedOiSignals ?? 0}</strong></div>}
       </section>
-      <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open.</span></div>
+      <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> {marketAligned ? "RSI candidates are evaluated only against completed point-in-time NIFTY, sector, breadth, stock and optional OI context." : "Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open."}</span></div>
 
       <section className="backtest-panel recovery-section">
         <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Target achievement</span><h2>Target speed</h2></div><span className="date-window">Percentages use completed targets only</span></div>
@@ -925,7 +935,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
       </section>
 
       {detail && <section className="backtest-panel recovery-detail-panel">
-        <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Selected symbol</span><h2>{detail.symbol} recovery trades</h2></div><span className="date-window">{formatIst(detail.firstCandle)} – {formatIst(detail.lastCandle)}</span></div>
+        <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Selected symbol</span><h2>{detail.symbol} {marketAligned ? "market-aligned trades" : "recovery trades"}</h2></div><span className="date-window">{formatIst(detail.firstCandle)} – {formatIst(detail.lastCandle)}</span></div>
         <div className="quality-components">
           <span>Hit-rate score <b>{number(detail.hitRateScore, 1)}</b></span><span>Speed score <b>{number(detail.speedScore, 1)}</b></span><span>MAE score <b>{number(detail.maeScore, 1)}</b></span><span>Open penalty <b>{number(detail.openPenalty, 1)}</b></span><span>Quality <b>{number(detail.qualityScore, 1)}</b></span>
         </div>
@@ -934,7 +944,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
           {detail.trades.map((trade) => <div className="recovery-trade-grid recovery-trade-row" key={trade.tradeId} title={`Trade ${trade.tradeId}. RSI recovery mandatory; ${trade.confirmationScore}/${trade.requiredConfirmations} enabled confirmations passed. OI regime ${trade.oiRegimeAtSignal ?? "OFF"}; score ${trade.oiScoreAtSignal ?? "unavailable"}; confidence ${trade.oiConfidence ?? "unavailable"}; decision ${trade.oiDecision ?? "OI_OFF"}; source ${trade.oiSourceTimestamp ?? "unavailable"}. Independent signal observation; no stop loss or end-of-day exit. Target monitoring started after its own entry candle.`}>
             <span data-label="Entry"><b>#{trade.sequenceNumber}</b> {formatIst(trade.entryTimestamp)}<small>Signal {formatIst(trade.signalTimestamp)}</small></span><span data-label="Entry price">{money(trade.entryPrice)}</span><span data-label="Target">{money(trade.targetPrice)}</span><span data-label="Target hit">{formatIst(trade.targetHitTimestamp)}</span><span data-label="Time / bars">{duration(trade.durationMinutes)}<small>{trade.barsHeld} bars · {trade.tradingSessionsHeld} sessions</small></span><span data-label="Confirmations"><b>{trade.confirmationScore}/{trade.requiredConfirmations}</b><small>RSI {number(trade.rsiAtEntry)}</small></span><span data-label="EMA" className={trade.emaConfirmation ? "positive-value" : "neutral-value"}>{trade.emaEnabled ? (trade.emaConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="VWAP" className={trade.vwapConfirmation ? "positive-value" : "neutral-value"}>{trade.vwapEnabled ? (trade.vwapConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="Volume" className={trade.volumeConfirmation ? "positive-value" : "neutral-value"}>{trade.volumeEnabled ? (trade.volumeConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="MAE" className="negative-value">{percent(trade.maxAdversePct)}</span><span data-label="MFE" className="positive-value">{percent(trade.maxFavorablePct)}</span><span data-label="Status"><b className={`trade-status ${trade.status === "OPEN" ? "open" : "hit"}`}>{trade.status === "OPEN" ? "OPEN" : "TARGET HIT"}</b>{trade.status === "OPEN" && <small>{percent(trade.currentPnlPct)} · {duration(trade.durationMinutes)}</small>}</span>
           </div>)}
-        </div> : <div className="empty-history">No valid armed-RSI recovery BUY occurred for this symbol in the selected window.</div>}
+        </div> : <div className="empty-history">{marketAligned ? "No RSI candidate passed every point-in-time market-alignment gate for this symbol." : "No valid armed-RSI recovery BUY occurred for this symbol in the selected window."}</div>}
       </section>}
       </>}
 
@@ -961,7 +971,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
 
       <section className="backtest-notes recovery-run-metadata">
         <h3>Run metadata and cautions</h3>
-        <p><strong>Run:</strong> {response.metadata.runId} · {response.metadata.strategyVersion} · {response.metadata.executionModel} · {response.metadata.timeframe} · {response.metadata.durationYears}Y</p>
+        <p><strong>Run:</strong> {response.metadata.runId} · {response.metadata.strategyName ?? "RSI Recovery Scalping"} · {response.metadata.strategyVersion} · {response.metadata.executionModel} · {response.metadata.timeframe} · {response.metadata.durationYears}Y</p>
         <p><strong>Processed:</strong> {response.metadata.symbolsProcessed}/{response.metadata.symbolsRequested} symbols, {response.metadata.symbolsFailed} failed, {summary.candleRowsProcessed.toLocaleString("en-IN")} candle rows, {number(response.metadata.runtimeSeconds)} seconds, {response.metadata.workerCount} workers.</p>
         <p><strong>Costs:</strong> buy {number(response.metadata.costModel.buyCostBps)} bps, sell {number(response.metadata.costModel.sellCostBps)} bps, slippage {number(response.metadata.costModel.slippageBpsPerSide)} bps per side. Estimated round trip {number(response.metadata.costModel.estimatedRoundTripCostPct)}%.</p>
         {response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}

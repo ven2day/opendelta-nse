@@ -74,9 +74,11 @@ secret are read only from server environment variables.
 
 ## Historical NIFTY OI import
 
-The Backtest and Signals pages read historical OI coverage from the canonical
-repository at `/var/lib/vento-nse/backtest/nifty-oi`. Keep the OI filter set to
-`OFF` while importing. Create `/etc/vento-nse-nifty-expiry-schedule.json` from
+The shared collector and the Market-Aligned RSI Scalper backtest read historical
+OI coverage from the canonical repository at
+`/var/lib/vento-nse/backtest/nifty-oi`. RSI Recovery Scalping does not consume
+or gate on this data. Keep Market-Aligned OI in `ADVISORY` while importing.
+Create `/etc/vento-nse-nifty-expiry-schedule.json` from
 an audited exchange contract calendar; it is a JSON array of
 `{"effectiveFrom":"YYYY-MM-DD","weekday":0}` records, where Monday is `0` and
 Sunday is `6`. The importer deliberately does not guess or embed transition or
@@ -92,7 +94,39 @@ The command uses only the configured Dhan integration, caches completed API
 responses, resumes safely, and does not restart services. Dhan expired-options
 history does not provide bid/ask or reliable expired-futures OI, so such periods
 remain `INSUFFICIENT_OI_DATA` for strict enforcement. The manifest and coverage
-still appear in both UIs for audit and advisory research.
+still appears in Backtest for audit and advisory research.
+
+## Separate RSI scalping strategies
+
+`RSI Recovery Scalping` retains its `rsi_recovery` key, configuration, signal
+evaluator, exit models and result behavior. OI mode fields accepted from older
+clients are ignored by that strategy and cannot change its signals or paper
+execution.
+
+`Market-Aligned RSI Scalper` uses the distinct
+`market_aligned_rsi_scalper` key and versioned configuration. It first creates
+RSI candidates, then requires completed-candle NIFTY, sector, breadth, relative
+strength, VWAP, EMA, RVOL, room-to-target and liquidity/range-quality gates.
+Its OI modes are `OFF`, `ADVISORY`, `RESEARCH_FILTER`, and `ENFORCED`, with
+`ADVISORY` as the default. OI never creates a BUY or increases position size.
+
+Sector membership is operations data, not application code. Set the absolute
+`MARKET_ALIGNED_SECTOR_MAP_FILE` path to either a JSON symbol-to-sector object
+or a CSV containing `symbol,sector`. Missing sector or breadth coverage rejects
+the candidate as insufficient rather than guessing a classification.
+
+This strategy is labelled `Research candidate — paper trading required` and
+must not be represented as profitable without untouched chronological
+validation.
+
+## Release rollback
+
+Before a cutover, record the active release directory and both container image
+tags. To roll back, stop only the dashboard and backtest units, restore the
+previous release symlink/image tags with the existing deployment scripts, start
+those two units, then run the authenticated Backtest and Signals smoke tests.
+Do not restart the unrelated market-data collector. Production credentials and
+`/etc/vento-nse-dhan.env` must never be copied into a release archive or logs.
 
 ## RSI Recovery position exits
 

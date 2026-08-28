@@ -27,7 +27,7 @@ from recovery_backtest import (
     rsi_recovery_crossovers,
 )
 from recovery_feature_analysis import calculate_entry_feature_frame
-from nifty_oi_regime import NiftyOiConfig, decide_long_trade, insufficient_regime
+from nifty_oi_regime import NiftyOiConfig, insufficient_regime
 
 TIMEFRAME = "5m"
 TIMEFRAME_MINUTES = 5
@@ -711,8 +711,6 @@ class LiveSignalRepository:
             signal = next((item for item in self._signals if item.get("signalId") == signal_id), None)
             if signal is None:
                 raise KeyError("Signal was not found")
-            if signal.get("oiFilterMode") == "ENFORCED" and not bool(signal.get("executionEligible", True)):
-                raise ValueError(f"Paper BUY blocked by NIFTY OI policy: {signal.get('oiDecision') or 'unknown decision'}")
             existing = next((item for item in self._paper if item.get("signalId") == signal_id), None)
             if existing is not None:
                 raise ValueError("This signal already has a paper-trade observation")
@@ -1109,16 +1107,6 @@ class LiveSignalEngine:
             self._last_completed = stamp.isoformat()
         self.repository.append_candle(symbol, candle)
         self.repository.process_completed_candle(symbol, candle)
-        if settings.oi_filter_mode != "OFF":
-            if self.oi_service is None:
-                self._latest_oi_regime = insufficient_regime(
-                    stamp.to_pydatetime(), reason="NIFTY OI service is unavailable"
-                )
-            else:
-                self.oi_service.config = settings.oi_config()
-                if hasattr(self.oi_service, "complete_live_bar"):
-                    self.oi_service.complete_live_bar(stamp.to_pydatetime())
-                self._latest_oi_regime = self.oi_service.refresh(stamp.to_pydatetime(), strict_causal=True)
         if self._recovering:
             self._set_state(engine="RECOVERING", message="Completed candle stored while missing-candle recovery is active; BUY evaluation paused")
             return None
@@ -1157,17 +1145,9 @@ class LiveSignalEngine:
         historical = self._historical_context.get(symbol, {})
         stamp = _as_ist(candle["timestamp"])
         signal_id = deterministic_signal_id(symbol, stamp)
-        oi_regime = self._latest_oi_regime or insufficient_regime(
-            stamp.to_pydatetime(), reason="OI filter is disabled or no regime has been collected"
-        )
-        quality_score = historical.get("qualityScore")
-        open_positions = sum(item.get("status") == "OPEN" for item in self.repository.paper_trades())
-        oi_decision = decide_long_trade(
-            settings.oi_filter_mode,
-            oi_regime,
-            stock_quality_score=float(quality_score) if quality_score is not None else None,
-            open_portfolio_positions=open_positions,
-            config=settings.oi_config(),
+        oi_regime = insufficient_regime(
+            stamp.to_pydatetime(),
+            reason="OI context is not integrated with RSI Recovery Scalping",
         )
         return {
             "signalId": signal_id,
@@ -1226,15 +1206,15 @@ class LiveSignalEngine:
             "indicativeTargets": indicative_targets(low, midpoint, high),
             "supportResistance": support,
             "marketContext": {"available": False, "reason": "Live NIFTY context is optional and not used by BUY generation"},
-            "oiFilterMode": settings.oi_filter_mode,
+            "oiFilterMode": "OFF",
             "oiRegime": oi_regime,
             "oiRegimeAtSignal": oi_regime.get("regime"),
             "oiScoreAtSignal": oi_regime.get("combinedScore"),
             "oiConfidence": oi_regime.get("confidence"),
-            "oiDecision": oi_decision["decision"],
-            "oiDecisionReason": oi_decision["reason"],
+            "oiDecision": "NOT_APPLICABLE_RSI_RECOVERY",
+            "oiDecisionReason": "RSI Recovery Scalping preserves its existing no-OI execution behavior",
             "oiSourceTimestamp": oi_regime.get("sourceTimestamp"),
-            "executionEligible": bool(oi_decision["allowed"]),
+            "executionEligible": True,
             "manualAction": "NO_ACTION",
             "decisionTimestamp": None,
             "ignoreReason": None,
@@ -1282,8 +1262,8 @@ class LiveSignalEngine:
                 "paperOnly": True,
                 "liveOrdersEnabled": False,
                 "lastReconnectRecoverySeconds": _finite(self._last_recovery_seconds, 3),
-                "oiFilterMode": self.repository.settings().oi_filter_mode,
-                "oiRegime": self._latest_oi_regime,
+                "oiFilterMode": "OFF",
+                "oiRegime": None,
                 "oiHistory": (
                     self.oi_service.repository.history_status()
                     if self.oi_service is not None
@@ -1374,15 +1354,6 @@ class DhanMarketFeed:
             for (segment, security_id), _ in self.engine._security_to_symbol.items()
             if segment == 1
         ]
-        settings = self.engine.repository.settings()
-        if settings.oi_filter_mode != "OFF" and self.engine.oi_service is not None:
-            try:
-                self.engine.oi_service.config = settings.oi_config()
-                instruments.extend(self.engine.oi_service.prepare_live_subscriptions(self.engine.clock()))
-            except (DhanAPIError, OSError, ValueError, KeyError, TypeError) as error:
-                self.engine._latest_oi_regime = insufficient_regime(
-                    self.engine.clock(), reason=f"NIFTY OI subscriptions could not be prepared safely: {error}"
-                )
         unique: dict[tuple[str, str], dict[str, str]] = {}
         for item in instruments:
             unique[(item["ExchangeSegment"], item["SecurityId"])] = item
@@ -1417,22 +1388,9 @@ class DhanMarketFeed:
             subscribed.difference_update((item["ExchangeSegment"], item["SecurityId"]) for item in batch)
 
     def _refresh_oi_subscriptions(self, connection: Any, subscribed: set[tuple[str, str]]) -> None:
-        if self.engine.oi_service is None:
-            return
-        settings = self.engine.repository.settings()
-        if settings.oi_filter_mode == "OFF":
-            self._remove_stale_oi_subscriptions(connection, [], subscribed)
-            return
-        try:
-            self.engine.oi_service.config = settings.oi_config()
-            updates = self.engine.oi_service.poll_subscription_updates(self.engine.clock())
-            if updates:
-                self._remove_stale_oi_subscriptions(connection, updates, subscribed)
-            self._send_subscriptions(connection, updates, subscribed)
-        except (DhanAPIError, OSError, ValueError, KeyError, TypeError) as error:
-            self.engine._latest_oi_regime = insufficient_regime(
-                self.engine.clock(), reason=f"NIFTY OI subscription refresh failed safely: {error}"
-            )
+        # The live workspace is RSI Recovery Scalping. Shared OI collection is not
+        # subscribed or applied here until Market-Aligned live signals exist.
+        self._remove_stale_oi_subscriptions(connection, [], subscribed)
 
     def run(self, stop: threading.Event) -> None:
         from websockets.sync.client import connect

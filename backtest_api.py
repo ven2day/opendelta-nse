@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from datetime import time as datetime_time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -33,6 +33,15 @@ from live_signals import (
     LiveSignalSettings,
 )
 from market_data_refresh import MarketDataRefreshService
+from market_aligned_rsi_scalper import (
+    STRATEGY_DESCRIPTION as MARKET_ALIGNED_DESCRIPTION,
+    STRATEGY_KEY as MARKET_ALIGNED_STRATEGY_KEY,
+    STRATEGY_NAME as MARKET_ALIGNED_STRATEGY_NAME,
+    STRATEGY_VERSION as MARKET_ALIGNED_STRATEGY_VERSION,
+    MarketAlignedConfig,
+    apply_market_alignment_chronologically,
+    load_sector_mapping,
+)
 from dhan_oi import build_oi_service_from_environment
 from main import (
     DEFAULT_SYMBOLS_FILE,
@@ -116,6 +125,11 @@ MAX_EVENTS = 300
 INTRADAY_CHUNK_DAYS = 89
 CACHE_TTL_SECONDS = 60 * 60
 NIFTY_DISPLAY_NAME = "NIFTY 50"
+RSI_RECOVERY_STRATEGY_KEY = "rsi_recovery"
+RSI_RECOVERY_STRATEGY_NAME = "RSI Recovery Scalping"
+RSI_RECOVERY_DESCRIPTION = (
+    "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic."
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +150,150 @@ TIMEFRAMES: dict[str, TimeframeSpec] = {
     "1d": TimeframeSpec("daily", None, None),
 }
 
+
+class MarketAlignedConfigurationRequest(BaseModel):
+    """Configuration owned only by the Market-Aligned RSI Scalper."""
+
+    rsiLength: int = Field(default=14, gt=0, le=500)
+    rsiArmLow: float = Field(default=20, ge=0, le=100)
+    rsiArmHigh: float = Field(default=35, ge=0, le=100)
+    rsiRecovery: float = Field(default=40, ge=0, le=100)
+    signalRsiMaximum: float = Field(default=50, ge=0, le=100)
+    emaFast: int = Field(default=9, gt=0, le=500)
+    emaSlow: int = Field(default=20, gt=0, le=500)
+    rvolPeriod: int = Field(default=20, gt=0, le=500)
+    minimumRvol: float = Field(default=1.5, gt=0, le=100)
+    relativeStrengthLookbackBars: int = Field(default=3, gt=0, le=100)
+    roomLookbackBars: int = Field(default=20, gt=0, le=500)
+    targetPct: float = Field(default=0.5, gt=0, le=100)
+    setupExpiryBars: int = Field(default=50, ge=0, le=100_000)
+    executionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
+    buyCostBps: float = Field(default=0, ge=0, le=10_000)
+    sellCostBps: float = Field(default=0, ge=0, le=10_000)
+    slippageBps: float = Field(default=0, ge=0, le=10_000)
+    minimumNiftyTrendScore: float = Field(default=25, ge=-100, le=100)
+    minimumBreadthPct: float = Field(default=45, ge=0, le=100)
+    minimumBreadthSymbols: int = Field(default=10, ge=1, le=750)
+    minimumSectorMembers: int = Field(default=2, ge=1, le=750)
+    minimumAverageTradedValue: float = Field(default=100_000, ge=0)
+    maximumIntrabarRangePct: float = Field(default=5, gt=0, le=100)
+    minimumAlignmentScore: float = Field(default=75, ge=0, le=100)
+    marketDataStaleSeconds: int = Field(default=360, ge=1, le=86_400)
+    sectorBySymbol: dict[str, str] = Field(default_factory=dict)
+    oiMode: Literal["OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"] = "ADVISORY"
+    oiLookbackBars: int = Field(default=3, ge=1, le=100)
+    oiStrikesEachSide: int = Field(default=5, ge=0, le=20)
+    oiMinimumPriceChangePct: float = Field(default=0.05, ge=0, le=100)
+    oiMinimumChangePct: float = Field(default=0.5, ge=0, le=10_000)
+    oiMaximumSpreadPct: float = Field(default=20.0, gt=0, le=1_000)
+    oiStaleDataSeconds: int = Field(default=360, ge=1, le=86_400)
+    oiMinimumValidContractFraction: float = Field(default=0.5, gt=0, le=1)
+    oiMinimumFuturesVolume: float = Field(default=1, ge=0)
+    oiVolatilityPriceRisePct: float = Field(default=0.25, ge=0, le=100)
+    oiVolatilityIvRise: float = Field(default=0.5, ge=0, le=100)
+    oiMinimumCoverage: float = Field(default=0.65, gt=0, le=1)
+    oiOptionsWeight: float = Field(default=0.35, ge=0, le=1)
+    oiFuturesWeight: float = Field(default=0.35, ge=0, le=1)
+    oiSpotWeight: float = Field(default=0.30, ge=0, le=1)
+    oiStronglyBearishThreshold: float = Field(default=-60, ge=-100, le=100)
+    oiBearishThreshold: float = Field(default=-20, ge=-100, le=100)
+    oiBullishThreshold: float = Field(default=20, ge=-100, le=100)
+    oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
+    oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
+    oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
+
+    @field_validator("sectorBySymbol")
+    @classmethod
+    def normalize_sector_map(cls, mapping: dict[str, str]) -> dict[str, str]:
+        return {
+            symbol.strip().upper().removesuffix(".NS"): sector.strip()
+            for symbol, sector in mapping.items()
+            if symbol.strip() and sector.strip()
+        }
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> "MarketAlignedConfigurationRequest":
+        if not self.rsiArmLow < self.rsiArmHigh < self.rsiRecovery < self.signalRsiMaximum:
+            raise ValueError(
+                "Market-Aligned RSI levels must satisfy arm low < arm high < recovery < signal maximum"
+            )
+        self.strategy_config().validate()
+        self.oi_config()
+        return self
+
+    def recovery_config(self) -> RecoveryConfig:
+        return RecoveryConfig(
+            rsi_length=self.rsiLength,
+            rsi_arm_low=self.rsiArmLow,
+            rsi_arm_high=self.rsiArmHigh,
+            rsi_recovery=self.rsiRecovery,
+            ema_enabled=True,
+            ema_fast=self.emaFast,
+            ema_slow=self.emaSlow,
+            vwap_enabled=True,
+            volume_enabled=True,
+            volume_ema=self.rvolPeriod,
+            minimum_confirmations=3,
+            target_pct=self.targetPct,
+            setup_expiry_bars=self.setupExpiryBars,
+            execution_model=self.executionModel,
+            buy_cost_bps=self.buyCostBps,
+            sell_cost_bps=self.sellCostBps,
+            slippage_bps=self.slippageBps,
+        )
+
+    def strategy_config(
+        self, operations_sector_map: Mapping[str, str] | None = None
+    ) -> MarketAlignedConfig:
+        sector_map = dict(operations_sector_map or {})
+        sector_map.update(self.sectorBySymbol)
+        return MarketAlignedConfig(
+            signal_rsi_maximum=self.signalRsiMaximum,
+            ema_fast=self.emaFast,
+            ema_slow=self.emaSlow,
+            rvol_period=self.rvolPeriod,
+            minimum_rvol=self.minimumRvol,
+            relative_strength_lookback_bars=self.relativeStrengthLookbackBars,
+            room_lookback_bars=self.roomLookbackBars,
+            target_pct=self.targetPct,
+            minimum_nifty_trend_score=self.minimumNiftyTrendScore,
+            minimum_breadth_pct=self.minimumBreadthPct,
+            minimum_breadth_symbols=self.minimumBreadthSymbols,
+            minimum_sector_members=self.minimumSectorMembers,
+            minimum_average_traded_value=self.minimumAverageTradedValue,
+            maximum_intrabar_range_pct=self.maximumIntrabarRangePct,
+            minimum_alignment_score=self.minimumAlignmentScore,
+            stale_data_seconds=self.marketDataStaleSeconds,
+            sector_by_symbol=sector_map,
+        ).validate()
+
+    def oi_config(self) -> NiftyOiConfig:
+        return NiftyOiConfig(
+            lookback_bars=self.oiLookbackBars,
+            strikes_each_side=self.oiStrikesEachSide,
+            minimum_price_change_pct=self.oiMinimumPriceChangePct,
+            minimum_oi_change_pct=self.oiMinimumChangePct,
+            maximum_spread_pct=self.oiMaximumSpreadPct,
+            stale_data_seconds=self.oiStaleDataSeconds,
+            minimum_valid_contract_fraction=self.oiMinimumValidContractFraction,
+            minimum_futures_volume=self.oiMinimumFuturesVolume,
+            minimum_component_coverage=self.oiMinimumCoverage,
+            options_weight=self.oiOptionsWeight,
+            futures_weight=self.oiFuturesWeight,
+            spot_weight=self.oiSpotWeight,
+            strongly_bearish_threshold=self.oiStronglyBearishThreshold,
+            bearish_threshold=self.oiBearishThreshold,
+            bullish_threshold=self.oiBullishThreshold,
+            strongly_bullish_threshold=self.oiStronglyBullishThreshold,
+            elevated_quality_threshold=self.oiElevatedQualityThreshold,
+            volatility_price_rise_pct=self.oiVolatilityPriceRisePct,
+            volatility_iv_rise=self.oiVolatilityIvRise,
+            fail_policy=self.oiFailPolicy,
+        ).validate()
+
+    def public(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
 ANNUALIZATION = {
     "5m": 252 * 75,
     "15m": 252 * 25,
@@ -149,7 +307,9 @@ ANNUALIZATION = {
 
 class BacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=MAX_SYMBOLS_PER_RUN)
-    strategyMode: Literal["rsi_range", "rsi_recovery"] = "rsi_range"
+    strategyMode: Literal[
+        "rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"
+    ] = "rsi_range"
     universeMode: Literal["selected", "all"] = "selected"
     runId: str | None = Field(default=None, min_length=1, max_length=80)
     durationYears: Literal[1, 3] = 1
@@ -203,7 +363,7 @@ class BacktestRequest(BaseModel):
     upperRsiLevel: float = Field(default=70, ge=0, le=100)
     hardStopLossPct: float = Field(default=1.5, gt=0, lt=100)
     rsiExitExecutionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
-    oiFilterMode: Literal["OFF", "ADVISORY", "ENFORCED"] = "OFF"
+    oiFilterMode: Literal["OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"] = "OFF"
     oiLookbackBars: int = Field(default=3, ge=1, le=100)
     oiStrikesEachSide: int = Field(default=5, ge=0, le=20)
     oiMinimumPriceChangePct: float = Field(default=0.05, ge=0, le=100)
@@ -224,6 +384,9 @@ class BacktestRequest(BaseModel):
     oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
     oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
     oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
+    marketAlignedConfiguration: MarketAlignedConfigurationRequest = Field(
+        default_factory=MarketAlignedConfigurationRequest
+    )
 
     @field_validator("symbols")
     @classmethod
@@ -240,6 +403,12 @@ class BacktestRequest(BaseModel):
                 raise ValueError("Position exit models and the NIFTY OI filter are available only for RSI Recovery")
             if not self.entryLow < self.entryHigh < self.exitLow < self.exitHigh:
                 raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
+            return self
+
+        if self.strategyMode == MARKET_ALIGNED_STRATEGY_KEY:
+            if self.timeframe != "5m":
+                raise ValueError("Market-Aligned RSI Scalper currently requires completed 5-minute candles")
+            self.marketAlignedConfiguration.validate_configuration()
             return self
 
         if (
@@ -260,8 +429,6 @@ class BacktestRequest(BaseModel):
                 raise ValueError("Upper RSI level cannot be below the profit-exit RSI")
         if self.minimumStopPct > self.maximumStopPct:
             raise ValueError("Minimum stop percentage cannot exceed maximum stop percentage")
-        self.oi_config()
-
         if not self.rsiArmLow < self.rsiArmHigh:
             raise ValueError("RSI arm low must be lower than RSI arm high")
         enabled = sum((self.emaEnabled, self.vwapEnabled, self.volumeEnabled))
@@ -373,7 +540,7 @@ class BacktestRequest(BaseModel):
 
 class OiFilterComparisonRequest(BacktestRequest):
     symbols: list[str] = Field(min_length=1, max_length=750)
-    strategyMode: Literal["rsi_recovery"] = "rsi_recovery"
+    strategyMode: Literal["market_aligned_rsi_scalper"] = MARKET_ALIGNED_STRATEGY_KEY
 
 
 class AtrOptimizationRequest(BacktestRequest):
@@ -1275,19 +1442,12 @@ def run_recovery_backtest(
     )
     legacy_protection = exit_model == "LEGACY_PROTECTED_TARGET"
     position_backtest = legacy_protection or dynamic_exit is not None or rsi_profit_exit is not None
+    # RSI Recovery deliberately does not consume the shared OI infrastructure.
+    # Deprecated top-level OI request fields remain parseable for API compatibility,
+    # but changing them cannot alter this strategy's candidates or execution.
     oi_config = request.oi_config()
-    oi_repository = get_oi_repository() if request.oiFilterMode != "OFF" else None
+    oi_repository = None
     quality_by_symbol: dict[str, float] = {}
-    if request.oiFilterMode != "OFF":
-        try:
-            _, active_universe = get_universe_service().get_active_live_universe()
-            quality_by_symbol = {
-                str(row.get("symbol")): float(row["qualityScore"])
-                for row in (active_universe or {}).get("selected", [])
-                if row.get("symbol") and row.get("qualityScore") is not None
-            }
-        except (OSError, RuntimeError, ValueError, TypeError):
-            quality_by_symbol = {}
 
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
@@ -1302,13 +1462,6 @@ def run_recovery_backtest(
         "Results use the current symbols.csv universe, so delisted securities are not represented (survivorship bias).",
         "Historical target achievement and signal quality do not establish live profitability.",
     ]
-    if request.oiFilterMode == "ADVISORY":
-        warnings.append("NIFTY OI mode is ADVISORY: causal regimes are attached to candidates but execution is unchanged.")
-    elif request.oiFilterMode == "ENFORCED":
-        warnings.extend([
-            "NIFTY OI mode is ENFORCED after the existing stock signal and confirmation logic; it never creates BUY signals.",
-            "Missing or stale historical OI follows the configured fail policy and is recorded explicitly; no OI values are fabricated.",
-        ])
     if legacy_protection:
         warnings.extend([
             "Exit protection is ON: valid RSI Recovery signals become fixed-quantity positions subject to the configured per-symbol open-lot limit.",
@@ -1466,7 +1619,6 @@ def run_recovery_backtest(
         warnings.append(
             "No symbol in this batch produced enough valid historical data; the universe run continued to the next batch."
         )
-
     completed_at = datetime.now(IST)
     runtime_seconds = time.perf_counter() - started_clock
     data_from = min((result["firstCandle"] for result in results), default=None)
@@ -1479,9 +1631,6 @@ def run_recovery_backtest(
         summary = aggregate_rsi_profit_exit_results(results)
     else:
         summary = aggregate_recovery_results(results)
-    if request.oiFilterMode != "OFF":
-        summary["skippedOiSignals"] = sum(len(result.get("oiSkippedSignals", [])) for result in results)
-        summary["oiFilterMode"] = request.oiFilterMode
     public_exit_parameters = (
         dynamic_exit.public_parameters()
         if dynamic_exit is not None
@@ -1490,11 +1639,25 @@ def run_recovery_backtest(
         else protection.public_parameters()
     )
     public_exit_parameters["exitModel"] = exit_model
+    legacy_configuration = {
+        **config.public_parameters(),
+        "exitModel": exit_model,
+        "exitProtection": public_exit_parameters,
+    }
+    for result in results:
+        result["strategyKey"] = RSI_RECOVERY_STRATEGY_KEY
+        result["strategyName"] = RSI_RECOVERY_STRATEGY_NAME
+        result["strategyVersion"] = RECOVERY_STRATEGY_VERSION
+        result["configuration"] = legacy_configuration
     return {
         "metadata": {
             "runId": run_id,
             "strategyMode": "rsi_recovery",
+            "strategyKey": RSI_RECOVERY_STRATEGY_KEY,
+            "strategyName": RSI_RECOVERY_STRATEGY_NAME,
             "strategyVersion": RECOVERY_STRATEGY_VERSION,
+            "strategyDescription": RSI_RECOVERY_DESCRIPTION,
+            "configuration": legacy_configuration,
             "startedAt": started_at.isoformat(),
             "completedAt": completed_at.isoformat(),
             "generatedAt": completed_at.isoformat(),
@@ -1536,10 +1699,242 @@ def run_recovery_backtest(
                 "openPenalty": "open_signal_observations / buy_signal_observations * 100",
             },
             "oiFilter": {
-                "mode": request.oiFilterMode,
+                "mode": "OFF",
                 "version": "nifty-oi-regime-filter-1.0.0",
                 "parameters": oi_config.public(),
                 "decisionOrder": "candidate BUY -> stock confirmations -> NIFTY OI regime -> position controls",
+                "historyStatus": oi_repository.history_status() if oi_repository is not None else None,
+            },
+            "corporateActionAdjustment": "UNVERIFIED_SOURCE_AS_RECEIVED",
+            "gitCommitSha": os.environ.get("GIT_COMMIT_SHA") or None,
+        },
+        "summary": summary,
+        "results": results,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def run_market_aligned_backtest(
+    request: BacktestRequest,
+    store: HistoricalDataStore,
+    now_ist: datetime | None = None,
+) -> dict[str, Any]:
+    started_clock = time.perf_counter()
+    started_at = datetime.now(IST)
+    now = (now_ist or started_at).astimezone(IST)
+    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
+    run_id = request.runId or str(uuid.uuid4())
+    requested = request.marketAlignedConfiguration
+    sector_path_value = os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
+    sector_path = Path(sector_path_value).expanduser() if sector_path_value else None
+    if sector_path is not None and not sector_path.is_absolute():
+        raise ValueError("MARKET_ALIGNED_SECTOR_MAP_FILE must be an absolute path")
+    operations_sector_map = load_sector_mapping(sector_path)
+    alignment_config = requested.strategy_config(operations_sector_map)
+    recovery_config = requested.recovery_config()
+    oi_config = requested.oi_config()
+    oi_mode = requested.oiMode
+    oi_repository_error: str | None = None
+    if oi_mode == "OFF":
+        oi_repository = None
+    else:
+        try:
+            oi_repository = get_oi_repository()
+        except (RuntimeError, OSError, ValueError) as error:
+            oi_repository_error = str(error)
+            oi_repository = OiRegimeRepository(
+                Path.cwd() / ".runtime" / "market-aligned-empty-oi"
+            )
+
+    universe = set(store.universe())
+    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
+    if unavailable:
+        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
+
+    warnings = [
+        "Market-Aligned RSI Scalper is a separate research strategy; RSI Recovery Scalping is not modified by this run.",
+        "Every entry gate uses completed candles at or before the signal timestamp. Missing NIFTY, sector, breadth, or stock context rejects the candidate.",
+        "Historical equity candles do not include bid/ask quotes; the completed candle range is disclosed and used only as a conservative data-quality proxy.",
+        "Sector membership is loaded from MARKET_ALIGNED_SECTOR_MAP_FILE or the explicit request configuration; no symbol-to-sector mapping is hardcoded.",
+        "Research candidate — paper trading required. Past performance is not a guarantee of future returns.",
+    ]
+    if oi_repository_error:
+        warnings.append(
+            "Configured OI repository was unavailable; an empty repository is used so missing data is recorded causally: "
+            + oi_repository_error
+        )
+    if oi_mode == "ADVISORY":
+        warnings.append("OI mode ADVISORY records the causal regime but never changes execution.")
+    elif oi_mode == "RESEARCH_FILTER":
+        warnings.append("OI mode RESEARCH_FILTER rejects candidates only for chronological research comparison.")
+    elif oi_mode == "ENFORCED":
+        warnings.append("OI mode ENFORCED applies the configured long-trade OI policy after market-alignment gates.")
+
+    warmup_bars = max(
+        recovery_config.rsi_length + 2,
+        alignment_config.ema_slow,
+        alignment_config.rvol_period,
+        alignment_config.room_lookback_bars + 1,
+    ) + 5
+    try:
+        nifty_frame = store.candles(
+            NIFTY_DISPLAY_NAME,
+            request.timeframe,
+            request.durationYears,
+            analysis_start,
+            now,
+            benchmark=True,
+            warmup_bars=warmup_bars,
+        )
+    except (DhanAPIError, ValueError, OSError, KeyError) as error:
+        nifty_frame = pd.DataFrame()
+        warnings.append(f"NIFTY completed-candle context unavailable: {error}")
+
+    requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
+    worker_count = max(1, min(requested_workers, len(request.symbols), MAX_BACKTEST_WORKERS))
+
+    def prepare(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+        try:
+            candles = store.candles(
+                symbol,
+                request.timeframe,
+                request.durationYears,
+                analysis_start,
+                now,
+                warmup_bars=warmup_bars,
+            )
+            observations = simulate_recovery_symbol(
+                symbol,
+                candles,
+                timeframe=request.timeframe,
+                config=recovery_config,
+                run_id=run_id,
+                analysis_start=analysis_start,
+            )
+            return {"symbol": symbol, "candles": candles, "observations": observations}, None
+        except (DhanAPIError, ValueError, OSError, KeyError) as error:
+            return None, {"symbol": symbol, "message": str(error)}
+
+    if worker_count == 1:
+        prepared_rows = [prepare(symbol) for symbol in request.symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="market-aligned-symbol",
+        ) as executor:
+            prepared_rows = list(executor.map(prepare, request.symbols))
+    prepared = [item for item, _ in prepared_rows if item is not None]
+    errors = [error for _, error in prepared_rows if error is not None]
+    frames_by_symbol = {
+        str(item["symbol"]): item["candles"] for item in prepared
+    }
+    baseline_observations = [item["observations"] for item in prepared]
+    aligned = apply_market_alignment_chronologically(
+        baseline_observations,
+        frames_by_symbol=frames_by_symbol,
+        nifty_frame=nifty_frame,
+        config=alignment_config,
+    ) if prepared else []
+    quality_by_symbol = {
+        str(result.get("symbol") or ""): result.get("qualityScore")
+        for result in baseline_observations
+    }
+    if oi_repository is not None and aligned:
+        applied_mode = "ENFORCED" if oi_mode == "RESEARCH_FILTER" else oi_mode
+        aligned = apply_oi_filter_chronologically(
+            aligned,
+            repository=oi_repository,
+            mode=applied_mode,
+            config=oi_config,
+            quality_by_symbol=quality_by_symbol,
+        )
+        for result in aligned:
+            result["oiFilterMode"] = oi_mode
+            if oi_mode == "RESEARCH_FILTER":
+                for skipped in result.get("oiSkippedSignals", []):
+                    skipped["researchOnly"] = True
+                    skipped["status"] = "RESEARCH_" + str(skipped.get("status") or "FILTERED")
+
+    configuration = {
+        "strategy": requested.public(),
+        "resolvedMarketAlignment": alignment_config.public(),
+        "resolvedOi": oi_config.public(),
+    }
+    results: list[dict[str, Any]] = []
+    for result in aligned:
+        result.update(summarize_recovery_trades(str(result.get("symbol") or ""), result.get("trades", [])))
+        result["strategyKey"] = MARKET_ALIGNED_STRATEGY_KEY
+        result["strategyName"] = MARKET_ALIGNED_STRATEGY_NAME
+        result["strategyVersion"] = MARKET_ALIGNED_STRATEGY_VERSION
+        result["configuration"] = configuration
+        result["candidateBuySignals"] = (
+            len(result.get("trades", []))
+            + len(result.get("marketAlignmentSkippedSignals", []))
+            + len(result.get("oiSkippedSignals", []))
+        )
+        results.append(result)
+    summary = aggregate_recovery_results(results)
+    summary.update({
+        "candidateBuySignals": sum(int(result.get("candidateBuySignals", 0)) for result in results),
+        "marketAlignmentRejectedSignals": sum(
+            len(result.get("marketAlignmentSkippedSignals", [])) for result in results
+        ),
+        "oiRejectedSignals": sum(len(result.get("oiSkippedSignals", [])) for result in results),
+        "skippedOiSignals": sum(len(result.get("oiSkippedSignals", [])) for result in results),
+        "oiFilterMode": oi_mode,
+    })
+    completed_at = datetime.now(IST)
+    runtime_seconds = time.perf_counter() - started_clock
+    data_from = min((result["firstCandle"] for result in results), default=None)
+    data_to = max((result["lastCandle"] for result in results), default=None)
+    return {
+        "metadata": {
+            "runId": run_id,
+            "strategyMode": MARKET_ALIGNED_STRATEGY_KEY,
+            "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
+            "strategyName": MARKET_ALIGNED_STRATEGY_NAME,
+            "strategyVersion": MARKET_ALIGNED_STRATEGY_VERSION,
+            "strategyDescription": MARKET_ALIGNED_DESCRIPTION,
+            "configuration": configuration,
+            "startedAt": started_at.isoformat(),
+            "completedAt": completed_at.isoformat(),
+            "generatedAt": completed_at.isoformat(),
+            "analysisStart": analysis_start.isoformat(),
+            "dataFrom": data_from,
+            "dataTo": data_to,
+            "durationYears": request.durationYears,
+            "timeframe": request.timeframe,
+            "universeMode": request.universeMode,
+            "symbolsRequested": len(request.symbols),
+            "symbolsProcessed": len(results),
+            "symbolsFailed": len(errors),
+            "workerCount": worker_count,
+            "runtimeSeconds": _finite(runtime_seconds, 4),
+            "timezone": "Asia/Kolkata",
+            "executionModel": recovery_config.execution_model,
+            "backtestSemantics": "SIGNAL_OBSERVATION",
+            "strategyParameters": requested.public(),
+            "costModel": {
+                "buyCostBps": recovery_config.buy_cost_bps,
+                "sellCostBps": recovery_config.sell_cost_bps,
+                "slippageBpsPerSide": recovery_config.slippage_bps,
+                "estimatedRoundTripCostPct": recovery_config.estimated_round_trip_cost_pct,
+            },
+            "qualityFormula": {
+                "weights": QUALITY_WEIGHTS,
+                "formula": "Existing outcome-quality report; it is not an entry gate.",
+                "speedScore": "Completed target speed buckets.",
+                "maeScore": "Completed-trade MAE quality.",
+                "openPenalty": "Open observations divided by accepted BUY observations.",
+            },
+            "researchLabel": "Research candidate — paper trading required",
+            "sectorMappingSource": str(sector_path) if sector_path else "REQUEST_OR_UNAVAILABLE",
+            "oiFilter": {
+                "mode": oi_mode,
+                "version": "nifty-oi-regime-filter-1.0.0",
+                "parameters": oi_config.public(),
+                "decisionOrder": "RSI candidate -> stock gates -> market alignment -> NIFTY OI -> risk controls",
                 "historyStatus": oi_repository.history_status() if oi_repository is not None else None,
             },
             "corporateActionAdjustment": "UNVERIFIED_SOURCE_AS_RECEIVED",
@@ -1614,15 +2009,22 @@ def run_oi_filter_comparison(
     store: HistoricalDataStore,
     now_ist: datetime | None = None,
 ) -> dict[str, Any]:
-    """Run one immutable candidate specification through OFF, ADVISORY and ENFORCED."""
+    """Run one immutable Market-Aligned candidate specification through every OI mode."""
     evaluation_time = (now_ist or datetime.now(IST)).astimezone(IST)
     comparison_run_id = request.runId or str(uuid.uuid4())
     runs: dict[str, dict[str, Any]] = {}
-    for mode in ("OFF", "ADVISORY", "ENFORCED"):
-        mode_request = request.model_copy(
-            update={"oiFilterMode": mode, "runId": comparison_run_id}
+    for mode in ("OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"):
+        mode_configuration = request.marketAlignedConfiguration.model_copy(
+            update={"oiMode": mode}
         )
-        runs[mode] = run_recovery_backtest(mode_request, store, evaluation_time)
+        mode_request = request.model_copy(
+            update={
+                "strategyMode": MARKET_ALIGNED_STRATEGY_KEY,
+                "marketAlignedConfiguration": mode_configuration,
+                "runId": comparison_run_id,
+            }
+        )
+        runs[mode] = run_market_aligned_backtest(mode_request, store, evaluation_time)
     comparison = compare_oi_modes(runs["OFF"], runs["ADVISORY"], runs["ENFORCED"])
     comparison["rejectedTrades"] = [
         item
@@ -1638,7 +2040,8 @@ def run_oi_filter_comparison(
             "generatedAt": evaluation_time.isoformat(),
             "researchLabel": "Research candidate — paper trading required",
             "candidateSpecificationIdentical": True,
-            "defaultOiMode": "OFF",
+            "defaultOiMode": "ADVISORY",
+            "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
         },
         "comparison": comparison,
         "walkForwardValidation": walk_forward,
@@ -1836,6 +2239,8 @@ def run_rsi_exit_comparison(
 def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
     if request.strategyMode == "rsi_recovery":
         return run_recovery_backtest(request, store, now_ist)
+    if request.strategyMode == MARKET_ALIGNED_STRATEGY_KEY:
+        return run_market_aligned_backtest(request, store, now_ist)
 
     if not request.entryLow < request.entryHigh < request.exitLow < request.exitHigh:
         raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")

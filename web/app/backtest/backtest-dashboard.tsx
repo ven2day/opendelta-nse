@@ -170,6 +170,33 @@ type BacktestResponse = {
 };
 
 type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse) & { detail?: string };
+type BacktestJobStatus = {
+  jobId: string;
+  status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETE" | "FAILED";
+  currentStage: string;
+  symbolsCompleted: number;
+  symbolsTotal: number;
+  candlesProcessed: number;
+  candidatesFound: number;
+  acceptedSignals: number;
+  elapsedSeconds: number;
+  estimatedRemainingSeconds: number | null;
+  workersActive: number;
+  result: BacktestPayload | null;
+  error: string | null;
+  detail?: string;
+};
+type RunProgress = {
+  completed: number;
+  total: number;
+  candles?: number;
+  candidates?: number;
+  accepted?: number;
+  elapsedSeconds?: number;
+  estimatedRemainingSeconds?: number | null;
+  stage?: string;
+  workers?: number;
+};
 type StrategyMode = "rsi_range" | "rsi_recovery" | "market_aligned_rsi_scalper";
 type OiFilterMode = "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
 type MarketAlignedPreset = "Recommended" | "Strict" | "Custom";
@@ -993,8 +1020,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const [loadingHistoryId, setLoadingHistoryId] = useState<string | null>(null);
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
-  const [runProgress, setRunProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [runProgress, setRunProgress] = useState<RunProgress | null>(null);
+  const [cachePolicy, setCachePolicy] = useState<"USE_CACHE" | "RUN_AGAIN">("USE_CACHE");
   const runAbortRef = useRef<AbortController | null>(null);
+  const runJobIdRef = useRef<string | null>(null);
   const exitProtectionEnabled = exitModel !== "LEGACY_FIXED_TARGET";
 
   useEffect(() => {
@@ -1152,6 +1181,17 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     setSelectedSymbols((current) => [...current, symbol]);
     setSymbolQuery("");
     setSymbolMenuOpen(false);
+  };
+
+  const cancelCurrentRun = () => {
+    const jobId = runJobIdRef.current;
+    if (jobId) {
+      void fetch(`/api/backtest/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" })
+        .finally(() => runAbortRef.current?.abort());
+      setRunProgress((current) => current ? { ...current, stage: "CANCELLING", workers: 0 } : current);
+      return;
+    }
+    runAbortRef.current?.abort();
   };
 
   const submit = async (event: FormEvent) => {
@@ -1325,22 +1365,69 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           rsiExitExecutionModel,
           timeExit: "NEXT_TRADING_SESSION_OPEN",
         };
-        const result = await fetch("/api/backtest", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            symbols: batch,
-            strategyMode,
-            universeMode: useAllSymbols ? "all" : "selected",
-            runId,
-            durationYears,
-            timeframe,
-            ...strategyPayload,
-          }),
-          signal: controller.signal,
-        });
-        const payload = await readBacktestPayload(result, batch[0]);
-        if (!result.ok) throw new Error(payload.detail ?? `Backtest stopped near ${batch[0]}.`);
+        const requestBody = {
+          symbols: batch,
+          strategyMode,
+          universeMode: useAllSymbols ? "all" : "selected",
+          runId,
+          durationYears,
+          timeframe,
+          cachePolicy: strategyMode === "market_aligned_rsi_scalper" ? cachePolicy : "RUN_AGAIN",
+          ...strategyPayload,
+        };
+        let payload: BacktestPayload;
+        if (strategyMode === "market_aligned_rsi_scalper") {
+          const started = await fetch("/api/backtest?action=start-job", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+          });
+          const initial = JSON.parse(await started.text()) as BacktestJobStatus;
+          if (!started.ok || !initial.jobId) throw new Error(initial.detail ?? "Backtest job could not be started.");
+          runJobIdRef.current = initial.jobId;
+          let job = initial;
+          while (!(["COMPLETE", "CANCELLED", "FAILED"] as string[]).includes(job.status)) {
+            await new Promise<void>((resolve, reject) => {
+              const timer = window.setTimeout(resolve, 750);
+              controller.signal.addEventListener("abort", () => {
+                window.clearTimeout(timer);
+                reject(new DOMException("Aborted", "AbortError"));
+              }, { once: true });
+            });
+            const polled = await fetch(`/api/backtest/jobs/${encodeURIComponent(initial.jobId)}`, {
+              cache: "no-store",
+              signal: controller.signal,
+            });
+            job = JSON.parse(await polled.text()) as BacktestJobStatus;
+            if (!polled.ok) throw new Error(job.detail ?? "Backtest progress is unavailable.");
+            completedCount = job.symbolsCompleted;
+            setRunProgress({
+              completed: job.symbolsCompleted,
+              total: job.symbolsTotal,
+              candles: job.candlesProcessed,
+              candidates: job.candidatesFound,
+              accepted: job.acceptedSignals,
+              elapsedSeconds: job.elapsedSeconds,
+              estimatedRemainingSeconds: job.estimatedRemainingSeconds,
+              stage: job.currentStage,
+              workers: job.workersActive,
+            });
+          }
+          runJobIdRef.current = null;
+          if (job.status === "CANCELLED") throw new DOMException("Aborted", "AbortError");
+          if (job.status === "FAILED" || !job.result) throw new Error(job.error ?? "Backtest failed.");
+          payload = job.result;
+        } else {
+          const result = await fetch("/api/backtest", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+          });
+          payload = await readBacktestPayload(result, batch[0]);
+          if (!result.ok) throw new Error(payload.detail ?? `Backtest stopped near ${batch[0]}.`);
+        }
         if (!Array.isArray(payload.results) || !Array.isArray(payload.errors) || !Array.isArray(payload.warnings)) {
           throw new Error(`Backtest service returned incomplete data near ${batch[0]}. Please retry.`);
         }
@@ -1414,6 +1501,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       }
     } finally {
       runAbortRef.current = null;
+      runJobIdRef.current = null;
       setLoading(false);
     }
   };
@@ -1865,6 +1953,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 {marketNumber("maximumOpenPositions", maximumOpenPositions, setMaximumOpenPositions)}
                 {marketNumber("minimumAlignmentScore", minimumAlignmentScore, setMinimumAlignmentScore, { presetControlled: true })}
                 <label className="parameter-field"><span className="parameter-label">OI mode</span><small className="parameter-description">ADVISORY records point-in-time OI without blocking a trade.</small><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); markMarketPresetCustom(); }}><option value="OFF">OFF — no OI context</option><option value="ADVISORY">ADVISORY — record only (default)</option><option value="RESEARCH_FILTER">RESEARCH FILTER — experimental</option><option value="ENFORCED">ENFORCED — validated data only</option></select></label>
+                <label className="parameter-field"><span className="parameter-label">Identical completed run</span><small className="parameter-description">Reuse only when the full configuration, universe, code and source-data fingerprints match.</small><select value={cachePolicy} onChange={(event) => setCachePolicy(event.target.value as typeof cachePolicy)}><option value="USE_CACHE">Use cached result</option><option value="RUN_AGAIN">Run again</option></select></label>
               </div>
               <small className="market-main-settings-note">Strategy, universe, duration and timeframe are selected above.</small>
             </details>
@@ -2067,7 +2156,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             }}
           />
           {loading ? (
-            <button className="run-backtest stop-backtest" type="button" onClick={() => runAbortRef.current?.abort()}><Square size={15} />Stop {runProgress ? `${runProgress.completed}/${runProgress.total}` : "run"}</button>
+            <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? `${runProgress.completed}/${runProgress.total}` : "run"}</button>
           ) : (
             <button className="run-backtest" type="submit" disabled={strategyMode === "market_aligned_rsi_scalper" && marketFormInvalid}><TrendingUp size={17} />Run backtest</button>
           )}
@@ -2095,7 +2184,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         </section>
 
         {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}
-        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Fetching and testing historical candles</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols complete. ` : ""}Intraday universe runs can take much longer the first time; cached runs are faster.</span></div></div>}
+        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>{runProgress?.stage ? runProgress.stage.replaceAll("_", " ") : "Fetching and testing historical candles"}</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols · ${number(runProgress.candles ?? 0, 0)} candles · ${number(runProgress.candidates ?? 0, 0)} candidates · ${number(runProgress.accepted ?? 0, 0)} accepted · ${number(runProgress.workers ?? 0, 0)} workers · ${number(runProgress.elapsedSeconds ?? 0, 0)}s elapsed${runProgress.estimatedRemainingSeconds == null ? "" : ` · about ${number(runProgress.estimatedRemainingSeconds, 0)}s remaining`}.` : "Intraday universe runs can take longer on a cold cache; identical completed runs can be reused safely."}</span></div></div>}
         {optimizing && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Running chronological ATR walk-forward analysis</strong><span>The configurable grid is evaluated with one common setting across all selected symbols. This optional research run can take time.</span></div></div>}
         {optimization && <AtrOptimizationResults response={optimization} />}
         {comparingRsiExits && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing RSI exit settings chronologically</strong><span>Training and validation stay separate, costs are included, and one common configuration is applied to all selected symbols.</span></div></div>}

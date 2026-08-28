@@ -404,6 +404,19 @@ export type RecoveryBacktestResponse = {
     symbolsFailed: number;
     workerCount: number;
     runtimeSeconds: number;
+    cachedResult?: boolean;
+    originalRunTimestamp?: string | null;
+    fingerprint?: string | null;
+    performance?: {
+      optimized?: boolean;
+      totalCandles?: number;
+      databaseQueries?: number;
+      bytesRead?: number;
+      peakMemoryBytes?: number;
+      featureCacheHits?: number;
+      featureCacheMisses?: number;
+      stagesSeconds?: Record<string, number | null>;
+    };
     timezone: string;
     executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
     exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
@@ -1058,6 +1071,18 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
       {marketAligned && <MarketCandidateDiagnostics funnel={summary.candidateFunnel} diagnostics={candidateDiagnostics} />}
 
       <DiagnosticsContainer collapsed={marketAligned}>
+      {marketAligned && response.metadata.performance && <section className="backtest-panel recovery-section compact-section">
+        <div className="panel-title"><div><span className="section-kicker">Execution profile</span><h2>Performance diagnostics</h2></div><span className="cost-note">{response.metadata.cachedResult ? "Cached result" : response.metadata.performance.optimized ? "Optimized pipeline" : "Legacy pipeline"}</span></div>
+        <div className="metric-grid recovery-risk-grid">
+          <div><span>Candles</span><strong>{number(response.metadata.performance.totalCandles ?? summary.candleRowsProcessed, 0)}</strong></div>
+          <div><span>Database queries</span><strong>{number(response.metadata.performance.databaseQueries ?? 0, 0)}</strong></div>
+          <div><span>Bytes read</span><strong>{number(response.metadata.performance.bytesRead ?? 0, 0)}</strong></div>
+          <div><span>Peak memory</span><strong>{number((response.metadata.performance.peakMemoryBytes ?? 0) / 1_048_576, 1)} MB</strong></div>
+          <div><span>Feature cache hit / miss</span><strong>{number(response.metadata.performance.featureCacheHits ?? 0, 0)} / {number(response.metadata.performance.featureCacheMisses ?? 0, 0)}</strong></div>
+          <div><span>Fingerprint</span><strong title={response.metadata.fingerprint ?? undefined}>{response.metadata.fingerprint?.slice(0, 12) ?? "—"}</strong></div>
+        </div>
+        <div className="session-breakdown">{Object.entries(response.metadata.performance.stagesSeconds ?? {}).map(([stage, seconds]) => <span key={stage}><b>{stage.replaceAll(/([A-Z])/g, " $1")}</b>{seconds == null ? "n/a" : `${number(seconds, 3)}s`}</span>)}</div>
+      </section>}
       <section className="backtest-panel recovery-section">
         <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Target achievement</span><h2>Target speed</h2></div><span className="date-window">Percentages use completed targets only</span></div>
         <div className="speed-bucket-grid">{speedOrder.map(([key, label]) => {
@@ -1162,6 +1187,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
       <section className="backtest-notes recovery-run-metadata">
         <h3>Run metadata and cautions</h3>
         <p><strong>Run:</strong> {response.metadata.runId} · {response.metadata.strategyName ?? "RSI Recovery Scalping"} · {response.metadata.strategyVersion} · {response.metadata.executionModel} · {response.metadata.timeframe} · {response.metadata.durationYears}Y</p>
+        {response.metadata.cachedResult && <p><strong>Cached result:</strong> original run {formatIst(response.metadata.originalRunTimestamp ?? null)} · fingerprint {response.metadata.fingerprint}</p>}
         <p><strong>Processed:</strong> {response.metadata.symbolsProcessed}/{response.metadata.symbolsRequested} symbols, {response.metadata.symbolsFailed} failed, {summary.candleRowsProcessed.toLocaleString("en-IN")} candle rows, {number(response.metadata.runtimeSeconds)} seconds, {response.metadata.workerCount} workers.</p>
         <p><strong>Costs:</strong> buy {number(response.metadata.costModel.buyCostBps)} bps, sell {number(response.metadata.costModel.sellCostBps)} bps, slippage {number(response.metadata.costModel.slippageBpsPerSide)} bps per side. Estimated round trip {number(response.metadata.costModel.estimatedRoundTripCostPct)}%.</p>
         {response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}

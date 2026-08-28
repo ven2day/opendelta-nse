@@ -36,6 +36,8 @@ export async function POST(request: Request): Promise<Response> {
     const historyStatus = action === "oi-history-status";
     const upstreamPath = historyStatus
       ? "/nifty-oi/history/status"
+      : action === "start-job"
+      ? "/backtest/jobs"
       : action === "optimize-atr"
       ? "/backtest/optimize-atr"
       : action === "compare-rsi-exits"
@@ -48,7 +50,7 @@ export async function POST(request: Request): Promise<Response> {
       headers,
       body: historyStatus ? undefined : JSON.stringify(payload),
       cache: "no-store",
-      signal: AbortSignal.timeout((action === "optimize-atr" || action === "compare-rsi-exits" || action === "compare-oi-filter" ? 60 : 15) * 60 * 1_000),
+      signal: AbortSignal.timeout((action === "optimize-atr" || action === "compare-rsi-exits" || action === "compare-oi-filter" ? 60 : action === "start-job" ? 1 : 15) * 60 * 1_000),
     });
     const body = await upstream.text();
     return new Response(body, {

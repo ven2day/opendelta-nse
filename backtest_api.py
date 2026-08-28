@@ -4,7 +4,9 @@ import asyncio
 import concurrent.futures
 import csv
 import io
+import json
 import math
+import multiprocessing
 import os
 import sqlite3
 import tempfile
@@ -15,12 +17,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from datetime import time as datetime_time
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
+
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows development/test runtime
+    resource = None
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -36,6 +43,7 @@ from application_settings import (
     prices_by_symbol,
 )
 from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
+from backtest_jobs import BacktestJobService
 from live_signals import (
     LiveSignalEngine,
     LiveSignalRepository,
@@ -56,6 +64,20 @@ from market_aligned_rsi_scalper import (
     REASON_MESSAGES as MARKET_ALIGNMENT_REASON_MESSAGES,
     apply_market_alignment_chronologically,
     load_sector_mapping,
+)
+from market_aligned_performance import (
+    BacktestResultCache,
+    FEATURE_CODE_VERSION as MARKET_FEATURE_CODE_VERSION,
+    SHARED_CONTEXT_CODE_VERSION,
+    build_nifty_context,
+    build_support_context,
+    candidate_sector_key,
+    candidate_timestamp_index,
+    evaluate_precomputed_market_alignment,
+    prepare_market_symbol_batch,
+    prepare_support_symbol_batch,
+    file_stat_fingerprint,
+    stable_fingerprint,
 )
 from dhan_oi import build_oi_service_from_environment
 from main import (
@@ -383,6 +405,7 @@ class BacktestRequest(BaseModel):
     ] = "rsi_range"
     universeMode: Literal["selected", "all"] = "selected"
     runId: str | None = Field(default=None, min_length=1, max_length=80)
+    cachePolicy: Literal["USE_CACHE", "RUN_AGAIN"] = "RUN_AGAIN"
     durationYears: Literal[1, 3] = 1
     timeframe: Literal["5m", "15m", "30m", "1h", "2h", "4h", "1d"] = "1d"
     entryLow: float = Field(**numeric_field_kwargs("rsi_range", "entryLow"))
@@ -1971,10 +1994,342 @@ def _market_candidate_funnel(results: list[dict[str, Any]]) -> dict[str, int]:
     return funnel
 
 
+def _market_worker_default() -> int:
+    available = os.cpu_count() or 2
+    return max(1, min(available - 1, 8))
+
+
+def _market_task_batches(tasks: list[dict[str, Any]], workers: int) -> list[list[dict[str, Any]]]:
+    if not tasks:
+        return []
+    # Several bounded batches per worker balance uneven symbol histories without
+    # spawning a process per symbol.
+    batch_size = max(1, math.ceil(len(tasks) / max(1, workers * 4)))
+    return [tasks[index:index + batch_size] for index in range(0, len(tasks), batch_size)]
+
+
+def _execute_market_batches(
+    tasks: list[dict[str, Any]],
+    workers: int,
+    worker: Any,
+    *,
+    cancel_event: threading.Event | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+) -> list[dict[str, Any]]:
+    batches = _market_task_batches(tasks, workers)
+    if workers == 1:
+        nested = []
+        completed = 0
+        for batch in batches:
+            if cancel_event is not None and cancel_event.is_set():
+                raise BacktestCancelledError("Backtest cancellation requested")
+            nested.append(worker(batch))
+            completed += len(batch)
+            if progress_callback is not None:
+                progress_callback(completed)
+    else:
+        executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+        futures = {
+            executor.submit(worker, batch): (index, len(batch))
+            for index, batch in enumerate(batches)
+        }
+        completed = 0
+        ordered: dict[int, list[dict[str, Any]]] = {}
+        cancelled = False
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    for pending in futures:
+                        pending.cancel()
+                    raise BacktestCancelledError("Backtest cancellation requested")
+                index, size = futures[future]
+                ordered[index] = future.result()
+                completed += size
+                if progress_callback is not None:
+                    progress_callback(completed)
+            nested = [ordered[index] for index in range(len(batches))]
+        finally:
+            executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
+    return [row for batch in nested for row in batch]
+
+
+def _parent_peak_memory_bytes() -> int:
+    if resource is None:
+        return 0
+    peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak if os.uname().sysname == "Darwin" else peak * 1024
+
+
+class BacktestCancelledError(RuntimeError):
+    pass
+
+
+def _market_run_fingerprint(
+    *,
+    request: BacktestRequest,
+    store: HistoricalDataStore,
+    support_plan: Mapping[str, Any],
+    sector_path: Path | None,
+    breadth_path: Path | None,
+    now: datetime,
+) -> str:
+    source_interval = TIMEFRAMES[request.timeframe].source_interval or "daily"
+    symbols = sorted(set(request.symbols) | set(support_plan["allSymbols"]))
+    data_versions = {
+        symbol: file_stat_fingerprint(
+            store._cache_path(symbol, source_interval, request.durationYears)
+        )
+        for symbol in symbols
+    }
+    data_versions["NIFTY 50"] = file_stat_fingerprint(
+        store._cache_path("NIFTY50", source_interval, request.durationYears)
+    )
+    resolved = request.model_dump(mode="json")
+    resolved.pop("runId", None)
+    resolved.pop("cachePolicy", None)
+    completed_bucket = pd.Timestamp(now).floor("5min").isoformat()
+    return stable_fingerprint({
+        "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
+        "strategyVersion": MARKET_ALIGNED_STRATEGY_VERSION,
+        "featureCodeVersion": MARKET_FEATURE_CODE_VERSION,
+        "sharedContextCodeVersion": SHARED_CONTEXT_CODE_VERSION,
+        "configuration": resolved,
+        "selectedUniverse": request.symbols,
+        "dateRangeEndBucket": completed_bucket,
+        "timeframe": request.timeframe,
+        "candleDataVersions": data_versions,
+        "sectorDataVersion": file_stat_fingerprint(sector_path),
+        "breadthDataVersion": file_stat_fingerprint(breadth_path),
+        "oiDataVersion": "OFF" if request.marketAlignedConfiguration.oiMode == "OFF" else "REPOSITORY_POINT_IN_TIME",
+    })
+
+
+def _optimized_market_alignment_pipeline(
+    *,
+    request: BacktestRequest,
+    store: HistoricalDataStore,
+    analysis_start: datetime,
+    now: datetime,
+    run_id: str,
+    recovery_config: RecoveryConfig,
+    alignment_config: MarketAlignedConfig,
+    support_plan: Mapping[str, Any],
+    nifty_frame: pd.DataFrame,
+    oi_mode: str,
+    warmup_bars: int,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[dict[str, str]], dict[str, Any]]:
+    requested_workers = int(os.environ.get("BACKTEST_WORKERS", str(_market_worker_default())))
+    worker_count = max(1, min(requested_workers, len(request.symbols), 8))
+    feature_root_value = os.environ.get("BACKTEST_FEATURE_CACHE_DIRECTORY")
+    feature_root = (
+        Path(feature_root_value).expanduser()
+        if feature_root_value
+        else store.cache_directory / "market-aligned-features"
+    )
+    if not feature_root.is_absolute():
+        raise ValueError("BACKTEST_FEATURE_CACHE_DIRECTORY must be an absolute path")
+    common = {
+        "cacheDirectory": str(store.cache_directory),
+        "featureCacheDirectory": str(feature_root),
+        "recoveryConfig": recovery_config,
+        "marketConfig": alignment_config,
+        "analysisStart": analysis_start,
+        "now": now,
+        "timeframe": request.timeframe,
+        "durationYears": request.durationYears,
+        "warmupBars": warmup_bars,
+        "runId": run_id,
+        "rawCacheTtlSeconds": CACHE_TTL_SECONDS,
+    }
+    trading_started = time.perf_counter()
+    rows = _execute_market_batches(
+        [{**common, "symbol": symbol} for symbol in request.symbols],
+        worker_count,
+        prepare_market_symbol_batch,
+        cancel_event=cancel_event,
+        progress_callback=(
+            lambda completed: progress_callback({
+                "currentStage": "STOCK_FEATURES_AND_CANDIDATES",
+                "symbolsCompleted": completed,
+                "symbolsTotal": len(request.symbols),
+                "workersActive": worker_count,
+            })
+            if progress_callback is not None else None
+        ),
+    )
+    trading_seconds = time.perf_counter() - trading_started
+    prepared = [row["item"] for row in rows if row.get("item") is not None]
+    errors = [row["error"] for row in rows if row.get("error") is not None]
+    feature_paths = {
+        str(item["symbol"]): str(item["featurePath"])
+        for item in prepared
+    }
+    support_symbols = [
+        symbol for symbol in support_plan["allSymbols"] if symbol not in feature_paths
+    ]
+    support_workers = max(1, min(requested_workers, len(support_symbols) or 1, 8))
+    support_started = time.perf_counter()
+    support_rows = _execute_market_batches(
+        [{**common, "symbol": symbol} for symbol in support_symbols],
+        support_workers,
+        prepare_support_symbol_batch,
+        cancel_event=cancel_event,
+        progress_callback=(
+            lambda completed: progress_callback({
+                "currentStage": "SUPPORTING_MARKET_FEATURES",
+                "symbolsCompleted": len(request.symbols),
+                "symbolsTotal": len(request.symbols),
+                "supportSymbolsCompleted": completed,
+                "supportSymbolsTotal": len(support_symbols),
+                "workersActive": support_workers,
+            })
+            if progress_callback is not None else None
+        ),
+    )
+    support_seconds = time.perf_counter() - support_started
+    support_items = [row["item"] for row in support_rows if row.get("item") is not None]
+    support_errors = [row["error"] for row in support_rows if row.get("error") is not None]
+    feature_paths.update({
+        str(item["symbol"]): str(item["featurePath"])
+        for item in support_items
+    })
+    baseline = [item["observations"] for item in prepared]
+    candidate_timestamps = candidate_timestamp_index(baseline)
+    if cancel_event is not None and cancel_event.is_set():
+        raise BacktestCancelledError("Backtest cancellation requested")
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "SHARED_MARKET_CONTEXT",
+            "symbolsCompleted": len(request.symbols),
+            "symbolsTotal": len(request.symbols),
+            "candlesProcessed": sum(int(item.get("candles", 0)) for item in prepared),
+            "candidatesFound": sum(len(result.get("trades", [])) for result in baseline),
+            "workersActive": 1,
+        })
+    nifty_started = time.perf_counter()
+    nifty_context = build_nifty_context(
+        nifty_frame,
+        candidate_timestamps,
+        alignment_config.stale_data_seconds,
+        alignment_config.relative_strength_lookback_bars,
+    )
+    nifty_seconds = time.perf_counter() - nifty_started
+    support_context_started = time.perf_counter()
+    breadth_context, sector_context, context_io = build_support_context(
+        candidate_timestamps=candidate_timestamps,
+        feature_paths_by_symbol=feature_paths,
+        breadth_symbols=support_plan["breadthSymbols"],
+        sector_symbols=sorted(set(support_plan["sectorSymbols"]) | set(request.symbols)),
+        sector_by_symbol=alignment_config.sector_by_symbol,
+        config=alignment_config,
+    )
+    support_context_seconds = time.perf_counter() - support_context_started
+    stock_contexts = {
+        str(trade_id): context
+        for item in prepared
+        for trade_id, context in item["stockContexts"].items()
+    }
+    scoring_started = time.perf_counter()
+    evaluations: dict[str, dict[str, Any]] = {}
+    for result in baseline:
+        for trade in result.get("trades", []):
+            trade_id = str(trade.get("tradeId") or "")
+            timestamp = pd.Timestamp(trade.get("signalTimestamp") or trade["entryTimestamp"])
+            timestamp = timestamp.tz_localize(IST) if timestamp.tzinfo is None else timestamp.tz_convert(IST)
+            timestamp_key = timestamp.isoformat()
+            symbol = str(trade.get("symbol") or result.get("symbol") or "")
+            sector_name = alignment_config.sector_by_symbol.get(symbol)
+            sector = (
+                sector_context.get(candidate_sector_key(sector_name, timestamp), {"available": False, "mappingFound": True, "sector": sector_name, "observedMembers": 0})
+                if sector_name
+                else {"available": False, "mappingFound": False, "observedMembers": 0}
+            )
+            evaluations[trade_id] = evaluate_precomputed_market_alignment(
+                trade,
+                stock=stock_contexts.get(trade_id, {"available": False, "reasonCode": "MISSING_STOCK_DATA"}),
+                nifty=nifty_context.get(timestamp_key, {"available": False}),
+                breadth=breadth_context.get(timestamp_key, {"available": False, "observedSymbols": 0}),
+                sector=sector,
+                config=alignment_config,
+            )
+    scoring_seconds = time.perf_counter() - scoring_started
+    if cancel_event is not None and cancel_event.is_set():
+        raise BacktestCancelledError("Backtest cancellation requested")
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "PORTFOLIO_SELECTION",
+            "symbolsCompleted": len(request.symbols),
+            "symbolsTotal": len(request.symbols),
+            "candlesProcessed": sum(int(item.get("candles", 0)) for item in prepared),
+            "candidatesFound": total_candidates if "total_candidates" in locals() else sum(len(result.get("trades", [])) for result in baseline),
+            "acceptedSignals": sum(bool(item.get("allowed")) for item in evaluations.values()),
+            "workersActive": 1,
+        })
+    portfolio_started = time.perf_counter()
+    aligned = apply_market_alignment_chronologically(
+        baseline,
+        frames_by_symbol={},
+        nifty_frame=pd.DataFrame(),
+        config=alignment_config,
+        oi_mode=oi_mode,
+        precomputed_evaluations=evaluations,
+    )
+    portfolio_seconds = time.perf_counter() - portfolio_started
+    item_metrics = [item["metrics"] for item in [*prepared, *support_items]]
+    total_candidates = sum(len(result.get("trades", [])) for result in baseline)
+    performance = {
+        "optimized": True,
+        "featureCodeVersion": MARKET_FEATURE_CODE_VERSION,
+        "sharedContextCodeVersion": SHARED_CONTEXT_CODE_VERSION,
+        "workerCount": worker_count,
+        "supportWorkerCount": support_workers,
+        "totalCandles": sum(int(item.get("candles", 0)) for item in prepared),
+        "candidatesFound": total_candidates,
+        "databaseQueries": 0,
+        "databaseWrites": 0,
+        "candleFilesRead": sum(int(metric.get("candleReads", 0)) for metric in item_metrics),
+        "bytesRead": sum(int(metric.get("bytesRead", 0)) for metric in item_metrics) + int(context_io["featureBytesRead"]),
+        "peakMemoryBytes": max([_parent_peak_memory_bytes(), *(int(metric.get("peakMemoryBytes", 0)) for metric in item_metrics)], default=0),
+        "featureCacheHits": sum(bool(item.get("featureCacheHit")) for item in [*prepared, *support_items]),
+        "featureCacheMisses": sum(not bool(item.get("featureCacheHit")) for item in [*prepared, *support_items]),
+        "stagesSeconds": {
+            "requestValidation": 0.0,
+            "symbolResolution": 0.0,
+            "candleReads": round(sum(float(metric.get("candleReadSeconds", 0)) for metric in item_metrics), 6),
+            "candleConversionDeserialization": round(sum(float(metric.get("candleConversionSeconds", 0)) for metric in item_metrics), 6),
+            "indicatorCalculation": round(sum(float(metric.get("indicatorSeconds", 0)) for metric in item_metrics), 6),
+            "rsiCandidateDetection": round(sum(float(metric.get("candidateAndExitSeconds", 0)) for metric in item_metrics), 6),
+            "niftyContext": round(nifty_seconds, 6),
+            "sectorContext": round(support_context_seconds, 6),
+            "breadthContext": round(support_context_seconds, 6),
+            "relativeStrength": round(scoring_seconds, 6),
+            "liquidity": round(scoring_seconds, 6),
+            "oiContext": 0.0 if oi_mode == "OFF" else None,
+            "alignmentScoring": round(scoring_seconds, 6),
+            "exitSimulation": round(sum(float(metric.get("candidateAndExitSeconds", 0)) for metric in item_metrics), 6),
+            "portfolioSelection": round(portfolio_seconds, 6),
+            "resultSerialization": 0.0,
+            "databaseWrites": 0.0,
+            "tradingWorkerWall": round(trading_seconds, 6),
+            "supportWorkerWall": round(support_seconds, 6),
+            "featureCacheWrites": round(sum(float(metric.get("featureCacheWriteSeconds", 0)) for metric in item_metrics), 6),
+        },
+    }
+    return aligned, errors, support_errors, performance
+
+
 def run_market_aligned_backtest(
     request: BacktestRequest,
     store: HistoricalDataStore,
     now_ist: datetime | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     started_clock = time.perf_counter()
     started_at = datetime.now(IST)
@@ -2010,6 +2365,7 @@ def run_market_aligned_backtest(
                 Path.cwd() / ".runtime" / "market-aligned-empty-oi"
             )
 
+    symbol_resolution_started = time.perf_counter()
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
     if unavailable:
@@ -2021,6 +2377,31 @@ def run_market_aligned_backtest(
         breadth_file=breadth_path,
         breadth_sample_size=breadth_sample_size,
     )
+    symbol_resolution_seconds = time.perf_counter() - symbol_resolution_started
+    fingerprint: str | None = None
+    result_cache: BacktestResultCache | None = None
+    if isinstance(store, HistoricalDataStore):
+        fingerprint = _market_run_fingerprint(
+            request=request,
+            store=store,
+            support_plan=support_plan,
+            sector_path=sector_path,
+            breadth_path=breadth_path,
+            now=now,
+        )
+        cache_root_value = os.environ.get("BACKTEST_RESULT_CACHE_DIRECTORY")
+        cache_root = (
+            Path(cache_root_value).expanduser()
+            if cache_root_value
+            else store.cache_directory.parent / "result-cache"
+        )
+        if not cache_root.is_absolute():
+            raise ValueError("BACKTEST_RESULT_CACHE_DIRECTORY must be an absolute path")
+        result_cache = BacktestResultCache(cache_root)
+        if request.cachePolicy == "USE_CACHE":
+            cached_response = result_cache.load(fingerprint)
+            if cached_response is not None:
+                return cached_response
 
     warnings = [
         "Market-Aligned RSI Scalper is a separate research strategy; RSI Recovery Scalping is not modified by this run.",
@@ -2048,6 +2429,7 @@ def run_market_aligned_backtest(
         alignment_config.rvol_period,
         alignment_config.room_lookback_bars + 1,
     ) + 5
+    nifty_read_started = time.perf_counter()
     try:
         nifty_frame = store.candles(
             NIFTY_DISPLAY_NAME,
@@ -2061,109 +2443,119 @@ def run_market_aligned_backtest(
     except (DhanAPIError, ValueError, OSError, KeyError) as error:
         nifty_frame = pd.DataFrame()
         warnings.append(f"NIFTY completed-candle context unavailable: {error}")
+    nifty_read_seconds = time.perf_counter() - nifty_read_started
 
-    requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
-    worker_count = max(1, min(requested_workers, len(request.symbols), MAX_BACKTEST_WORKERS))
-
-    def prepare(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
-        try:
-            candles = store.candles(
-                symbol,
-                request.timeframe,
-                request.durationYears,
-                analysis_start,
-                now,
-                warmup_bars=warmup_bars,
-            )
-            observations = simulate_recovery_symbol(
-                symbol,
-                candles,
-                timeframe=request.timeframe,
-                config=recovery_config,
-                run_id=run_id,
-                analysis_start=analysis_start,
-            )
-            return {"symbol": symbol, "candles": candles, "observations": observations}, None
-        except (DhanAPIError, ValueError, OSError, KeyError) as error:
-            return None, {"symbol": symbol, "message": str(error)}
-
-    if worker_count == 1:
-        prepared_rows = [prepare(symbol) for symbol in request.symbols]
-    else:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=worker_count,
-            thread_name_prefix="market-aligned-symbol",
-        ) as executor:
-            prepared_rows = list(executor.map(prepare, request.symbols))
-    prepared = [item for item, _ in prepared_rows if item is not None]
-    errors = [error for _, error in prepared_rows if error is not None]
-    trading_frames_by_symbol = {
-        str(item["symbol"]): item["candles"] for item in prepared
-    }
-    support_symbols = [
-        symbol for symbol in support_plan["allSymbols"]
-        if symbol not in trading_frames_by_symbol
-    ]
-
-    def prepare_support(symbol: str) -> tuple[str, pd.DataFrame | None, str | None]:
-        try:
-            return symbol, store.candles(
-                symbol,
-                request.timeframe,
-                request.durationYears,
-                analysis_start,
-                now,
-                warmup_bars=warmup_bars,
-            ), None
-        except (DhanAPIError, ValueError, OSError, KeyError) as error:
-            return symbol, None, str(error)
-
-    support_worker_count = max(
-        1, min(requested_workers, len(support_symbols) or 1, MAX_BACKTEST_WORKERS)
+    optimized = (
+        isinstance(store, HistoricalDataStore)
+        and os.environ.get("MARKET_ALIGNED_OPTIMIZED", "true").casefold() not in {"0", "false", "no"}
     )
-    if support_worker_count == 1:
-        support_rows = [prepare_support(symbol) for symbol in support_symbols]
+    if optimized:
+        aligned, errors, support_errors, performance = _optimized_market_alignment_pipeline(
+            request=request,
+            store=store,
+            analysis_start=analysis_start,
+            now=now,
+            run_id=run_id,
+            recovery_config=recovery_config,
+            alignment_config=alignment_config,
+            support_plan=support_plan,
+            nifty_frame=nifty_frame,
+            oi_mode=oi_mode,
+            warmup_bars=warmup_bars,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+        worker_count = int(performance["workerCount"])
+        baseline_observations = aligned
+        breadth_frames = {
+            symbol: pd.DataFrame()
+            for symbol in support_plan["breadthSymbols"]
+            if symbol not in {row["symbol"] for row in support_errors}
+        }
+        sector_frames = {
+            symbol: pd.DataFrame()
+            for symbol in set(support_plan["sectorSymbols"]) | set(request.symbols)
+            if symbol not in {row["symbol"] for row in support_errors}
+        }
     else:
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=support_worker_count,
-            thread_name_prefix="market-support-symbol",
-        ) as executor:
-            support_rows = list(executor.map(prepare_support, support_symbols))
-    support_frames = {
-        symbol: frame for symbol, frame, error in support_rows
-        if frame is not None and error is None
-    }
-    support_errors = [
-        {"symbol": symbol, "message": error}
-        for symbol, frame, error in support_rows
-        if frame is None and error is not None
-    ]
+        requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
+        worker_count = max(1, min(requested_workers, len(request.symbols), MAX_BACKTEST_WORKERS))
+
+        def prepare(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+            try:
+                candles = store.candles(
+                    symbol, request.timeframe, request.durationYears, analysis_start, now,
+                    warmup_bars=warmup_bars,
+                )
+                observations = simulate_recovery_symbol(
+                    symbol, candles, timeframe=request.timeframe, config=recovery_config,
+                    run_id=run_id, analysis_start=analysis_start,
+                )
+                return {"symbol": symbol, "candles": candles, "observations": observations}, None
+            except (DhanAPIError, ValueError, OSError, KeyError) as error:
+                return None, {"symbol": symbol, "message": str(error)}
+
+        if worker_count == 1:
+            prepared_rows = [prepare(symbol) for symbol in request.symbols]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+                prepared_rows = list(executor.map(prepare, request.symbols))
+        prepared = [item for item, _ in prepared_rows if item is not None]
+        errors = [error for _, error in prepared_rows if error is not None]
+        trading_frames_by_symbol = {str(item["symbol"]): item["candles"] for item in prepared}
+        support_symbols = [symbol for symbol in support_plan["allSymbols"] if symbol not in trading_frames_by_symbol]
+
+        def prepare_support(symbol: str) -> tuple[str, pd.DataFrame | None, str | None]:
+            try:
+                return symbol, store.candles(
+                    symbol, request.timeframe, request.durationYears, analysis_start, now,
+                    warmup_bars=warmup_bars,
+                ), None
+            except (DhanAPIError, ValueError, OSError, KeyError) as error:
+                return symbol, None, str(error)
+
+        support_worker_count = max(1, min(requested_workers, len(support_symbols) or 1, MAX_BACKTEST_WORKERS))
+        if support_worker_count == 1:
+            support_rows = [prepare_support(symbol) for symbol in support_symbols]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=support_worker_count) as executor:
+                support_rows = list(executor.map(prepare_support, support_symbols))
+        support_frames = {symbol: frame for symbol, frame, error in support_rows if frame is not None and error is None}
+        support_errors = [
+            {"symbol": symbol, "message": error}
+            for symbol, frame, error in support_rows if frame is None and error is not None
+        ]
+        frames_by_symbol = {**support_frames, **trading_frames_by_symbol}
+        breadth_frames = {
+            symbol: frames_by_symbol[symbol]
+            for symbol in support_plan["breadthSymbols"] if symbol in frames_by_symbol
+        }
+        sector_frames = {
+            symbol: frames_by_symbol[symbol]
+            for symbol in set(support_plan["sectorSymbols"]) | set(request.symbols)
+            if symbol in frames_by_symbol
+        }
+        baseline_observations = [item["observations"] for item in prepared]
+        aligned = apply_market_alignment_chronologically(
+            baseline_observations,
+            frames_by_symbol=frames_by_symbol,
+            nifty_frame=nifty_frame,
+            config=alignment_config,
+            breadth_frames=breadth_frames,
+            sector_frames=sector_frames,
+            oi_mode=oi_mode,
+        ) if prepared else []
+        performance = {
+            "optimized": False,
+            "workerCount": worker_count,
+            "databaseQueries": 0,
+            "databaseWrites": 0,
+        }
     if support_errors:
         warnings.append(
             f"{len(support_errors)} supporting-market symbol(s) could not be loaded; "
             "candidate diagnostics identify any resulting coverage failure."
         )
-    frames_by_symbol = {**support_frames, **trading_frames_by_symbol}
-    breadth_frames = {
-        symbol: frames_by_symbol[symbol]
-        for symbol in support_plan["breadthSymbols"]
-        if symbol in frames_by_symbol
-    }
-    sector_frames = {
-        symbol: frames_by_symbol[symbol]
-        for symbol in set(support_plan["sectorSymbols"]) | set(request.symbols)
-        if symbol in frames_by_symbol
-    }
-    baseline_observations = [item["observations"] for item in prepared]
-    aligned = apply_market_alignment_chronologically(
-        baseline_observations,
-        frames_by_symbol=frames_by_symbol,
-        nifty_frame=nifty_frame,
-        config=alignment_config,
-        breadth_frames=breadth_frames,
-        sector_frames=sector_frames,
-        oi_mode=oi_mode,
-    ) if prepared else []
     quality_by_symbol = {
         str(result.get("symbol") or ""): result.get("qualityScore")
         for result in baseline_observations
@@ -2216,9 +2608,17 @@ def run_market_aligned_backtest(
     })
     completed_at = datetime.now(IST)
     runtime_seconds = time.perf_counter() - started_clock
+    performance.setdefault("stagesSeconds", {})
+    performance["stagesSeconds"]["symbolResolution"] = round(symbol_resolution_seconds, 6)
+    performance["stagesSeconds"]["niftyCandleRead"] = round(nifty_read_seconds, 6)
+    performance["totalRuntimeSeconds"] = _finite(runtime_seconds, 6)
+    performance["timePerSymbolSeconds"] = _finite(
+        runtime_seconds / max(len(results), 1), 6
+    )
+    performance["symbolsProcessed"] = len(results)
     data_from = min((result["firstCandle"] for result in results), default=None)
     data_to = max((result["lastCandle"] for result in results), default=None)
-    return {
+    response = {
         "metadata": {
             "runId": run_id,
             "strategyMode": MARKET_ALIGNED_STRATEGY_KEY,
@@ -2241,6 +2641,10 @@ def run_market_aligned_backtest(
             "symbolsFailed": len(errors),
             "workerCount": worker_count,
             "runtimeSeconds": _finite(runtime_seconds, 4),
+            "performance": performance,
+            "cachedResult": False,
+            "originalRunTimestamp": None,
+            "fingerprint": fingerprint,
             "timezone": "Asia/Kolkata",
             "executionModel": recovery_config.execution_model,
             "backtestSemantics": "SIGNAL_OBSERVATION",
@@ -2284,6 +2688,19 @@ def run_market_aligned_backtest(
         "errors": errors,
         "warnings": warnings,
     }
+    serialization_started = time.perf_counter()
+    json.dumps(response, sort_keys=True, separators=(",", ":"), default=str)
+    performance["stagesSeconds"]["resultSerialization"] = round(
+        time.perf_counter() - serialization_started, 6
+    )
+    if result_cache is not None and fingerprint is not None:
+        cache_write_started = time.perf_counter()
+        cache_bytes = result_cache.save(fingerprint, response)
+        performance["resultCacheWriteBytes"] = cache_bytes
+        performance["stagesSeconds"]["resultCacheWrite"] = round(
+            time.perf_counter() - cache_write_started, 6
+        )
+    return response
 
 
 def _comparison_trade_pnl(trade: dict[str, Any]) -> float | None:
@@ -2669,6 +3086,7 @@ def create_store() -> HistoricalDataStore:
 
 app = FastAPI(title="OpenDelta Backtest API", docs_url=None, redoc_url=None)
 _run_lock = asyncio.Lock()
+_backtest_job_service = BacktestJobService()
 _store: HistoricalDataStore | None = None
 _feature_snapshot_lock = threading.Lock()
 _feature_snapshot_cache: tuple[int, pd.DataFrame] | None = None
@@ -3317,6 +3735,48 @@ async def backtest(request: BacktestRequest) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
 
+@app.post("/backtest/jobs")
+def start_backtest_job(request: BacktestRequest) -> dict[str, Any]:
+    if request.strategyMode != MARKET_ALIGNED_STRATEGY_KEY:
+        raise HTTPException(
+            status_code=422,
+            detail="Asynchronous progress jobs currently apply to Market-Aligned RSI Scalper runs.",
+        )
+    store = get_store()
+
+    def runner(
+        progress: Callable[[dict[str, Any]], None],
+        cancel_event: threading.Event,
+    ) -> dict[str, Any]:
+        return run_market_aligned_backtest(
+            request,
+            store,
+            progress_callback=progress,
+            cancel_event=cancel_event,
+        )
+
+    return _backtest_job_service.start(
+        symbols_total=len(request.symbols),
+        runner=runner,
+    )
+
+
+@app.get("/backtest/jobs/{job_id}")
+def get_backtest_job(job_id: str) -> dict[str, Any]:
+    try:
+        return _backtest_job_service.get(job_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Backtest job was not found") from error
+
+
+@app.delete("/backtest/jobs/{job_id}")
+def cancel_backtest_job(job_id: str) -> dict[str, Any]:
+    try:
+        return _backtest_job_service.cancel(job_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Backtest job was not found") from error
+
+
 @app.post("/backtest/compare-oi-filter")
 async def compare_oi_filter(request: OiFilterComparisonRequest) -> dict[str, Any]:
     async with _run_lock:
@@ -3368,3 +3828,4 @@ def stop_live_signal_runtime() -> None:
         _live_signal_engine.stop()
     if _market_data_refresh_service is not None:
         _market_data_refresh_service.shutdown()
+    _backtest_job_service.shutdown()

@@ -510,6 +510,7 @@ def simulate_recovery_symbol(
     config: RecoveryConfig,
     run_id: str,
     analysis_start: datetime | None = None,
+    indicator_frame: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     issues = validate_candles(candles)
     if issues:
@@ -518,7 +519,12 @@ def simulate_recovery_symbol(
     if len(candles) < warmup + 2:
         raise ValueError("Not enough candles to calculate recovery indicators")
 
-    data = calculate_recovery_indicators(candles, config)
+    # Market-Aligned workers calculate this deterministic frame once and reuse it
+    # for candidate detection and candidate-only feature extraction.  Legacy
+    # callers keep the original path and therefore retain byte-for-byte results.
+    data = indicator_frame if indicator_frame is not None else calculate_recovery_indicators(candles, config)
+    if not data.index.equals(candles.index):
+        raise ValueError("Precomputed recovery indicators must match candle timestamps")
     start_position = 0
     if analysis_start is not None:
         start_stamp = pd.Timestamp(analysis_start)

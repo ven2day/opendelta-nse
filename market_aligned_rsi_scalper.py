@@ -624,6 +624,7 @@ def apply_market_alignment_chronologically(
     breadth_frames: Mapping[str, pd.DataFrame] | None = None,
     sector_frames: Mapping[str, pd.DataFrame] | None = None,
     oi_mode: str = "OFF",
+    precomputed_evaluations: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Filter existing RSI candidates without creating a BUY candidate."""
     output = [copy.deepcopy(dict(result)) for result in results]
@@ -642,7 +643,13 @@ def apply_market_alignment_chronologically(
         )
     candidates.sort(key=lambda row: (row[0], row[1], row[2]))
     for _, symbol, _, result_index, trade in candidates:
-        evaluation = evaluate_market_alignment(
+        trade_id = str(trade.get("tradeId") or "")
+        cached_evaluation = (
+            precomputed_evaluations.get(trade_id)
+            if precomputed_evaluations is not None
+            else None
+        )
+        evaluation = dict(cached_evaluation) if cached_evaluation is not None else evaluate_market_alignment(
             trade,
             symbol_frame=frames_by_symbol.get(symbol, pd.DataFrame()),
             nifty_frame=nifty_frame,

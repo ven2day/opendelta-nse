@@ -170,3 +170,30 @@ def test_completed_result_cache_is_atomic_and_marks_reuse(tmp_path: Path) -> Non
     assert loaded["results"] == response["results"]
     assert loaded["metadata"]["cachedResult"] is True
     assert loaded["metadata"]["originalRunTimestamp"] == response["metadata"]["completedAt"]
+
+
+def test_support_worker_builds_then_reuses_local_feature_cache(tmp_path: Path) -> None:
+    recovery, market = configs()
+    cache_directory = tmp_path / "raw"
+    cache_directory.mkdir()
+    source = cache_directory / "TEST-5-1y.csv.gz"
+    candles = trend_frame(step=0.04, periods=80)
+    candles.to_csv(source, index_label="Timestamp", compression="gzip")
+    task = {
+        "symbol": "TEST",
+        "cacheDirectory": str(cache_directory),
+        "featureCacheDirectory": str(tmp_path / "features"),
+        "recoveryConfig": recovery,
+        "marketConfig": market,
+        "analysisStart": candles.index[0].to_pydatetime(),
+        "now": (candles.index[-1] + pd.Timedelta(minutes=5)).to_pydatetime(),
+        "timeframe": "5m",
+        "durationYears": 1,
+        "warmupBars": 25,
+        "rawCacheTtlSeconds": 3_600,
+    }
+    cold = performance.prepare_support_symbol_task(task)
+    warm = performance.prepare_support_symbol_task(task)
+    assert Path(cold["featurePath"]).is_file()
+    assert cold["featureCacheHit"] is False
+    assert warm["featureCacheHit"] is True

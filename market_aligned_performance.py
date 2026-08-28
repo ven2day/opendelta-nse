@@ -616,8 +616,6 @@ def prepare_support_symbol_task(task: Mapping[str, Any]) -> dict[str, Any]:
             analysis_start=analysis_start, now=now, warmup_bars=warmup_bars,
             max_source_age_seconds=int(task.get("rawCacheTtlSeconds", 3_600)),
         )
-    else:
-        conversion_seconds = 0.0
         cached = feature_cache.build(
             symbol=symbol,
             timeframe=timeframe,
@@ -632,6 +630,8 @@ def prepare_support_symbol_task(task: Mapping[str, Any]) -> dict[str, Any]:
             source_bytes_read=source_bytes,
             source_read_seconds=read_seconds,
         )
+    else:
+        conversion_seconds = 0.0
     return {
         "symbol": symbol,
         "featurePath": str(cached.path),

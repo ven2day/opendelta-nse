@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatGlobalPriceRange, isPriceInGlobalRange, parseGlobalSettings, type GlobalPriceRange } from "../global-settings-shared";
 
 type Tab = "live" | "watch" | "paper" | "history";
 type SortKey = "signalTimestamp" | "rank" | "qualityScore" | "goodRate" | "medianTargetMinutes" | "atrPct" | "volumeRatio" | "distanceToResistancePct";
@@ -330,7 +331,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
   </article>;
 }
 
-export function SignalsWorkspace({ userName, signOutHref }: { userName: string; signOutHref: string }) {
+export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRange }: { userName: string; signOutHref: string; initialGlobalPriceRange: GlobalPriceRange }) {
   const [tab, setTab] = useState<Tab>("live");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>([]);
@@ -354,20 +355,23 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
   const [confirmationFilter, setConfirmationFilter] = useState("ALL");
   const [rankFilter, setRankFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("signalTimestamp");
+  const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const seenSignals = useRef<Set<string>>(new Set());
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const [signalResponse, settingsResponse, paperResponse] = await Promise.all([
+      const [signalResponse, settingsResponse, paperResponse, globalSettingsResponse] = await Promise.all([
         fetch("/api/live-signals?action=signals", { cache: "no-store" }),
         fetch("/api/live-signals?action=settings", { cache: "no-store" }),
         fetch("/api/live-signals?action=paper", { cache: "no-store" }),
+        fetch("/api/global-settings", { cache: "no-store" }),
       ]);
-      const [signalBody, settingsBody, paperBody] = await Promise.all([payload(signalResponse), payload(settingsResponse), payload(paperResponse)]);
+      const [signalBody, settingsBody, paperBody, globalSettingsBody] = await Promise.all([payload(signalResponse), payload(settingsResponse), payload(paperResponse), payload(globalSettingsResponse)]);
       if (!signalResponse.ok) throw new Error(signalBody.detail ?? "Unable to load live signals");
       if (!settingsResponse.ok) throw new Error(settingsBody.detail ?? "Unable to load signal settings");
       if (!paperResponse.ok) throw new Error(paperBody.detail ?? "Unable to load paper positions");
+      if (globalSettingsResponse.ok) setGlobalPriceRange(parseGlobalSettings(globalSettingsBody).priceRange);
       const incoming: Signal[] = signalBody.signals ?? [];
       if (seenSignals.current.size) {
         const fresh = incoming.filter((item) => !seenSignals.current.has(item.signalId));
@@ -428,7 +432,8 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
 
   const visibleSignals = useMemo(() => {
     const base = tab === "watch" ? signals.filter((item) => item.manualAction === "WATCH") : tab === "live" ? signals.filter((item) => item.manualAction === "NO_ACTION") : signals;
-    return base.filter((item) => rangeFilter === "ALL" || item.buyRangeStatus === rangeFilter)
+    return base.filter((item) => isPriceInGlobalRange(item.currentPrice ?? item.signalClose, globalPriceRange))
+      .filter((item) => rangeFilter === "ALL" || item.buyRangeStatus === rangeFilter)
       .filter((item) => confirmationFilter === "ALL" || item.confirmationScore === Number(confirmationFilter))
       .filter((item) => {
         const rank = item.historicalContext.rank ?? 9999;
@@ -444,7 +449,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
         if (sortKey === "rank" || sortKey === "medianTargetMinutes") return Number(a ?? Infinity) - Number(b ?? Infinity);
         return Number(b ?? -Infinity) - Number(a ?? -Infinity);
       });
-  }, [confirmationFilter, rangeFilter, rankFilter, signals, sortKey, tab]);
+  }, [confirmationFilter, globalPriceRange, rangeFilter, rankFilter, signals, sortKey, tab]);
 
   const initials = userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const connected = status.connectionStatus === "CONNECTED";
@@ -452,7 +457,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
   return <div className="site-shell backtest-shell signals-shell">
     <header className="global-header"><div className="header-inner">
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
-      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a></nav>
+      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
       <div className="header-actions"><div className="user-chip"><div className="avatar">{initials}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
     </div></header>
 
@@ -485,6 +490,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
       </section>
 
       <nav className="signals-tabs" aria-label="Signals views"><button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}>Live signals</button><button className={tab === "watch" ? "active" : ""} onClick={() => setTab("watch")}>Watch</button><button className={tab === "paper" ? "active" : ""} onClick={() => setTab("paper")}>Paper positions</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button><a href="/signals?view=universe">Universe</a></nav>
+      {tab !== "paper" && <a className="global-range-badge signals-global-range" href="/admin">Global price: {formatGlobalPriceRange(globalPriceRange)}</a>}
 
       {tab !== "paper" && <section className="signals-filterbar"><select aria-label="Buy range status" value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}><option value="ALL">All range states</option><option value="IN_RANGE">In range</option><option value="ABOVE_RANGE">Above range</option><option value="BELOW_RANGE">Below range</option></select><select aria-label="Confirmation score" value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)}><option value="ALL">All confirmations</option><option value="2">2/3 confirmations</option><option value="3">3/3 confirmations</option></select><select aria-label="Historical rank" value={rankFilter} onChange={(event) => setRankFilter(event.target.value)}><option value="ALL">All historical ranks</option><option value="1-50">Rank 1–50</option><option value="51-100">Rank 51–100</option><option value="101-200">Rank 101–200</option><option value="201-300">Rank 201–300</option></select><select aria-label="Sort signals" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}><option value="signalTimestamp">Newest first</option><option value="rank">Historical rank</option><option value="qualityScore">Quality</option><option value="goodRate">GOOD rate</option><option value="medianTargetMinutes">Median target time</option><option value="atrPct">ATR</option><option value="volumeRatio">Volume ratio</option><option value="distanceToResistancePct">Distance to resistance</option></select><span>{visibleSignals.length} observations</span></section>}
 

@@ -28,6 +28,12 @@ from atr_exit_optimizer import (
     AtrOptimizationGrid,
     evaluate_atr_exit_grid,
 )
+from application_settings import (
+    ApplicationSettingsRepository,
+    DEFAULT_MAXIMUM_PRICE as GLOBAL_DEFAULT_MAXIMUM_PRICE,
+    filter_symbols_by_price,
+    prices_by_symbol,
+)
 from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
 from live_signals import (
     LiveSignalEngine,
@@ -139,6 +145,17 @@ RSI_RECOVERY_STRATEGY_NAME = "RSI Recovery Scalping"
 RSI_RECOVERY_DESCRIPTION = (
     "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic."
 )
+
+
+class GlobalPriceSettingsRequest(BaseModel):
+    minimumPrice: float = Field(ge=0, le=GLOBAL_DEFAULT_MAXIMUM_PRICE)
+    maximumPrice: float = Field(gt=0, le=GLOBAL_DEFAULT_MAXIMUM_PRICE)
+
+    @model_validator(mode="after")
+    def validate_price_range(self) -> "GlobalPriceSettingsRequest":
+        if self.minimumPrice >= self.maximumPrice:
+            raise ValueError("Minimum price must be less than maximum price")
+        return self
 
 
 @dataclass(frozen=True)
@@ -2416,6 +2433,7 @@ _live_signal_engine: LiveSignalEngine | None = None
 _market_data_refresh_service: MarketDataRefreshService | None = None
 _oi_repository: OiRegimeRepository | None = None
 _backtest_history_repository: BacktestHistoryRepository | None = None
+_application_settings_repository: ApplicationSettingsRepository | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -2458,6 +2476,19 @@ def get_backtest_history_repository() -> BacktestHistoryRepository:
             raise RuntimeError("BACKTEST_HISTORY_DIR must be an absolute path")
         _backtest_history_repository = BacktestHistoryRepository(root, limit=HISTORY_LIMIT)
     return _backtest_history_repository
+
+
+def get_application_settings_repository() -> ApplicationSettingsRepository:
+    global _application_settings_repository
+    if _application_settings_repository is None:
+        default_root = Path(
+            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")
+        ).expanduser() / "application-settings"
+        root = Path(os.environ.get("APPLICATION_SETTINGS_DIR", str(default_root))).expanduser()
+        if not root.is_absolute():
+            raise RuntimeError("APPLICATION_SETTINGS_DIR must be an absolute path")
+        _application_settings_repository = ApplicationSettingsRepository(root)
+    return _application_settings_repository
 
 
 def get_universe_service() -> UniverseService:
@@ -2808,14 +2839,61 @@ async def add_market_symbol(request: MarketSymbolRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+@app.get("/application-settings")
+def application_settings() -> dict[str, object]:
+    try:
+        return get_application_settings_repository().get().public()
+    except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
+        raise HTTPException(status_code=503, detail="Application settings are temporarily unavailable") from error
+
+
+@app.put("/application-settings")
+def update_application_settings(request: GlobalPriceSettingsRequest) -> dict[str, object]:
+    try:
+        return get_application_settings_repository().update(
+            request.minimumPrice,
+            request.maximumPrice,
+        ).public()
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        raise HTTPException(status_code=503, detail="Application settings are temporarily unavailable") from error
+
+
 @app.get("/market-data/symbols")
 def list_market_symbols() -> dict[str, Any]:
     """Return the same managed symbol registry used by refreshes and backtests."""
     try:
         symbols_file = Path(os.environ.get("SYMBOLS_FILE", DEFAULT_SYMBOLS_FILE)).expanduser()
         symbols = load_symbols(symbols_file)
-        return {"symbols": symbols, "symbolCount": len(symbols)}
-    except (OSError, ValueError) as error:
+        settings = get_application_settings_repository().get()
+        filter_applied = not (
+            settings.minimum_price == 0
+            and settings.maximum_price == GLOBAL_DEFAULT_MAXIMUM_PRICE
+        )
+        missing_price_count = 0
+        filtered = list(symbols)
+        if filter_applied:
+            market_data = Path(
+                os.environ.get(
+                    "LIVE_MARKET_DATA_FILE",
+                    "/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv",
+                )
+            ).expanduser()
+            filtered, missing_price_count = filter_symbols_by_price(
+                symbols,
+                prices_by_symbol(market_data),
+                settings,
+            )
+        return {
+            "symbols": filtered,
+            "symbolCount": len(filtered),
+            "totalSymbolCount": len(symbols),
+            "priceRange": settings.public()["priceRange"],
+            "priceFilterApplied": filter_applied,
+            "missingPriceCount": missing_price_count,
+        }
+    except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 

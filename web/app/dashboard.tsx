@@ -13,6 +13,7 @@ import {
   Radio,
   RefreshCw,
   Search,
+  Settings2,
   Sun,
   TrendingDown,
   TrendingUp,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseMarketCsv, type StockRow } from "./market-data";
+import { formatGlobalPriceRange, isPriceInGlobalRange, type GlobalPriceRange } from "./global-settings-shared";
 
 export type { StockRow } from "./market-data";
 
@@ -29,6 +31,7 @@ type DashboardProps = {
   generatedAt: string | null;
   userName: string;
   signOutHref: string;
+  globalPriceRange: GlobalPriceRange;
 };
 
 type BandKey = "all" | "20-30" | "30-40" | "40-50" | "50-plus";
@@ -324,6 +327,7 @@ export function Dashboard({
   generatedAt,
   userName,
   signOutHref,
+  globalPriceRange,
 }: DashboardProps) {
   const [marketStocks, setMarketStocks] = useState(stocks);
   const [marketGeneratedAt, setMarketGeneratedAt] = useState(generatedAt);
@@ -485,18 +489,23 @@ export function Dashboard({
     }
   };
 
+  const globalStocks = useMemo(
+    () => marketStocks.filter((stock) => isPriceInGlobalRange(stock.entry_price, globalPriceRange)),
+    [globalPriceRange, marketStocks],
+  );
+
   const bandCounts = useMemo(
     () =>
       Object.fromEntries(
         bands.map(({ key }) => [
           key,
-          marketStocks.filter((stock) => inBand(stock.rsi_14, key)).length,
+          globalStocks.filter((stock) => inBand(stock.rsi_14, key)).length,
         ]),
       ) as Record<BandKey, number>,
-    [marketStocks],
+    [globalStocks],
   );
 
-  const priceLimits = useMemo(() => getPriceLimits(marketStocks), [marketStocks]);
+  const priceLimits = useMemo(() => getPriceLimits(globalStocks), [globalStocks]);
   const selectedMinPrice = priceFromSlider(priceSliderMin, priceLimits.min, priceLimits.max);
   const selectedMaxPrice = priceFromSlider(priceSliderMax, priceLimits.min, priceLimits.max);
   const refreshTimestamp = refreshStatus.lastRefreshTimestamp ?? marketGeneratedAt;
@@ -505,7 +514,7 @@ export function Dashboard({
 
   const filteredStocks = useMemo(() => {
     const normalizedQuery = query.trim().toUpperCase();
-    const filtered = marketStocks.filter((stock) => {
+    const filtered = globalStocks.filter((stock) => {
       const matchesBand = inBand(stock.rsi_14, band);
       const matchesSearch =
         normalizedQuery.length === 0 ||
@@ -542,7 +551,7 @@ export function Dashboard({
     });
   }, [
     band,
-    marketStocks,
+    globalStocks,
     movement,
     query,
     rsiSliderMax,
@@ -593,6 +602,10 @@ export function Dashboard({
             <a className="nav-item" href="/signals">
               <Radio size={16} />
               Signals
+            </a>
+            <a className="nav-item" href="/admin">
+              <Settings2 size={16} />
+              Admin
             </a>
           </nav>
 
@@ -698,6 +711,9 @@ export function Dashboard({
         <section className="table-panel" id="market-table">
           <div className="filters-row">
             <div className="filter-controls">
+              <a className="global-range-badge" href="/admin" title="Change global price range">
+                Global: {formatGlobalPriceRange(globalPriceRange)}
+              </a>
               <div className="filter-group">
                 <span className="filter-label">Movement</span>
                 <div className="segmented" aria-label="Price movement filter">

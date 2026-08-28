@@ -12,6 +12,7 @@ import {
   Pin,
   Radio,
   RefreshCw,
+  Settings2,
   TrendingUp,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -374,6 +375,7 @@ export function LiveUniverse({ userName, signOutHref }: { userName: string; sign
         <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
         <a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a>
         <a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a>
+        <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>
       </nav>
       <div className="header-actions"><div className="user-chip"><div className="avatar">{initials}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
     </div></header>

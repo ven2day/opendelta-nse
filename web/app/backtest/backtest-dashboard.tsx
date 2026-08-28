@@ -16,6 +16,7 @@ import {
   Radio,
   RotateCcw,
   Search,
+  Settings2,
   Square,
   Sun,
   TrendingUp,
@@ -45,6 +46,7 @@ import {
 } from "./strategy-parameters";
 import { JsonConfigurationEditor } from "./json-configuration-editor";
 import { createJsonConfiguration } from "./json-configuration.mjs";
+import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
 import {
   backtestHistorySummary,
   migrateBrowserBacktestHistory,
@@ -61,6 +63,7 @@ type BacktestDashboardProps = {
   symbols: string[];
   userName: string;
   signOutHref: string;
+  globalPriceRange: GlobalPriceRange;
 };
 
 type ChartPoint = {
@@ -623,10 +626,11 @@ function PerformanceChart({
   );
 }
 
-export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDashboardProps) {
+export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
+  const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const [symbolRegistryError, setSymbolRegistryError] = useState<string | null>(null);
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>(symbols.includes("LUPIN") ? ["LUPIN"] : symbols.slice(0, 1));
   const [useAllSymbols, setUseAllSymbols] = useState(false);
@@ -998,7 +1002,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     const loadSymbols = () => {
       void fetch("/api/market-symbols", { cache: "no-store" })
         .then(async (result) => {
-          const payload = JSON.parse(await result.text()) as { symbols?: unknown; detail?: string };
+          const payload = JSON.parse(await result.text()) as { symbols?: unknown; detail?: string; priceRange?: GlobalPriceRange };
           if (!result.ok) throw new Error(payload.detail ?? "The live symbol list is unavailable");
           if (!Array.isArray(payload.symbols)) throw new Error("The live symbol list is invalid");
           const next = Array.from(new Set(payload.symbols.filter((item): item is string => typeof item === "string" && item.length > 0)))
@@ -1006,6 +1010,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           if (!next.length) throw new Error("The live symbol list is empty");
           if (active) {
             setAvailableSymbols(next);
+            if (payload.priceRange && Number.isFinite(payload.priceRange.minimumPrice) && Number.isFinite(payload.priceRange.maximumPrice)) {
+              setGlobalPriceRange(payload.priceRange);
+            }
+            setSelectedSymbols((current) => {
+              const available = current.filter((symbol) => next.includes(symbol));
+              return available.length ? available : next.slice(0, 1);
+            });
             setSymbolRegistryError(null);
           }
         })
@@ -1734,6 +1745,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
             <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
             <a className="nav-item active" href="/backtest" aria-current="page"><TrendingUp size={16} />Backtest</a>
             <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
+            <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>
           </nav>
           <div className="header-actions">
             <div className="snapshot-pill"><LineChart size={15} /><span className="status-dot" /><div><strong>Dhan history</strong><span>IST candles</span></div></div>
@@ -1791,6 +1803,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
         <form className="backtest-controls" onSubmit={submit} noValidate>
           <div className="control-block symbol-control">
             <label>Symbol universe <span>{useAllSymbols ? `${availableSymbols.length} symbols` : `${selectedSymbols.length}/10 selected`}</span></label>
+            <a className="global-range-badge" href="/admin">Global: {formatGlobalPriceRange(globalPriceRange)}</a>
             <div className="universe-toggle segmented backtest-segmented">
               <button type="button" className={!useAllSymbols ? "active" : ""} onClick={() => setUseAllSymbols(false)}>Selected symbols</button>
               <button type="button" className={useAllSymbols ? "active" : ""} onClick={() => { setUseAllSymbols(true); setSymbolMenuOpen(false); }}>All {availableSymbols.length} symbols</button>

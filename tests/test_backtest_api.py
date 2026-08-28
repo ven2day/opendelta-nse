@@ -17,12 +17,15 @@ from backtest_api import (
     LiveUniverseRequest,
     LiveUniverseSaveRequest,
     MarketSymbolRequest,
+    GlobalPriceSettingsRequest,
     MAX_SYMBOLS_PER_RUN,
     PaperBuyRequest,
     PaperCloseRequest,
     app,
     _entry_signal,
     list_market_symbols,
+    application_settings,
+    update_application_settings,
     prepare_candles,
     run_backtest,
     simulate_symbol,
@@ -324,6 +327,15 @@ class RequestTests(unittest.TestCase):
         }
         self.assertTrue({"GET", "POST"}.issubset(symbol_methods))
 
+    def test_global_settings_api_surface_is_registered(self) -> None:
+        methods = {
+            method
+            for route in app.routes
+            if route.path == "/application-settings"
+            for method in (route.methods or set())
+        }
+        self.assertTrue({"GET", "PUT"}.issubset(methods))
+
     def test_account_backtest_history_api_surface_is_registered(self) -> None:
         methods = {
             (route.path, method)
@@ -357,12 +369,35 @@ class RequestTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             symbols_file = Path(directory) / "symbols.csv"
             symbols_file.write_text("symbol\nALPHA\nBETA\nGAMMA\n", encoding="utf-8")
-            with patch.dict("os.environ", {"SYMBOLS_FILE": str(symbols_file)}):
-                response = list_market_symbols()
-        self.assertEqual(response, {
-            "symbols": ["ALPHA", "BETA", "GAMMA"],
-            "symbolCount": 3,
-        })
+            with patch.dict("os.environ", {"SYMBOLS_FILE": str(symbols_file), "APPLICATION_SETTINGS_DIR": directory}):
+                with patch("backtest_api._application_settings_repository", None):
+                    response = list_market_symbols()
+        self.assertEqual(response["symbols"], ["ALPHA", "BETA", "GAMMA"])
+        self.assertEqual(response["symbolCount"], 3)
+        self.assertEqual(response["totalSymbolCount"], 3)
+        self.assertFalse(response["priceFilterApplied"])
+
+    def test_market_symbol_list_applies_saved_global_price_range(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            symbols_file = root / "symbols.csv"
+            market_file = root / "market.csv"
+            symbols_file.write_text("symbol\nLOW\nMIN\nMAX\nHIGH\nMISSING\n", encoding="utf-8")
+            market_file.write_text("symbol,entry_price\nLOW,109\nMIN,110\nMAX,3000\nHIGH,3001\n", encoding="utf-8")
+            environment = {
+                "SYMBOLS_FILE": str(symbols_file),
+                "LIVE_MARKET_DATA_FILE": str(market_file),
+                "APPLICATION_SETTINGS_DIR": str(root / "settings"),
+            }
+            with patch.dict("os.environ", environment):
+                with patch("backtest_api._application_settings_repository", None):
+                    update_application_settings(GlobalPriceSettingsRequest(minimumPrice=110, maximumPrice=3000))
+                    response = list_market_symbols()
+                    current = application_settings()
+        self.assertEqual(response["symbols"], ["MIN", "MAX"])
+        self.assertEqual(response["missingPriceCount"], 1)
+        self.assertTrue(response["priceFilterApplied"])
+        self.assertEqual(current["priceRange"], {"minimumPrice": 110.0, "maximumPrice": 3000.0})
 
     def test_market_symbol_request_normalizes_nse_suffix(self) -> None:
         self.assertEqual(MarketSymbolRequest(symbol=" alpha.ns ").symbol, "ALPHA")

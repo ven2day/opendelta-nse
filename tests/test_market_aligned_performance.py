@@ -34,11 +34,15 @@ def configs() -> tuple[RecoveryConfig, MarketAlignedConfig]:
     return recovery, market
 
 
-def precomputed_evaluation(tmp_path: Path) -> tuple[dict[str, object], dict[str, object]]:
+def precomputed_evaluation(
+    tmp_path: Path, *, nifty_volume_zero: bool = False,
+) -> tuple[dict[str, object], dict[str, object]]:
     recovery, market = configs()
     stock = trend_frame(step=0.20)
     peer = trend_frame(step=0.08)
     nifty = trend_frame(step=0.05)
+    if nifty_volume_zero:
+        nifty["Volume"] = 0
     trade = candidate(stock)
     timestamps = pd.DatetimeIndex([stock.index[-1]])
     stock_features = performance.calculate_market_feature_frame(stock, recovery, market)
@@ -104,6 +108,15 @@ def test_vectorized_market_features_preserve_indicator_and_candidate_results() -
 def test_precomputed_candidate_evaluation_is_exact(tmp_path: Path) -> None:
     optimized, canonical = precomputed_evaluation(tmp_path)
     assert optimized == canonical
+
+
+def test_nifty_return_remains_available_when_nifty_vwap_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    optimized, canonical = precomputed_evaluation(tmp_path, nifty_volume_zero=True)
+    assert optimized == canonical
+    assert optimized["niftyTrend"]["available"] is False
+    assert optimized["niftyReturnPct"] is not None
 
 
 def test_precomputed_apply_path_is_exact(tmp_path: Path) -> None:

@@ -26,7 +26,7 @@ from market_aligned_rsi_scalper import (
     REASON_MESSAGES,
     MarketAlignedConfig,
 )
-from nifty_oi_regime import NiftyOiConfig
+from nifty_oi_regime import NiftyOiConfig, score_spot_trend
 from recovery_backtest import (
     RecoveryConfig,
     calculate_recovery_indicators,
@@ -695,54 +695,25 @@ def build_nifty_context(
     data = nifty_frame.copy().sort_index()
     data.index = data.index.tz_localize(IST) if data.index.tz is None else data.index.tz_convert(IST)
     close = pd.to_numeric(data["Close"], errors="coerce").astype(float)
-    high = pd.to_numeric(data["High"], errors="coerce").astype(float)
-    low = pd.to_numeric(data["Low"], errors="coerce").astype(float)
-    volume = pd.to_numeric(data["Volume"], errors="coerce").fillna(0.0).astype(float)
-    ema9 = close.ewm(span=9, adjust=False, min_periods=9).mean()
-    ema20 = close.ewm(span=20, adjust=False, min_periods=20).mean()
-    session = pd.Series(data.index.date, index=data.index)
-    typical = (high + low + close) / 3.0
-    vwap = (typical * volume).groupby(session).cumsum() / volume.groupby(session).cumsum().replace(0, np.nan)
     positions = _sample_positions(data.index, candidate_timestamps)
     output: dict[str, dict[str, Any]] = {}
     for candidate, position in zip(candidate_timestamps, positions, strict=True):
         key = candidate.isoformat()
-        if position < 19:
-            continue
-        source = data.index[position]
-        age = (candidate - source).total_seconds()
-        if age < 0 or age > stale_data_seconds:
-            continue
-        values = (close.iloc[position], vwap.iloc[position], ema9.iloc[position], ema20.iloc[position])
-        if not all(math.isfinite(float(value)) for value in values):
-            continue
-        last = float(close.iloc[position])
-        return5 = (last / float(close.iloc[position - 1]) - 1.0) * 100.0 if float(close.iloc[position - 1]) else 0.0
-        return15 = (last / float(close.iloc[position - 3]) - 1.0) * 100.0 if float(close.iloc[position - 3]) else 0.0
-        relative_position = position - relative_strength_lookback_bars
+        context = score_spot_trend(
+            data,
+            candidate.to_pydatetime(),
+            NiftyOiConfig(stale_data_seconds=stale_data_seconds),
+        )
         relative_return = None
-        if relative_position >= 0 and float(close.iloc[relative_position]):
-            relative_return = (last / float(close.iloc[relative_position]) - 1.0) * 100.0
-        slope = (float(ema9.iloc[position]) / float(ema9.iloc[position - 3]) - 1.0) * 100.0 if float(ema9.iloc[position - 3]) else 0.0
-        above_vwap = last > float(vwap.iloc[position])
-        ema_above = float(ema9.iloc[position]) > float(ema20.iloc[position])
-        score = 25.0 if above_vwap else -25.0
-        score += min(max(return5 * 20.0, -20.0), 20.0)
-        score += min(max(return15 * 10.0, -20.0), 20.0)
-        score += 20.0 if ema_above else -20.0
-        score += min(max(slope * 15.0, -15.0), 15.0)
+        relative_position = position - relative_strength_lookback_bars
+        if position >= 0 and relative_position >= 0:
+            current = float(close.iloc[position])
+            previous = float(close.iloc[relative_position])
+            if math.isfinite(current) and math.isfinite(previous) and previous != 0:
+                relative_return = (current / previous - 1.0) * 100.0
         output[key] = {
-            "available": True,
-            "score": _nifty_finite(min(max(score, -100.0), 100.0)),
-            "confidence": "HIGH",
-            "aboveVwap": above_vwap,
-            "return5mPct": _nifty_finite(return5),
-            "return15mPct": _nifty_finite(return15),
+            **context,
             "_relativeStrengthReturnPct": relative_return,
-            "ema9AboveEma20": ema_above,
-            "emaSlopePct": _nifty_finite(slope),
-            "sourceTimestamp": _as_ist(source).isoformat(),
-            "dataAgeSeconds": _nifty_finite(age),
         }
     return output
 
@@ -967,13 +938,10 @@ def evaluate_precomputed_market_alignment(
     range_pct = float(stock["rangeQualityPct"]) if stock.get("rangeQualityPct") is not None else math.nan
     room_pct = stock.get("roomToTargetPct")
     stock_return = stock.get("returnPct")
-    nifty_return = nifty.get("return15mPct")
+    nifty_return = nifty.get("_relativeStrengthReturnPct")
     sector_return = sector.get("returnPct") if sector.get("available") else None
     relative_strength = None
     if stock_return is not None and nifty_return is not None and sector_return is not None:
-        # Canonical relative strength uses the same configured lookback for NIFTY,
-        # not the display-only 15-minute component.
-        nifty_return = nifty.get("_relativeStrengthReturnPct", nifty_return)
         relative_strength = float(stock_return) - max(float(nifty_return), float(sector_return))
     entry_start = datetime_time.fromisoformat(config.entry_start_time)
     last_entry = datetime_time.fromisoformat(config.last_entry_time)

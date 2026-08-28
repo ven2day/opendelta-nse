@@ -112,8 +112,21 @@ Its OI modes are `OFF`, `ADVISORY`, `RESEARCH_FILTER`, and `ENFORCED`, with
 
 Sector membership is operations data, not application code. Set the absolute
 `MARKET_ALIGNED_SECTOR_MAP_FILE` path to either a JSON symbol-to-sector object
-or a CSV containing `symbol,sector`. Missing sector or breadth coverage rejects
-the candidate as insufficient rather than guessing a classification.
+or a CSV containing `symbol,sector` (official constituent files using
+`Symbol,Industry` are also accepted). Set
+`MARKET_ALIGNED_BREADTH_UNIVERSE_FILE` to an operations-managed CSV with a
+`Symbol` column. Backtests load a deterministic breadth sample and every mapped
+peer for the requested symbols independently from the trading selection, so a
+single-symbol run never treats that symbol as the market. Missing sector or
+breadth coverage rejects the candidate as insufficient rather than guessing a
+classification.
+
+Market-Aligned results retain one `candidateDiagnostics` record for every RSI
+recovery candidate. The record includes all causal source timestamps, raw gate
+values, explicit rejection codes, and either `REJECTED_GATE` or
+`SKIPPED_DATA_UNAVAILABLE`. Overview shows a cumulative candidate funnel and a
+Skipped Candidates audit table. With OI `OFF`, OI is marked `NOT_EVALUATED` and
+does not participate in the score or decision.
 
 This strategy is labelled `Research candidate — paper trading required` and
 must not be represented as profitable without untouched chronological

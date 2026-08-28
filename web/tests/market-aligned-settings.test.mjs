@@ -111,3 +111,22 @@ test("all native numeric controls use the shared constraints", async () => {
   assert.ok(nativeNumberInputs.length > 0);
   for (const input of nativeNumberInputs) assert.match(input, /numericConstraints\(/);
 });
+
+test("Market-Aligned results expose a cumulative funnel and complete skipped-candidate audit", async () => {
+  const { results, styles } = await sources();
+  for (const label of [
+    "RSI armed", "RSI recovery candidates", "Time-window passed", "NIFTY passed",
+    "Sector passed", "Breadth passed", "Relative strength passed", "VWAP passed",
+    "EMA passed", "RVOL passed", "Liquidity passed", "Room passed", "Score passed",
+    "Executed trades",
+  ]) assert.match(results, new RegExp(label));
+  assert.match(results, /<h2>Skipped Candidates<\/h2>/);
+  assert.match(results, /candidate\.rejectionReasonDetails|item\.rejectionReasonDetails/);
+  assert.match(results, /REJECTED_GATE/);
+  assert.match(results, /SKIPPED_DATA_UNAVAILABLE/);
+  assert.match(results, /sectorMappingFound/);
+  assert.match(results, /breadthSymbolCount/);
+  assert.match(results, /oiResult/);
+  assert.match(styles, /\.candidate-table-wrap[^{]*\{[^}]*max-width: 100%[^}]*overflow: auto/s);
+  assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.candidate-diagnostics-table/);
+});

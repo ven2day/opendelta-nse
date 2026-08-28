@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from backtest_api import BacktestRequest, run_backtest
+from backtest_api import (
+    BacktestRequest,
+    _market_candidate_funnel,
+    _market_support_plan,
+    run_backtest,
+)
 from main import IST
 from market_aligned_rsi_scalper import (
     STRATEGY_KEY,
@@ -17,6 +22,7 @@ from market_aligned_rsi_scalper import (
     STRATEGY_VERSION,
     MarketAlignedConfig,
     evaluate_market_alignment,
+    load_sector_mapping,
 )
 from tests.test_recovery_backtest import (
     baseline_rsi,
@@ -161,6 +167,114 @@ def test_missing_sector_context_is_rejected_not_fabricated() -> None:
     assert result["allowed"] is False
     assert result["decision"] == "SKIPPED_INSUFFICIENT_MARKET_ALIGNMENT_DATA"
     assert "sector" in result["reason"]
+    diagnostic = result["candidateDiagnostic"]
+    assert diagnostic["sectorMappingFound"] is False
+    assert "MISSING_SECTOR_MAPPING" in diagnostic["rejectionReasons"]
+    assert diagnostic["finalStatus"] == "SKIPPED_DATA_UNAVAILABLE"
+
+
+def test_candidate_diagnostic_stores_every_gate_and_explicit_reasons() -> None:
+    stock = trend_frame(step=-0.05, last_volume=1.0)
+    result = evaluate_market_alignment(
+        candidate(stock),
+        symbol_frame=stock,
+        nifty_frame=trend_frame(step=-0.05),
+        universe_frames={"TEST": stock},
+        config=MarketAlignedConfig(
+            minimum_breadth_symbols=2,
+            minimum_sector_members=2,
+            minimum_average_traded_value=1_000_000,
+            sector_by_symbol={"TEST": "DEMO"},
+        ),
+    )
+    diagnostic = result["candidateDiagnostic"]
+    assert diagnostic["candidateTimestamp"] == candidate(stock)["signalTimestamp"]
+    assert diagnostic["previousRsi"] is not None
+    assert diagnostic["signalRsi"] == 45.0
+    assert diagnostic["niftyDataAvailable"] is True
+    assert diagnostic["sectorMappingFound"] is True
+    assert diagnostic["sectorDataAvailable"] is False
+    assert diagnostic["breadthDataAvailable"] is False
+    assert diagnostic["rvolPass"] is False
+    assert diagnostic["liquidityPass"] is False
+    assert "INSUFFICIENT_SECTOR_MEMBERS" in diagnostic["rejectionReasons"]
+    assert "INSUFFICIENT_BREADTH_SYMBOLS" in diagnostic["rejectionReasons"]
+    assert "RVOL_FAILED" in diagnostic["rejectionReasons"]
+    assert "LIQUIDITY_FAILED" in diagnostic["rejectionReasons"]
+
+
+def test_off_mode_is_not_evaluated_and_does_not_change_alignment_score() -> None:
+    stock = trend_frame(step=0.20)
+    peer = trend_frame(step=0.08)
+    config = MarketAlignedConfig(
+        minimum_breadth_symbols=2,
+        minimum_sector_members=2,
+        minimum_average_traded_value=0,
+        sector_by_symbol={"TEST": "DEMO", "PEER": "DEMO"},
+    ).validate()
+    evaluation = evaluate_market_alignment(
+        candidate(stock), symbol_frame=stock, nifty_frame=trend_frame(step=0.05),
+        universe_frames={"TEST": stock, "PEER": peer}, config=config,
+    )
+    from market_aligned_rsi_scalper import apply_market_alignment_chronologically
+
+    result = apply_market_alignment_chronologically(
+        [{"symbol": "TEST", "trades": [candidate(stock)], "events": []}],
+        frames_by_symbol={"TEST": stock, "PEER": peer},
+        nifty_frame=trend_frame(step=0.05), config=config, oi_mode="OFF",
+    )[0]
+    diagnostic = result["candidateDiagnostics"][0]
+    assert diagnostic["oiMode"] == "OFF"
+    assert diagnostic["oiResult"] == "NOT_EVALUATED"
+    assert diagnostic["alignmentScore"] == evaluation["score"] == 100.0
+    assert diagnostic["executed"] is True
+
+
+def test_official_constituent_csv_industry_column_is_a_sector_mapping(tmp_path: Path) -> None:
+    mapping_file = tmp_path / "constituents.csv"
+    mapping_file.write_text(
+        "Company Name,Industry,Symbol,Series,ISIN Code\n"
+        "Example Ltd.,Information Technology,TEST,EQ,INE000000001\n",
+        encoding="utf-8",
+    )
+    assert load_sector_mapping(mapping_file) == {"TEST": "Information Technology"}
+
+
+def test_support_plan_is_independent_from_selected_trading_symbols() -> None:
+    universe = {"TEST", "PEER", *(f"BREADTH{number:02d}" for number in range(20))}
+    plan = _market_support_plan(
+        universe=universe,
+        requested_symbols=["TEST"],
+        config=MarketAlignedConfig(
+            minimum_breadth_symbols=10,
+            sector_by_symbol={"TEST": "DEMO", "PEER": "DEMO"},
+        ),
+        breadth_file=None,
+        breadth_sample_size=12,
+    )
+    assert len(plan["breadthSymbols"]) == 12
+    assert plan["breadthSymbols"] != ["TEST"]
+    assert plan["sectorSymbols"] == ["PEER", "TEST"]
+
+
+def test_candidate_funnel_is_cumulative_and_reconciles_execution() -> None:
+    base = {
+        "timeWindowPassed": True, "niftyPass": True, "sectorPass": True,
+        "breadthPass": True, "relativeStrengthPass": True, "vwapPass": True,
+        "emaPass": True, "rvolPass": True, "liquidityPass": True,
+        "roomToTargetPass": True, "scorePass": True, "executed": True,
+    }
+    second = {**base, "sectorPass": False, "executed": False}
+    funnel = _market_candidate_funnel([{
+        "rsiArmedCount": 3,
+        "candidateDiagnostics": [base, second],
+    }])
+    assert funnel["rsiArmed"] == 3
+    assert funnel["rsiRecoveryCandidates"] == 2
+    assert funnel["niftyPassed"] == 2
+    assert funnel["sectorPassed"] == 1
+    assert funnel["breadthPassed"] == 1
+    assert funnel["executedTrades"] == 1
 
 
 def test_legacy_and_market_aligned_strategies_have_distinct_keys_and_defaults() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import csv
 import io
 import math
 import os
@@ -52,6 +53,7 @@ from market_aligned_rsi_scalper import (
     STRATEGY_NAME as MARKET_ALIGNED_STRATEGY_NAME,
     STRATEGY_VERSION as MARKET_ALIGNED_STRATEGY_VERSION,
     MarketAlignedConfig,
+    REASON_MESSAGES as MARKET_ALIGNMENT_REASON_MESSAGES,
     apply_market_alignment_chronologically,
     load_sector_mapping,
 )
@@ -298,6 +300,7 @@ class MarketAlignedConfigurationRequest(BaseModel):
         sector_map = dict(operations_sector_map or {})
         sector_map.update(self.sectorBySymbol)
         return MarketAlignedConfig(
+            rsi_length=self.rsiLength,
             signal_rsi_maximum=self.signalRsiMaximum,
             ema_fast=self.emaFast,
             ema_slow=self.emaSlow,
@@ -315,6 +318,8 @@ class MarketAlignedConfigurationRequest(BaseModel):
             maximum_intrabar_range_pct=self.maximumIntrabarRangePct,
             minimum_alignment_score=self.minimumAlignmentScore,
             stale_data_seconds=self.marketDataStaleSeconds,
+            entry_start_time=self.entryStartTime,
+            last_entry_time=self.lastEntryTime,
             sector_by_symbol=sector_map,
         ).validate()
 
@@ -1810,6 +1815,162 @@ def run_recovery_backtest(
     }
 
 
+def _support_symbols_from_file(path: Path | None) -> list[str]:
+    if path is None or not path.is_file():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        headings = {
+            str(name).strip().casefold(): str(name)
+            for name in (reader.fieldnames or [])
+        }
+        symbol_heading = headings.get("symbol")
+        if not symbol_heading:
+            raise ValueError("Breadth universe CSV must contain a Symbol column")
+        return sorted({
+            str(row.get(symbol_heading) or "").strip().upper().removesuffix(".NS")
+            for row in reader
+            if str(row.get(symbol_heading) or "").strip()
+        })
+
+
+def _evenly_spaced_symbols(symbols: list[str], limit: int) -> list[str]:
+    ordered = sorted(set(symbols))
+    if len(ordered) <= limit:
+        return ordered
+    indices = np.linspace(0, len(ordered) - 1, num=limit, dtype=int)
+    return [ordered[int(index)] for index in indices]
+
+
+def _market_support_plan(
+    *,
+    universe: set[str],
+    requested_symbols: list[str],
+    config: MarketAlignedConfig,
+    breadth_file: Path | None,
+    breadth_sample_size: int,
+) -> dict[str, Any]:
+    configured_breadth = _support_symbols_from_file(breadth_file)
+    breadth_pool = [
+        symbol for symbol in (configured_breadth or sorted(universe))
+        if symbol in universe
+    ]
+    sample_size = max(config.minimum_breadth_symbols, breadth_sample_size)
+    breadth_symbols = _evenly_spaced_symbols(breadth_pool, sample_size)
+    requested_sectors = {
+        config.sector_by_symbol.get(symbol)
+        for symbol in requested_symbols
+        if config.sector_by_symbol.get(symbol)
+    }
+    sector_symbols = sorted({
+        symbol
+        for symbol, sector in config.sector_by_symbol.items()
+        if symbol in universe and sector in requested_sectors
+    })
+    return {
+        "breadthSymbols": breadth_symbols,
+        "sectorSymbols": sector_symbols,
+        "allSymbols": sorted(set(breadth_symbols) | set(sector_symbols)),
+        "breadthSource": (
+            str(breadth_file)
+            if configured_breadth and breadth_file is not None
+            else "DETERMINISTIC_DHAN_UNIVERSE_SAMPLE"
+        ),
+    }
+
+
+def _finalize_market_candidate_diagnostics(
+    results: list[dict[str, Any]],
+    *,
+    oi_mode: str,
+) -> None:
+    for result in results:
+        trades_by_id = {
+            str(trade.get("tradeId") or ""): trade
+            for trade in result.get("trades", [])
+        }
+        oi_skips_by_id = {
+            str(row.get("tradeId") or ""): row
+            for row in result.get("oiSkippedSignals", [])
+        }
+        for diagnostic in result.get("candidateDiagnostics", []):
+            trade_id = str(diagnostic.get("tradeId") or "")
+            diagnostic["oiMode"] = oi_mode
+            trade = trades_by_id.get(trade_id)
+            oi_skip = oi_skips_by_id.get(trade_id)
+            if trade is not None:
+                diagnostic["oiResult"] = (
+                    "NOT_EVALUATED"
+                    if oi_mode == "OFF"
+                    else trade.get("oiDecision") or "ADVISORY_RECORDED"
+                )
+                diagnostic["sourceTimestamps"]["oi"] = (
+                    None if oi_mode == "OFF" else trade.get("oiSourceTimestamp")
+                )
+                diagnostic["finalStatus"] = "ACCEPTED"
+                diagnostic["executed"] = True
+                diagnostic["rejectionReasons"] = ["ACCEPTED"]
+                diagnostic["rejectionReasonDetails"] = [{
+                    "code": "ACCEPTED",
+                    "message": MARKET_ALIGNMENT_REASON_MESSAGES["ACCEPTED"],
+                }]
+            elif oi_skip is not None:
+                regime = oi_skip.get("oiRegime") or {}
+                diagnostic["oiResult"] = oi_skip.get("status") or "OI_GATE_FAILED"
+                diagnostic["sourceTimestamps"]["oi"] = regime.get("sourceTimestamp")
+                diagnostic["finalStatus"] = (
+                    "SKIPPED_DATA_UNAVAILABLE"
+                    if regime.get("regime") == "INSUFFICIENT_OI_DATA"
+                    else "REJECTED_GATE"
+                )
+                diagnostic["executed"] = False
+                diagnostic["rejectionReasons"] = ["OI_GATE_FAILED"]
+                diagnostic["rejectionReasonDetails"] = [{
+                    "code": "OI_GATE_FAILED",
+                    "message": str(oi_skip.get("reason") or MARKET_ALIGNMENT_REASON_MESSAGES["OI_GATE_FAILED"]),
+                }]
+            elif diagnostic.get("finalStatus") != "ACCEPTED":
+                diagnostic["oiResult"] = "NOT_EVALUATED" if oi_mode == "OFF" else "NOT_REACHED"
+                diagnostic["executed"] = False
+        result["skippedCandidates"] = [
+            row for row in result.get("candidateDiagnostics", [])
+            if row.get("finalStatus") != "ACCEPTED"
+        ]
+
+
+def _market_candidate_funnel(results: list[dict[str, Any]]) -> dict[str, int]:
+    diagnostics = [
+        diagnostic
+        for result in results
+        for diagnostic in result.get("candidateDiagnostics", [])
+    ]
+    funnel = {
+        "rsiArmed": sum(int(result.get("rsiArmedCount", 0)) for result in results),
+        "rsiRecoveryCandidates": len(diagnostics),
+    }
+    remaining = diagnostics
+    stages = [
+        ("timeWindowPassed", "timeWindowPassed"),
+        ("niftyPassed", "niftyPass"),
+        ("sectorPassed", "sectorPass"),
+        ("breadthPassed", "breadthPass"),
+        ("relativeStrengthPassed", "relativeStrengthPass"),
+        ("vwapPassed", "vwapPass"),
+        ("emaPassed", "emaPass"),
+        ("rvolPassed", "rvolPass"),
+        ("liquidityPassed", "liquidityPass"),
+        ("roomPassed", "roomToTargetPass"),
+        ("scorePassed", "scorePass"),
+    ]
+    for output_key, diagnostic_key in stages:
+        remaining = [row for row in remaining if bool(row.get(diagnostic_key))]
+        funnel[output_key] = len(remaining)
+    funnel["executedTrades"] = sum(
+        1 for row in diagnostics if bool(row.get("executed"))
+    )
+    return funnel
+
+
 def run_market_aligned_backtest(
     request: BacktestRequest,
     store: HistoricalDataStore,
@@ -1825,6 +1986,13 @@ def run_market_aligned_backtest(
     sector_path = Path(sector_path_value).expanduser() if sector_path_value else None
     if sector_path is not None and not sector_path.is_absolute():
         raise ValueError("MARKET_ALIGNED_SECTOR_MAP_FILE must be an absolute path")
+    breadth_path_value = os.environ.get("MARKET_ALIGNED_BREADTH_UNIVERSE_FILE")
+    breadth_path = Path(breadth_path_value).expanduser() if breadth_path_value else None
+    if breadth_path is not None and not breadth_path.is_absolute():
+        raise ValueError("MARKET_ALIGNED_BREADTH_UNIVERSE_FILE must be an absolute path")
+    breadth_sample_size = max(
+        1, min(int(os.environ.get("MARKET_ALIGNED_BREADTH_SAMPLE_SIZE", "50")), 250)
+    )
     operations_sector_map = load_sector_mapping(sector_path)
     alignment_config = requested.strategy_config(operations_sector_map)
     recovery_config = requested.recovery_config()
@@ -1846,12 +2014,20 @@ def run_market_aligned_backtest(
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
     if unavailable:
         raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
+    support_plan = _market_support_plan(
+        universe=universe,
+        requested_symbols=request.symbols,
+        config=alignment_config,
+        breadth_file=breadth_path,
+        breadth_sample_size=breadth_sample_size,
+    )
 
     warnings = [
         "Market-Aligned RSI Scalper is a separate research strategy; RSI Recovery Scalping is not modified by this run.",
         "Every entry gate uses completed candles at or before the signal timestamp. Missing NIFTY, sector, breadth, or stock context rejects the candidate.",
         "Historical equity candles do not include bid/ask quotes; the completed candle range is disclosed and used only as a conservative data-quality proxy.",
-        "Sector membership is loaded from MARKET_ALIGNED_SECTOR_MAP_FILE or the explicit request configuration; no symbol-to-sector mapping is hardcoded.",
+        "Sector membership is loaded from MARKET_ALIGNED_SECTOR_MAP_FILE or the explicit request configuration; no symbol-to-sector mapping is hardcoded in strategy code.",
+        "Breadth uses an independently loaded, deterministic supporting universe and never only the selected trading symbols.",
         "Research candidate — paper trading required. Past performance is not a guarantee of future returns.",
     ]
     if oi_repository_error:
@@ -1921,8 +2097,62 @@ def run_market_aligned_backtest(
             prepared_rows = list(executor.map(prepare, request.symbols))
     prepared = [item for item, _ in prepared_rows if item is not None]
     errors = [error for _, error in prepared_rows if error is not None]
-    frames_by_symbol = {
+    trading_frames_by_symbol = {
         str(item["symbol"]): item["candles"] for item in prepared
+    }
+    support_symbols = [
+        symbol for symbol in support_plan["allSymbols"]
+        if symbol not in trading_frames_by_symbol
+    ]
+
+    def prepare_support(symbol: str) -> tuple[str, pd.DataFrame | None, str | None]:
+        try:
+            return symbol, store.candles(
+                symbol,
+                request.timeframe,
+                request.durationYears,
+                analysis_start,
+                now,
+                warmup_bars=warmup_bars,
+            ), None
+        except (DhanAPIError, ValueError, OSError, KeyError) as error:
+            return symbol, None, str(error)
+
+    support_worker_count = max(
+        1, min(requested_workers, len(support_symbols) or 1, MAX_BACKTEST_WORKERS)
+    )
+    if support_worker_count == 1:
+        support_rows = [prepare_support(symbol) for symbol in support_symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=support_worker_count,
+            thread_name_prefix="market-support-symbol",
+        ) as executor:
+            support_rows = list(executor.map(prepare_support, support_symbols))
+    support_frames = {
+        symbol: frame for symbol, frame, error in support_rows
+        if frame is not None and error is None
+    }
+    support_errors = [
+        {"symbol": symbol, "message": error}
+        for symbol, frame, error in support_rows
+        if frame is None and error is not None
+    ]
+    if support_errors:
+        warnings.append(
+            f"{len(support_errors)} supporting-market symbol(s) could not be loaded; "
+            "candidate diagnostics identify any resulting coverage failure."
+        )
+    frames_by_symbol = {**support_frames, **trading_frames_by_symbol}
+    breadth_frames = {
+        symbol: frames_by_symbol[symbol]
+        for symbol in support_plan["breadthSymbols"]
+        if symbol in frames_by_symbol
+    }
+    sector_frames = {
+        symbol: frames_by_symbol[symbol]
+        for symbol in set(support_plan["sectorSymbols"]) | set(request.symbols)
+        if symbol in frames_by_symbol
     }
     baseline_observations = [item["observations"] for item in prepared]
     aligned = apply_market_alignment_chronologically(
@@ -1930,6 +2160,9 @@ def run_market_aligned_backtest(
         frames_by_symbol=frames_by_symbol,
         nifty_frame=nifty_frame,
         config=alignment_config,
+        breadth_frames=breadth_frames,
+        sector_frames=sector_frames,
+        oi_mode=oi_mode,
     ) if prepared else []
     quality_by_symbol = {
         str(result.get("symbol") or ""): result.get("qualityScore")
@@ -1950,6 +2183,7 @@ def run_market_aligned_backtest(
                 for skipped in result.get("oiSkippedSignals", []):
                     skipped["researchOnly"] = True
                     skipped["status"] = "RESEARCH_" + str(skipped.get("status") or "FILTERED")
+    _finalize_market_candidate_diagnostics(aligned, oi_mode=oi_mode)
 
     configuration = {
         "strategy": requested.public(),
@@ -1978,6 +2212,7 @@ def run_market_aligned_backtest(
         "oiRejectedSignals": sum(len(result.get("oiSkippedSignals", [])) for result in results),
         "skippedOiSignals": sum(len(result.get("oiSkippedSignals", [])) for result in results),
         "oiFilterMode": oi_mode,
+        "candidateFunnel": _market_candidate_funnel(results),
     })
     completed_at = datetime.now(IST)
     runtime_seconds = time.perf_counter() - started_clock
@@ -2025,6 +2260,15 @@ def run_market_aligned_backtest(
             },
             "researchLabel": "Research candidate — paper trading required",
             "sectorMappingSource": str(sector_path) if sector_path else "REQUEST_OR_UNAVAILABLE",
+            "supportMarketData": {
+                "breadthSource": support_plan["breadthSource"],
+                "breadthSymbolsRequested": len(support_plan["breadthSymbols"]),
+                "breadthSymbolsLoaded": len(breadth_frames),
+                "sectorSymbolsRequested": len(support_plan["sectorSymbols"]),
+                "sectorSymbolsLoaded": len(sector_frames),
+                "supportLoadFailures": len(support_errors),
+                "selectedTradingSymbolsExcludedFromBreadthDependency": True,
+            },
             "oiFilter": {
                 "mode": oi_mode,
                 "version": "nifty-oi-regime-filter-1.0.0",

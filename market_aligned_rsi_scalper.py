@@ -5,7 +5,7 @@ import csv
 import json
 import math
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, time as datetime_time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -14,7 +14,7 @@ import pandas as pd
 
 from main import IST
 from nifty_oi_regime import NiftyOiConfig, score_spot_trend
-from recovery_backtest import calculate_ema, calculate_session_vwap
+from recovery_backtest import calculate_ema, calculate_session_vwap, calculate_wilder_rsi
 
 
 STRATEGY_KEY = "market_aligned_rsi_scalper"
@@ -25,9 +25,46 @@ STRATEGY_DESCRIPTION = (
     "relative strength, RVOL, liquidity and optional OI context."
 )
 
+DATA_UNAVAILABLE_REASON_CODES = frozenset({
+    "MISSING_STOCK_DATA",
+    "STALE_STOCK_DATA",
+    "MISSING_NIFTY_DATA",
+    "MISSING_SECTOR_MAPPING",
+    "MISSING_SECTOR_DATA",
+    "INSUFFICIENT_SECTOR_MEMBERS",
+    "MISSING_BREADTH_DATA",
+    "INSUFFICIENT_BREADTH_SYMBOLS",
+})
+
+REASON_MESSAGES = {
+    "MISSING_STOCK_DATA": "Required completed stock candles were unavailable.",
+    "STALE_STOCK_DATA": "The latest completed stock candle was stale at the candidate timestamp.",
+    "TIME_WINDOW_FAILED": "The candidate timestamp was outside the configured entry window.",
+    "MISSING_NIFTY_DATA": "Completed NIFTY context was unavailable at the candidate timestamp.",
+    "MISSING_SECTOR_MAPPING": "No sector mapping was found for the candidate symbol.",
+    "MISSING_SECTOR_DATA": "No completed sector-member observations were available.",
+    "INSUFFICIENT_SECTOR_MEMBERS": "Too few completed sector-member observations were available.",
+    "MISSING_BREADTH_DATA": "No completed breadth-universe observations were available.",
+    "INSUFFICIENT_BREADTH_SYMBOLS": "Too few completed breadth-universe observations were available.",
+    "NIFTY_GATE_FAILED": "NIFTY Trend Score was below the configured threshold.",
+    "SECTOR_GATE_FAILED": "Sector bullish percentage was below the configured threshold.",
+    "BREADTH_GATE_FAILED": "Market breadth was below the configured threshold.",
+    "RELATIVE_STRENGTH_FAILED": "The stock did not outperform both its sector and NIFTY.",
+    "RSI_GATE_FAILED": "Signal RSI was outside the configured recovery range.",
+    "VWAP_FAILED": "Price was not above session VWAP.",
+    "EMA_FAILED": "EMA9 was not above EMA20 and rising.",
+    "RVOL_FAILED": "RVOL was below the configured threshold.",
+    "LIQUIDITY_FAILED": "Historical traded-value or range-quality liquidity checks failed.",
+    "ROOM_TO_TARGET_FAILED": "Available price room was below the configured target.",
+    "ALIGNMENT_SCORE_FAILED": "Market Alignment Score was below the configured threshold.",
+    "OI_GATE_FAILED": "The configured OI policy rejected the candidate.",
+    "ACCEPTED": "All required candidate gates passed.",
+}
+
 
 @dataclass(frozen=True)
 class MarketAlignedConfig:
+    rsi_length: int = 14
     signal_rsi_maximum: float = 50.0
     ema_fast: int = 9
     ema_slow: int = 20
@@ -45,6 +82,8 @@ class MarketAlignedConfig:
     maximum_intrabar_range_pct: float = 5.0
     minimum_alignment_score: float = 85.0
     stale_data_seconds: int = 360
+    entry_start_time: str = "09:20"
+    last_entry_time: str = "14:45"
     sector_by_symbol: Mapping[str, str] = field(default_factory=dict)
 
     def validate(self) -> "MarketAlignedConfig":
@@ -64,6 +103,13 @@ class MarketAlignedConfig:
             raise ValueError("Breadth and sector coverage requirements must be positive")
         if self.stale_data_seconds < 1:
             raise ValueError("Market context stale-data tolerance must be positive")
+        try:
+            entry_start = datetime_time.fromisoformat(self.entry_start_time)
+            last_entry = datetime_time.fromisoformat(self.last_entry_time)
+        except ValueError as error:
+            raise ValueError("Market context entry times must use HH:MM") from error
+        if entry_start >= last_entry:
+            raise ValueError("Market context entry start must be below last entry time")
         return self
 
     def public(self) -> dict[str, Any]:
@@ -112,9 +158,20 @@ def load_sector_mapping(path: Path | None) -> dict[str, str]:
     else:
         with path.open("r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
-            if not reader.fieldnames or not {"symbol", "sector"}.issubset(reader.fieldnames):
-                raise ValueError("Market sector CSV must contain symbol and sector columns")
-            rows = ((row.get("symbol"), row.get("sector")) for row in reader)
+            headings = {
+                str(name).strip().casefold(): str(name)
+                for name in (reader.fieldnames or [])
+            }
+            symbol_heading = headings.get("symbol")
+            sector_heading = headings.get("sector") or headings.get("industry")
+            if not symbol_heading or not sector_heading:
+                raise ValueError(
+                    "Market sector CSV must contain Symbol and Sector or Industry columns"
+                )
+            rows = [
+                (row.get(symbol_heading), row.get(sector_heading))
+                for row in reader
+            ]
     return {
         str(symbol).strip().upper().removesuffix(".NS"): str(sector).strip()
         for symbol, sector in rows
@@ -143,16 +200,21 @@ def _breadth_at(
         data = _completed(frame, timestamp)
         if len(data) < config.ema_slow:
             continue
+        latest = _as_ist(data.index[-1])
+        age = (timestamp - latest).total_seconds()
+        if age < 0 or age > config.stale_data_seconds:
+            continue
         close = pd.to_numeric(data["Close"], errors="coerce")
         ema = calculate_ema(close, config.ema_slow)
         if not math.isfinite(float(close.iloc[-1])) or not math.isfinite(float(ema.iloc[-1])):
             continue
         observed += 1
         bullish += int(float(close.iloc[-1]) >= float(ema.iloc[-1]))
-        latest_sources.append(_as_ist(data.index[-1]))
+        latest_sources.append(latest)
     if observed < config.minimum_breadth_symbols:
         return {
             "available": False,
+            "attemptedSymbols": len(frames),
             "observedSymbols": observed,
             "requiredSymbols": config.minimum_breadth_symbols,
             "reason": "Insufficient point-in-time breadth coverage",
@@ -161,6 +223,7 @@ def _breadth_at(
     return {
         "available": True,
         "breadthPct": _finite(breadth_pct),
+        "attemptedSymbols": len(frames),
         "observedSymbols": observed,
         "bullishSymbols": bullish,
         "notBearish": breadth_pct >= config.minimum_breadth_pct,
@@ -176,7 +239,11 @@ def _sector_at(
 ) -> dict[str, Any]:
     sector = config.sector_by_symbol.get(symbol)
     if not sector:
-        return {"available": False, "reason": "No configured sector mapping for symbol"}
+        return {
+            "available": False,
+            "mappingFound": False,
+            "reason": "No configured sector mapping for symbol",
+        }
     peer_returns: list[float] = []
     sources: list[str] = []
     for peer, frame in frames.items():
@@ -186,11 +253,15 @@ def _sector_at(
             frame, timestamp, config.relative_strength_lookback_bars
         )
         if peer_return is not None and source is not None:
+            age = (timestamp - _as_ist(source)).total_seconds()
+            if age < 0 or age > config.stale_data_seconds:
+                continue
             peer_returns.append(peer_return)
             sources.append(source)
     if len(peer_returns) < config.minimum_sector_members:
         return {
             "available": False,
+            "mappingFound": True,
             "sector": sector,
             "observedMembers": len(peer_returns),
             "requiredMembers": config.minimum_sector_members,
@@ -200,6 +271,7 @@ def _sector_at(
     bullish_pct = sum(value > 0 for value in peer_returns) / len(peer_returns) * 100.0
     return {
         "available": True,
+        "mappingFound": True,
         "sector": sector,
         "returnPct": _finite(sector_return),
         "bullish": sector_return > 0 and bullish_pct >= config.minimum_sector_bullish_pct,
@@ -217,31 +289,97 @@ def evaluate_market_alignment(
     nifty_frame: pd.DataFrame,
     universe_frames: Mapping[str, pd.DataFrame],
     config: MarketAlignedConfig,
+    breadth_frames: Mapping[str, pd.DataFrame] | None = None,
+    sector_frames: Mapping[str, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
-    """Evaluate all non-OI gates using information completed at the signal timestamp."""
+    """Evaluate every candidate gate and retain a complete causal diagnostic."""
     signal_timestamp = _as_ist(trade.get("signalTimestamp") or trade["entryTimestamp"])
     symbol = str(trade.get("symbol") or "")
     data = _completed(symbol_frame, signal_timestamp)
-    if len(data) < max(config.ema_slow, config.rvol_period, config.room_lookback_bars + 1):
+    base_diagnostic: dict[str, Any] = {
+        "candidateTimestamp": signal_timestamp.isoformat(),
+        "symbol": symbol,
+        "tradeId": trade.get("tradeId"),
+        "rsiArmTimestamp": trade.get("rsiArmTimestamp"),
+        "rsiAtArm": _finite(trade.get("rsiArmValue"), 6),
+        "previousRsi": None,
+        "signalRsi": _finite(trade.get("rsiAtEntry"), 6),
+        "timeWindowPassed": False,
+        "niftyDataAvailable": False,
+        "niftyTrendScore": None,
+        "niftyPass": False,
+        "sectorMappingFound": False,
+        "sectorName": None,
+        "sectorDataAvailable": False,
+        "sectorMemberCount": 0,
+        "sectorRequiredMembers": config.minimum_sector_members,
+        "sectorBullishPct": None,
+        "sectorPass": False,
+        "breadthDataAvailable": False,
+        "breadthSymbolCount": 0,
+        "breadthRequiredSymbols": config.minimum_breadth_symbols,
+        "breadthPct": None,
+        "breadthPass": False,
+        "relativeStrengthValue": None,
+        "relativeStrengthPass": False,
+        "price": None,
+        "sessionVwap": None,
+        "priceAboveVwap": False,
+        "vwapPass": False,
+        "emaFastValue": None,
+        "emaSlowValue": None,
+        "ema9AboveEma20": False,
+        "ema9AboveEma20Pass": False,
+        "ema9Rising": False,
+        "ema9RisingPass": False,
+        "emaPass": False,
+        "rvolValue": None,
+        "rvolPass": False,
+        "liquidityValue": None,
+        "liquidityPass": False,
+        "roomToTargetValue": None,
+        "roomToTargetPass": False,
+        "oiMode": "NOT_SET",
+        "oiResult": "NOT_REACHED",
+        "alignmentScore": 0.0,
+        "requiredScore": config.minimum_alignment_score,
+        "scorePass": False,
+        "rejectionReasons": [],
+        "rejectionReasonDetails": [],
+        "finalStatus": "SKIPPED_DATA_UNAVAILABLE",
+        "executed": False,
+        "sourceTimestamps": {
+            "stock": None,
+            "nifty": None,
+            "sector": None,
+            "breadth": None,
+            "oi": None,
+        },
+    }
+
+    def rejected_for_stock(code: str) -> dict[str, Any]:
+        diagnostic = copy.deepcopy(base_diagnostic)
+        diagnostic["rejectionReasons"] = [code]
+        diagnostic["rejectionReasonDetails"] = [
+            {"code": code, "message": REASON_MESSAGES[code]}
+        ]
         return {
             "allowed": False,
             "score": 0.0,
             "decision": "SKIPPED_INSUFFICIENT_MARKET_ALIGNMENT_DATA",
-            "reason": "Insufficient completed stock candles for the configured gates",
-            "sourceTimestamp": None,
+            "reason": REASON_MESSAGES[code],
+            "sourceTimestamp": diagnostic["sourceTimestamps"]["stock"],
             "gates": {},
+            "candidateDiagnostic": diagnostic,
         }
+
+    if len(data) < max(config.ema_slow, config.rvol_period, config.room_lookback_bars + 1):
+        return rejected_for_stock("MISSING_STOCK_DATA")
     source_timestamp = _as_ist(data.index[-1])
+    base_diagnostic["sourceTimestamps"]["stock"] = source_timestamp.isoformat()
     age = (signal_timestamp - source_timestamp).total_seconds()
     if age < 0 or age > config.stale_data_seconds:
-        return {
-            "allowed": False,
-            "score": 0.0,
-            "decision": "SKIPPED_STALE_MARKET_ALIGNMENT_DATA",
-            "reason": "Latest completed stock candle is stale",
-            "sourceTimestamp": source_timestamp.isoformat(),
-            "gates": {},
-        }
+        return rejected_for_stock("STALE_STOCK_DATA")
 
     close = pd.to_numeric(data["Close"], errors="coerce")
     high = pd.to_numeric(data["High"], errors="coerce")
@@ -251,6 +389,7 @@ def evaluate_market_alignment(
     ema_slow = calculate_ema(close, config.ema_slow)
     volume_average = calculate_ema(volume, config.rvol_period)
     session_vwap = calculate_session_vwap(data)
+    rsi = calculate_wilder_rsi(close, config.rsi_length)
     current_close = float(close.iloc[-1])
     current_high = float(high.iloc[-1])
     current_low = float(low.iloc[-1])
@@ -265,8 +404,17 @@ def evaluate_market_alignment(
         signal_timestamp,
         NiftyOiConfig(stale_data_seconds=config.stale_data_seconds),
     )
-    breadth = _breadth_at(universe_frames, signal_timestamp, config)
-    sector = _sector_at(symbol, universe_frames, signal_timestamp, config)
+    breadth = _breadth_at(
+        breadth_frames if breadth_frames is not None else universe_frames,
+        signal_timestamp,
+        config,
+    )
+    sector = _sector_at(
+        symbol,
+        sector_frames if sector_frames is not None else universe_frames,
+        signal_timestamp,
+        config,
+    )
     stock_return, _ = _return_at(
         symbol_frame, signal_timestamp, config.relative_strength_lookback_bars
     )
@@ -275,30 +423,39 @@ def evaluate_market_alignment(
     )
     sector_return = sector.get("returnPct") if sector.get("available") else None
     rsi_at_entry = _finite(trade.get("rsiAtEntry"))
+    entry_start = datetime_time.fromisoformat(config.entry_start_time)
+    last_entry = datetime_time.fromisoformat(config.last_entry_time)
+    time_window_passed = entry_start <= signal_timestamp.time().replace(tzinfo=None) < last_entry
+    ema_fast_value = float(ema_fast.iloc[-1])
+    ema_slow_value = float(ema_slow.iloc[-1])
+    ema_fast_previous = float(ema_fast.iloc[-2])
+    ema_above = (
+        math.isfinite(ema_fast_value)
+        and math.isfinite(ema_slow_value)
+        and ema_fast_value > ema_slow_value
+    )
+    ema_rising = math.isfinite(ema_fast_value) and math.isfinite(ema_fast_previous) and ema_fast_value > ema_fast_previous
+    vwap_value = float(session_vwap.iloc[-1])
+    vwap_pass = math.isfinite(vwap_value) and current_close > vwap_value
+    traded_value_pass = math.isfinite(float(traded_value)) and float(traded_value) >= config.minimum_average_traded_value
+    range_quality_pass = math.isfinite(range_proxy_pct) and range_proxy_pct <= config.maximum_intrabar_range_pct
+    relative_strength_value = None
+    if stock_return is not None and nifty_return is not None and sector_return is not None:
+        relative_strength_value = stock_return - max(nifty_return, float(sector_return))
+    relative_strength_pass = relative_strength_value is not None and relative_strength_value > 0
     gates = {
+        "timeWindow": time_window_passed,
         "niftyTrend": bool(nifty.get("available")) and float(nifty.get("score", -100)) >= config.minimum_nifty_trend_score,
         "sectorBullish": bool(sector.get("available")) and bool(sector.get("bullish")),
         "breadthNotBearish": bool(breadth.get("available")) and bool(breadth.get("notBearish")),
-        "relativeStrength": (
-            stock_return is not None
-            and nifty_return is not None
-            and sector_return is not None
-            and stock_return > nifty_return
-            and stock_return > float(sector_return)
-        ),
+        "relativeStrength": relative_strength_pass,
         "rsiRecovery": rsi_at_entry is not None and 40.0 < rsi_at_entry <= config.signal_rsi_maximum,
-        "aboveSessionVwap": math.isfinite(float(session_vwap.iloc[-1])) and current_close > float(session_vwap.iloc[-1]),
-        "emaTrend": (
-            math.isfinite(float(ema_fast.iloc[-1]))
-            and math.isfinite(float(ema_slow.iloc[-1]))
-            and math.isfinite(float(ema_fast.iloc[-2]))
-            and float(ema_fast.iloc[-1]) > float(ema_slow.iloc[-1])
-            and float(ema_fast.iloc[-1]) > float(ema_fast.iloc[-2])
-        ),
+        "aboveSessionVwap": vwap_pass,
+        "emaTrend": ema_above and ema_rising,
         "rvol": math.isfinite(rvol) and rvol >= config.minimum_rvol,
         "roomToTarget": room_pct is not None and room_pct >= config.target_pct,
-        "liquidity": math.isfinite(float(traded_value)) and float(traded_value) >= config.minimum_average_traded_value,
-        "spreadQuality": math.isfinite(range_proxy_pct) and range_proxy_pct <= config.maximum_intrabar_range_pct,
+        "liquidity": traded_value_pass,
+        "spreadQuality": range_quality_pass,
     }
     weights = {
         "niftyTrend": 15.0,
@@ -315,40 +472,132 @@ def evaluate_market_alignment(
     }
     score = sum(weight for gate, weight in weights.items() if gates[gate])
     failed = [gate for gate, passed in gates.items() if not passed]
-    allowed = not failed and score >= config.minimum_alignment_score
-    unavailable = []
+    reason_codes: list[str] = []
+    if not time_window_passed:
+        reason_codes.append("TIME_WINDOW_FAILED")
     if not nifty.get("available"):
-        unavailable.append("NIFTY trend")
-    if not sector.get("available"):
-        unavailable.append("sector")
+        reason_codes.append("MISSING_NIFTY_DATA")
+    elif not gates["niftyTrend"]:
+        reason_codes.append("NIFTY_GATE_FAILED")
+    if not sector.get("mappingFound"):
+        reason_codes.append("MISSING_SECTOR_MAPPING")
+    elif not sector.get("available"):
+        reason_codes.append(
+            "MISSING_SECTOR_DATA"
+            if int(sector.get("observedMembers", 0)) == 0
+            else "INSUFFICIENT_SECTOR_MEMBERS"
+        )
+    elif not gates["sectorBullish"]:
+        reason_codes.append("SECTOR_GATE_FAILED")
     if not breadth.get("available"):
-        unavailable.append("breadth")
+        reason_codes.append(
+            "MISSING_BREADTH_DATA"
+            if int(breadth.get("observedSymbols", 0)) == 0
+            else "INSUFFICIENT_BREADTH_SYMBOLS"
+        )
+    elif not gates["breadthNotBearish"]:
+        reason_codes.append("BREADTH_GATE_FAILED")
+    if nifty.get("available") and sector.get("available") and not gates["relativeStrength"]:
+        reason_codes.append("RELATIVE_STRENGTH_FAILED")
+    if not gates["rsiRecovery"]:
+        reason_codes.append("RSI_GATE_FAILED")
+    if not gates["aboveSessionVwap"]:
+        reason_codes.append("VWAP_FAILED")
+    if not gates["emaTrend"]:
+        reason_codes.append("EMA_FAILED")
+    if not gates["rvol"]:
+        reason_codes.append("RVOL_FAILED")
+    if not gates["liquidity"] or not gates["spreadQuality"]:
+        reason_codes.append("LIQUIDITY_FAILED")
+    if not gates["roomToTarget"]:
+        reason_codes.append("ROOM_TO_TARGET_FAILED")
+    if score < config.minimum_alignment_score:
+        reason_codes.append("ALIGNMENT_SCORE_FAILED")
+    allowed = not reason_codes
+    unavailable = any(code in DATA_UNAVAILABLE_REASON_CODES for code in reason_codes)
     decision = "MARKET_ALIGNMENT_ACCEPTED" if allowed else (
         "SKIPPED_INSUFFICIENT_MARKET_ALIGNMENT_DATA"
         if unavailable
         else "SKIPPED_MARKET_ALIGNMENT"
     )
+    source_values = [
+        value
+        for value in (
+            source_timestamp.isoformat(),
+            nifty.get("sourceTimestamp"),
+            sector.get("sourceTimestamp"),
+            breadth.get("sourceTimestamp"),
+        )
+        if value
+    ]
+    diagnostic = {
+        **base_diagnostic,
+        "previousRsi": _finite(rsi.iloc[-2], 6),
+        "timeWindowPassed": time_window_passed,
+        "niftyDataAvailable": bool(nifty.get("available")),
+        "niftyTrendScore": _finite(nifty.get("score")),
+        "niftyPass": gates["niftyTrend"],
+        "sectorMappingFound": bool(sector.get("mappingFound")),
+        "sectorName": sector.get("sector"),
+        "sectorDataAvailable": bool(sector.get("available")),
+        "sectorMemberCount": int(sector.get("observedMembers", 0)),
+        "sectorBullishPct": _finite(sector.get("bullishPct")),
+        "sectorPass": gates["sectorBullish"],
+        "breadthDataAvailable": bool(breadth.get("available")),
+        "breadthSymbolCount": int(breadth.get("observedSymbols", 0)),
+        "breadthPct": _finite(breadth.get("breadthPct")),
+        "breadthPass": gates["breadthNotBearish"],
+        "relativeStrengthValue": _finite(relative_strength_value),
+        "relativeStrengthPass": gates["relativeStrength"],
+        "price": _finite(current_close),
+        "sessionVwap": _finite(vwap_value),
+        "priceAboveVwap": vwap_pass,
+        "vwapPass": gates["aboveSessionVwap"],
+        "emaFastValue": _finite(ema_fast_value),
+        "emaSlowValue": _finite(ema_slow_value),
+        "ema9AboveEma20": ema_above,
+        "ema9AboveEma20Pass": ema_above,
+        "ema9Rising": ema_rising,
+        "ema9RisingPass": ema_rising,
+        "emaPass": gates["emaTrend"],
+        "rvolValue": _finite(rvol),
+        "rvolPass": gates["rvol"],
+        "liquidityValue": _finite(traded_value, 2),
+        "liquidityPass": gates["liquidity"] and gates["spreadQuality"],
+        "roomToTargetValue": _finite(room_pct),
+        "roomToTargetPass": gates["roomToTarget"],
+        "alignmentScore": _finite(score),
+        "scorePass": score >= config.minimum_alignment_score,
+        "rejectionReasons": reason_codes if reason_codes else ["ACCEPTED"],
+        "rejectionReasonDetails": [
+            {"code": code, "message": REASON_MESSAGES[code]}
+            for code in (reason_codes if reason_codes else ["ACCEPTED"])
+        ],
+        "finalStatus": (
+            "ACCEPTED"
+            if allowed
+            else "SKIPPED_DATA_UNAVAILABLE"
+            if unavailable
+            else "REJECTED_GATE"
+        ),
+        "sourceTimestamps": {
+            "stock": source_timestamp.isoformat(),
+            "nifty": nifty.get("sourceTimestamp"),
+            "sector": sector.get("sourceTimestamp"),
+            "breadth": breadth.get("sourceTimestamp"),
+            "oi": None,
+        },
+    }
     return {
         "allowed": allowed,
         "score": _finite(score),
         "decision": decision,
         "reason": (
-            "All configured market-alignment gates passed"
+            REASON_MESSAGES["ACCEPTED"]
             if allowed
-            else "Unavailable context: " + ", ".join(unavailable)
-            if unavailable
-            else "Failed gates: " + ", ".join(failed)
+            else "; ".join(REASON_MESSAGES[code] for code in reason_codes)
         ),
-        "sourceTimestamp": min(
-            value
-            for value in (
-                source_timestamp.isoformat(),
-                nifty.get("sourceTimestamp"),
-                sector.get("sourceTimestamp"),
-                breadth.get("sourceTimestamp"),
-            )
-            if value
-        ),
+        "sourceTimestamp": min(source_values) if source_values else None,
         "gates": gates,
         "niftyTrend": nifty,
         "sectorTrend": sector,
@@ -361,6 +610,8 @@ def evaluate_market_alignment(
         "medianTradedValue": _finite(traded_value, 2),
         "historicalRangeQualityPct": _finite(range_proxy_pct),
         "historicalSpreadNote": "Intraday OHLC has no bid/ask history; candle range is a conservative data-quality proxy.",
+        "failedGates": failed,
+        "candidateDiagnostic": diagnostic,
     }
 
 
@@ -370,6 +621,9 @@ def apply_market_alignment_chronologically(
     frames_by_symbol: Mapping[str, pd.DataFrame],
     nifty_frame: pd.DataFrame,
     config: MarketAlignedConfig,
+    breadth_frames: Mapping[str, pd.DataFrame] | None = None,
+    sector_frames: Mapping[str, pd.DataFrame] | None = None,
+    oi_mode: str = "OFF",
 ) -> list[dict[str, Any]]:
     """Filter existing RSI candidates without creating a BUY candidate."""
     output = [copy.deepcopy(dict(result)) for result in results]
@@ -382,6 +636,10 @@ def apply_market_alignment_chronologically(
                 candidates.append((_as_ist(timestamp), symbol, str(trade.get("tradeId") or ""), result_index, dict(trade)))
         result["trades"] = []
         result["marketAlignmentSkippedSignals"] = []
+        result["candidateDiagnostics"] = []
+        result["rsiArmedCount"] = sum(
+            1 for event in result.get("events", []) if event.get("type") == "ARMED"
+        )
     candidates.sort(key=lambda row: (row[0], row[1], row[2]))
     for _, symbol, _, result_index, trade in candidates:
         evaluation = evaluate_market_alignment(
@@ -390,7 +648,13 @@ def apply_market_alignment_chronologically(
             nifty_frame=nifty_frame,
             universe_frames=frames_by_symbol,
             config=config,
+            breadth_frames=breadth_frames,
+            sector_frames=sector_frames,
         )
+        diagnostic = copy.deepcopy(evaluation["candidateDiagnostic"])
+        diagnostic["oiMode"] = oi_mode
+        diagnostic["oiResult"] = "NOT_EVALUATED" if oi_mode == "OFF" else "NOT_REACHED"
+        diagnostic["executed"] = bool(evaluation["allowed"] and oi_mode == "OFF")
         enriched = {
             **trade,
             "strategyMode": STRATEGY_KEY,
@@ -401,8 +665,10 @@ def apply_market_alignment_chronologically(
             "marketAlignmentDecision": evaluation["decision"],
             "marketAlignmentSourceTimestamp": evaluation["sourceTimestamp"],
             "marketAlignment": evaluation,
+            "candidateDiagnostic": diagnostic,
         }
         target = output[result_index]
+        target["candidateDiagnostics"].append(diagnostic)
         if evaluation["allowed"]:
             target["trades"].append(enriched)
         else:
@@ -413,6 +679,7 @@ def apply_market_alignment_chronologically(
                 "reason": evaluation["reason"],
                 "status": evaluation["decision"],
                 "marketAlignment": evaluation,
+                "candidateDiagnostic": diagnostic,
                 "hypotheticalOutcome": enriched,
             })
         target["events"] = [

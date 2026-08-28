@@ -4941,3 +4941,150 @@ footer {
 @media (max-width: 520px) {
   .market-primary-results { grid-template-columns: 1fr; }
 }
+
+.market-candidate-funnel,
+.market-skipped-candidates {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.candidate-funnel-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.candidate-funnel-grid > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px;
+  background: var(--panel-strong);
+}
+
+.candidate-funnel-grid span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.candidate-funnel-grid strong { font-size: 19px; }
+
+.candidate-table-wrap {
+  max-height: 620px;
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.candidate-diagnostics-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.candidate-diagnostics-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  padding: 9px 11px;
+  color: var(--muted);
+  background: var(--panel-strong);
+  font-size: 11px;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.candidate-diagnostics-table th:nth-child(1) { width: 20%; }
+.candidate-diagnostics-table th:nth-child(2) { width: 28%; }
+.candidate-diagnostics-table th:nth-child(3) { width: 25%; }
+.candidate-diagnostics-table th:nth-child(4) { width: 27%; }
+
+.candidate-diagnostics-table td {
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding: 11px;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.candidate-diagnostics-table td > span,
+.candidate-diagnostics-table td > small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.candidate-diagnostics-table td > strong:first-child { display: block; }
+
+.candidate-gate {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.candidate-gate.pass { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+.candidate-gate.fail { color: var(--rose); background: color-mix(in srgb, var(--rose) 12%, transparent); }
+.candidate-gate.unavailable { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+
+.candidate-final-status {
+  width: fit-content;
+  border-radius: 7px;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
+.candidate-final-status.rejected_gate { color: var(--rose); background: color-mix(in srgb, var(--rose) 12%, transparent); }
+.candidate-final-status.skipped_data_unavailable { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
+
+.candidate-reason-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.candidate-reason-list span {
+  display: grid;
+  gap: 2px;
+  border-left: 2px solid var(--rose);
+  padding-left: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.candidate-reason-list b { color: var(--text); }
+
+@media (max-width: 1100px) {
+  .candidate-funnel-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .candidate-diagnostics-table,
+  .candidate-diagnostics-table tbody,
+  .candidate-diagnostics-table tr,
+  .candidate-diagnostics-table td { display: block; width: 100%; }
+  .candidate-diagnostics-table thead { display: none; }
+  .candidate-diagnostics-table tr { border-top: 1px solid var(--border); }
+  .candidate-diagnostics-table tr:first-child { border-top: 0; }
+  .candidate-diagnostics-table td { border-top: 0; }
+  .candidate-diagnostics-table td::before {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--muted);
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+}
+
+@media (max-width: 600px) {
+  .candidate-funnel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .candidate-table-wrap { max-height: 720px; }
+}

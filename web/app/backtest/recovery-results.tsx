@@ -200,6 +200,86 @@ export type ProtectedRecoverySummary = {
 
 type SpeedBucket = { count: number; pct: number };
 
+export type CandidateRejectionDetail = { code: string; message: string };
+
+export type MarketCandidateDiagnostic = {
+  candidateTimestamp: string;
+  symbol: string;
+  tradeId?: string | null;
+  rsiArmTimestamp: string | null;
+  rsiAtArm: number | null;
+  previousRsi: number | null;
+  signalRsi: number | null;
+  timeWindowPassed: boolean;
+  niftyDataAvailable: boolean;
+  niftyTrendScore: number | null;
+  niftyPass: boolean;
+  sectorMappingFound: boolean;
+  sectorName: string | null;
+  sectorDataAvailable: boolean;
+  sectorMemberCount: number;
+  sectorRequiredMembers: number;
+  sectorBullishPct: number | null;
+  sectorPass: boolean;
+  breadthDataAvailable: boolean;
+  breadthSymbolCount: number;
+  breadthRequiredSymbols: number;
+  breadthPct: number | null;
+  breadthPass: boolean;
+  relativeStrengthValue: number | null;
+  relativeStrengthPass: boolean;
+  price: number | null;
+  sessionVwap: number | null;
+  priceAboveVwap: boolean;
+  vwapPass: boolean;
+  emaFastValue: number | null;
+  emaSlowValue: number | null;
+  ema9AboveEma20: boolean;
+  ema9AboveEma20Pass: boolean;
+  ema9Rising: boolean;
+  ema9RisingPass: boolean;
+  emaPass: boolean;
+  rvolValue: number | null;
+  rvolPass: boolean;
+  liquidityValue: number | null;
+  liquidityPass: boolean;
+  roomToTargetValue: number | null;
+  roomToTargetPass: boolean;
+  oiMode: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED" | "NOT_SET";
+  oiResult: string;
+  alignmentScore: number | null;
+  requiredScore: number;
+  scorePass: boolean;
+  rejectionReasons: string[];
+  rejectionReasonDetails: CandidateRejectionDetail[];
+  finalStatus: "ACCEPTED" | "REJECTED_GATE" | "SKIPPED_DATA_UNAVAILABLE";
+  executed: boolean;
+  sourceTimestamps: {
+    stock: string | null;
+    nifty: string | null;
+    sector: string | null;
+    breadth: string | null;
+    oi: string | null;
+  };
+};
+
+export type MarketCandidateFunnel = {
+  rsiArmed: number;
+  rsiRecoveryCandidates: number;
+  timeWindowPassed: number;
+  niftyPassed: number;
+  sectorPassed: number;
+  breadthPassed: number;
+  relativeStrengthPassed: number;
+  vwapPassed: number;
+  emaPassed: number;
+  rvolPassed: number;
+  liquidityPassed: number;
+  roomPassed: number;
+  scorePassed: number;
+  executedTrades: number;
+};
+
 export type RecoverySymbolResult = {
   symbol: string;
   firstCandle: string;
@@ -253,6 +333,9 @@ export type RecoverySymbolResult = {
   maximumConcurrentPositions?: number;
   peakCapitalDeployed?: number;
   maximumDrawdown?: number;
+  candidateDiagnostics?: MarketCandidateDiagnostic[];
+  skippedCandidates?: MarketCandidateDiagnostic[];
+  rsiArmedCount?: number;
 };
 
 export type RecoverySummary = {
@@ -295,6 +378,7 @@ export type RecoverySummary = {
   candidateBuySignals?: number;
   marketAlignmentRejectedSignals?: number;
   oiRejectedSignals?: number;
+  candidateFunnel?: MarketCandidateFunnel;
 };
 
 export type RecoveryBacktestResponse = {
@@ -805,6 +889,88 @@ function DiagnosticsContainer({ collapsed, children }: { collapsed: boolean; chi
   return <details className="backtest-panel market-result-diagnostics"><summary><span><strong>Diagnostics</strong><small>Target timing, excursions and raw signal observations</small></span></summary><div className="market-result-diagnostics-body">{children}</div></details>;
 }
 
+function gateLabel(passed: boolean, available = true) {
+  if (!available) return <b className="candidate-gate unavailable">Unavailable</b>;
+  return <b className={`candidate-gate ${passed ? "pass" : "fail"}`}>{passed ? "Pass" : "Fail"}</b>;
+}
+
+function candidateValue(value: number | null | undefined, suffix = "") {
+  return value === null || value === undefined ? "—" : `${number(value)}${suffix}`;
+}
+
+function MarketCandidateDiagnostics({
+  funnel,
+  diagnostics,
+}: {
+  funnel?: MarketCandidateFunnel;
+  diagnostics: MarketCandidateDiagnostic[];
+}) {
+  const skipped = diagnostics.filter((item) => item.finalStatus !== "ACCEPTED");
+  const funnelRows: Array<[keyof MarketCandidateFunnel, string]> = [
+    ["rsiArmed", "RSI armed"],
+    ["rsiRecoveryCandidates", "RSI recovery candidates"],
+    ["timeWindowPassed", "Time-window passed"],
+    ["niftyPassed", "NIFTY passed"],
+    ["sectorPassed", "Sector passed"],
+    ["breadthPassed", "Breadth passed"],
+    ["relativeStrengthPassed", "Relative strength passed"],
+    ["vwapPassed", "VWAP passed"],
+    ["emaPassed", "EMA passed"],
+    ["rvolPassed", "RVOL passed"],
+    ["liquidityPassed", "Liquidity passed"],
+    ["roomPassed", "Room passed"],
+    ["scorePassed", "Score passed"],
+    ["executedTrades", "Executed trades"],
+  ];
+  return <>
+    <section className="backtest-panel market-candidate-funnel" aria-label="Market-Aligned candidate funnel">
+      <div className="panel-title"><div><span className="section-kicker">Candidate lifecycle</span><h2>Entry funnel</h2></div><span className="date-window">Cumulative point-in-time pass counts</span></div>
+      <div className="candidate-funnel-grid">
+        {funnelRows.map(([key, label]) => <div key={key}><span>{label}</span><strong>{(funnel?.[key] ?? 0).toLocaleString("en-IN")}</strong></div>)}
+      </div>
+    </section>
+
+    <section className="backtest-panel market-skipped-candidates" aria-label="Skipped Market-Aligned candidates">
+      <div className="panel-title"><div><span className="section-kicker">Candidate-level audit</span><h2>Skipped Candidates</h2></div><span className="date-window">{skipped.length.toLocaleString("en-IN")} rejected or unavailable</span></div>
+      {skipped.length ? <div className="candidate-table-wrap">
+        <table className="candidate-diagnostics-table">
+          <thead><tr><th>Candidate</th><th>Supporting market</th><th>Stock gates</th><th>Decision</th></tr></thead>
+          <tbody>{skipped.map((item) => <tr key={item.tradeId ?? `${item.symbol}:${item.candidateTimestamp}`}>
+            <td data-label="Candidate">
+              <strong>{item.symbol}</strong><span>{formatIst(item.candidateTimestamp)}</span>
+              <small>Arm {formatIst(item.rsiArmTimestamp)} · RSI {candidateValue(item.rsiAtArm)}</small>
+              <small>Previous RSI {candidateValue(item.previousRsi)} · Signal RSI {candidateValue(item.signalRsi)}</small>
+              <small>Time window {gateLabel(item.timeWindowPassed)}</small>
+            </td>
+            <td data-label="Supporting market">
+              <span>NIFTY data {gateLabel(item.niftyPass, item.niftyDataAvailable)} · score {candidateValue(item.niftyTrendScore)}</span>
+              <span>Sector mapping {item.sectorMappingFound ? "Found" : "Missing"} · {item.sectorName ?? "—"}</span>
+              <span>Sector data {gateLabel(item.sectorPass, item.sectorDataAvailable)} · {candidateValue(item.sectorBullishPct, "%")} · {item.sectorMemberCount}/{item.sectorRequiredMembers} members</span>
+              <span>Breadth data {gateLabel(item.breadthPass, item.breadthDataAvailable)} · {candidateValue(item.breadthPct, "%")} · {item.breadthSymbolCount}/{item.breadthRequiredSymbols} symbols</span>
+              <span>Relative strength {candidateValue(item.relativeStrengthValue, "%")} {gateLabel(item.relativeStrengthPass, item.niftyDataAvailable && item.sectorDataAvailable)}</span>
+            </td>
+            <td data-label="Stock gates">
+              <span>Price {candidateValue(item.price)} · VWAP {candidateValue(item.sessionVwap)} {gateLabel(item.vwapPass)}</span>
+              <span>EMA9 {candidateValue(item.emaFastValue)} &gt; EMA20 {candidateValue(item.emaSlowValue)} {gateLabel(item.ema9AboveEma20Pass)}</span>
+              <span>EMA9 rising {gateLabel(item.ema9RisingPass)} · combined {gateLabel(item.emaPass)}</span>
+              <span>RVOL {candidateValue(item.rvolValue)} {gateLabel(item.rvolPass)}</span>
+              <span>Liquidity ₹{candidateValue(item.liquidityValue)} {gateLabel(item.liquidityPass)}</span>
+              <span>Room {candidateValue(item.roomToTargetValue, "%")} {gateLabel(item.roomToTargetPass)}</span>
+            </td>
+            <td data-label="Decision">
+              <strong className={`candidate-final-status ${item.finalStatus.toLowerCase()}`}>{item.finalStatus}</strong>
+              <span>Alignment {candidateValue(item.alignmentScore)} / {candidateValue(item.requiredScore)} {gateLabel(item.scorePass)}</span>
+              <span>OI {item.oiMode} · {item.oiResult}</span>
+              <div className="candidate-reason-list">{item.rejectionReasonDetails.map((reason) => <span key={reason.code} title={reason.message}><b>{reason.code}</b>{reason.message}</span>)}</div>
+              <small>Sources: stock {formatIst(item.sourceTimestamps.stock)} · NIFTY {formatIst(item.sourceTimestamps.nifty)} · sector {formatIst(item.sourceTimestamps.sector)} · breadth {formatIst(item.sourceTimestamps.breadth)} · OI {formatIst(item.sourceTimestamps.oi)}</small>
+            </td>
+          </tr>)}</tbody>
+        </table>
+      </div> : <div className="empty-history">No candidates were rejected in this run.</div>}
+    </section>
+  </>;
+}
+
 function SignalRecoveryResults({ response }: { response: RecoveryBacktestResponse }) {
   const marketAligned = response.metadata.strategyMode === "market_aligned_rsi_scalper";
   const [activeView, setActiveView] = useState<"overview" | "signals" | "open" | "features">("overview");
@@ -822,6 +988,10 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
   const detail = response.results.find((result) => result.symbol === detailSymbol) ?? sorted[0] ?? null;
   const openTrades = useMemo(
     () => response.results.flatMap((result) => result.trades.filter((trade) => trade.status === "OPEN")),
+    [response.results],
+  );
+  const candidateDiagnostics = useMemo(
+    () => response.results.flatMap((result) => result.candidateDiagnostics ?? []),
     [response.results],
   );
 
@@ -884,6 +1054,8 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
         {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {summary.skippedOiSignals ?? 0}</strong></div>}
       </section>}
       <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> {marketAligned ? "RSI candidates are evaluated only against completed point-in-time NIFTY, sector, breadth, stock and optional OI context." : "Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open."}</span></div>
+
+      {marketAligned && <MarketCandidateDiagnostics funnel={summary.candidateFunnel} diagnostics={candidateDiagnostics} />}
 
       <DiagnosticsContainer collapsed={marketAligned}>
       <section className="backtest-panel recovery-section">

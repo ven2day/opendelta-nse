@@ -5,6 +5,7 @@ import concurrent.futures
 import io
 import math
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -19,7 +20,7 @@ from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -27,6 +28,7 @@ from atr_exit_optimizer import (
     AtrOptimizationGrid,
     evaluate_atr_exit_grid,
 )
+from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
 from live_signals import (
     LiveSignalEngine,
     LiveSignalRepository,
@@ -336,6 +338,20 @@ ANNUALIZATION = {
     "4h": 252 * 1.6,
     "1d": 252,
 }
+
+
+class BacktestHistorySaveRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._-]+$")
+    completedAt: datetime
+    strategyMode: Literal["rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"]
+    strategyName: str = Field(min_length=1, max_length=120)
+    timeframe: str = Field(min_length=1, max_length=20)
+    durationYears: int = Field(ge=1, le=10)
+    symbolCount: int = Field(ge=1, le=100_000)
+    response: dict[str, Any]
+
+    def persisted(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
 
 class BacktestRequest(BaseModel):
@@ -2399,6 +2415,7 @@ _universe_service: UniverseService | None = None
 _live_signal_engine: LiveSignalEngine | None = None
 _market_data_refresh_service: MarketDataRefreshService | None = None
 _oi_repository: OiRegimeRepository | None = None
+_backtest_history_repository: BacktestHistoryRepository | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -2428,6 +2445,19 @@ def get_oi_repository() -> OiRegimeRepository:
             raise RuntimeError("NIFTY_OI_DIR must be an absolute path")
         _oi_repository = OiRegimeRepository(root)
     return _oi_repository
+
+
+def get_backtest_history_repository() -> BacktestHistoryRepository:
+    global _backtest_history_repository
+    if _backtest_history_repository is None:
+        default_root = Path(
+            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")
+        ).expanduser() / "backtest-history"
+        root = Path(os.environ.get("BACKTEST_HISTORY_DIR", str(default_root))).expanduser()
+        if not root.is_absolute():
+            raise RuntimeError("BACKTEST_HISTORY_DIR must be an absolute path")
+        _backtest_history_repository = BacktestHistoryRepository(root, limit=HISTORY_LIMIT)
+    return _backtest_history_repository
 
 
 def get_universe_service() -> UniverseService:
@@ -2524,6 +2554,64 @@ def health() -> dict[str, Any]:
         return {"status": "ok", "symbols": symbols}
     except (OSError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/backtest-history")
+def list_backtest_history(
+    owner_key: str = Header(alias="x-opendelta-history-owner"),
+) -> dict[str, Any]:
+    try:
+        return {"runs": get_backtest_history_repository().list(owner_key), "limit": HISTORY_LIMIT}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        raise HTTPException(status_code=503, detail="Backtest history is temporarily unavailable") from error
+
+
+@app.get("/backtest-history/{run_id}")
+def get_backtest_history(
+    run_id: str,
+    owner_key: str = Header(alias="x-opendelta-history-owner"),
+) -> dict[str, Any]:
+    try:
+        return get_backtest_history_repository().get(owner_key, run_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Backtest result was not found") from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        raise HTTPException(status_code=503, detail="Backtest history is temporarily unavailable") from error
+
+
+@app.post("/backtest-history")
+def save_backtest_history(
+    request: BacktestHistorySaveRequest,
+    owner_key: str = Header(alias="x-opendelta-history-owner"),
+) -> dict[str, Any]:
+    try:
+        run = get_backtest_history_repository().save(owner_key, request.persisted())
+        return {"run": run, "limit": HISTORY_LIMIT}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        raise HTTPException(status_code=503, detail="Backtest history is temporarily unavailable") from error
+
+
+@app.delete("/backtest-history/{run_id}")
+def delete_backtest_history(
+    run_id: str,
+    owner_key: str = Header(alias="x-opendelta-history-owner"),
+) -> dict[str, Any]:
+    try:
+        if not get_backtest_history_repository().delete(owner_key, run_id):
+            raise HTTPException(status_code=404, detail="Backtest result was not found")
+        return {"deleted": True, "id": run_id}
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (OSError, RuntimeError, sqlite3.Error) as error:
+        raise HTTPException(status_code=503, detail="Backtest history is temporarily unavailable") from error
 
 
 @app.get("/nifty-oi/history/status")

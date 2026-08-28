@@ -43,9 +43,15 @@ import {
   strategyDefaults,
 } from "./strategy-parameters";
 import {
+  backtestHistorySummary,
+  migrateBrowserBacktestHistory,
+  readAccountBacktestHistory,
+  readAccountBacktestResult,
   readBacktestHistory,
+  saveAccountBacktestHistory,
   saveBacktestHistory,
   type BacktestHistoryEntry,
+  type BacktestHistorySummary,
 } from "./backtest-history";
 
 type BacktestDashboardProps = {
@@ -199,6 +205,7 @@ type OiFilterComparisonResponse = {
 };
 
 type StoredBacktest = BacktestHistoryEntry<BacktestResponse | RecoveryBacktestResponse>;
+type StoredBacktestSummary = BacktestHistorySummary;
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
 const marketRecommendedDefaults = strategyDefaults("market_aligned_rsi_scalper");
@@ -884,8 +891,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | null>(null);
-  const [backtestHistory, setBacktestHistory] = useState<StoredBacktest[]>([]);
+  const [backtestHistory, setBacktestHistory] = useState<StoredBacktestSummary[]>([]);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+  const [loadingHistoryId, setLoadingHistoryId] = useState<string | null>(null);
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<{ completed: number; total: number } | null>(null);
@@ -922,22 +930,76 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
 
   useEffect(() => {
     let active = true;
-    void readBacktestHistory<BacktestResponse | RecoveryBacktestResponse>()
-      .then((entries) => {
-        if (!active) return;
-        setBacktestHistory(entries);
-        if (entries.length) {
-          const latest = entries[0];
+    void (async () => {
+      let browserEntries: StoredBacktest[] = [];
+      try {
+        browserEntries = await readBacktestHistory<BacktestResponse | RecoveryBacktestResponse>();
+        if (active && browserEntries.length) {
+          const latest = browserEntries[0];
+          setBacktestHistory(browserEntries.map(backtestHistorySummary));
           setResponse(latest.response);
           setActiveHistoryId(latest.id);
           if (isRangeResponse(latest.response)) setDetailSymbol(latest.response.results[0]?.symbol ?? null);
         }
-      })
-      .catch(() => {
-        if (active) setHistoryMessage("Browser history is unavailable in this session; new backtests will still run.");
-      });
+      } catch {
+        if (active) setHistoryMessage("Browser cache is unavailable; account history will still be loaded.");
+      }
+
+      try {
+        const accountEntries = browserEntries.length
+          ? await migrateBrowserBacktestHistory(browserEntries)
+          : await readAccountBacktestHistory();
+        if (!active) return;
+        setBacktestHistory(accountEntries);
+        setHistoryMessage(null);
+        if (accountEntries.length) {
+          const latestSummary = accountEntries[0];
+          const cached = browserEntries.find((entry) => entry.id === latestSummary.id);
+          const latest = cached ?? await readAccountBacktestResult<BacktestResponse | RecoveryBacktestResponse>(latestSummary.id);
+          if (!active) return;
+          setResponse(latest.response);
+          setActiveHistoryId(latest.id);
+          setDetailSymbol(isRangeResponse(latest.response) ? latest.response.results[0]?.symbol ?? null : null);
+          if (!cached) void saveBacktestHistory(latest).catch(() => undefined);
+        }
+      } catch {
+        if (active) {
+          setHistoryMessage(browserEntries.length
+            ? "Account sync is temporarily unavailable; showing this browser's saved results."
+            : "Saved backtest history is temporarily unavailable; new backtests will still run.");
+        }
+      }
+    })();
     return () => { active = false; };
   }, []);
+
+  const viewStoredBacktest = async (item: StoredBacktestSummary) => {
+    setLoadingHistoryId(item.id);
+    try {
+      let stored: StoredBacktest;
+      try {
+        stored = await readAccountBacktestResult<BacktestResponse | RecoveryBacktestResponse>(item.id);
+        void saveBacktestHistory(stored).catch(() => undefined);
+      } catch {
+        const browserEntries = await readBacktestHistory<BacktestResponse | RecoveryBacktestResponse>();
+        const cached = browserEntries.find((entry) => entry.id === item.id);
+        if (!cached) throw new Error("Saved backtest result is unavailable");
+        stored = cached;
+      }
+      setResponse(stored.response);
+      setActiveHistoryId(stored.id);
+      setError(null);
+      setOptimization(null);
+      setRsiComparison(null);
+      setOiComparison(null);
+      setDetailSymbol(isRangeResponse(stored.response) ? stored.response.results[0]?.symbol ?? null : null);
+      setHistoryMessage(null);
+    } catch (caught) {
+      setHistoryMessage(caught instanceof Error ? caught.message : "Saved backtest result is unavailable");
+    } finally {
+      setLoadingHistoryId(null);
+    }
+  };
 
   const switchStrategy = (next: StrategyMode) => {
     if (strategyMode === "rsi_recovery") {
@@ -1246,13 +1308,25 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           symbolCount: symbolsToRun.length,
           response: aggregate,
         };
+        let browserEntries: StoredBacktest[] | null = null;
         try {
-          setBacktestHistory(await saveBacktestHistory(stored));
-          setActiveHistoryId(stored.id);
+          browserEntries = await saveBacktestHistory(stored);
+        } catch {
+          browserEntries = null;
+        }
+        try {
+          await saveAccountBacktestHistory(stored);
+          setBacktestHistory(await readAccountBacktestHistory());
           setHistoryMessage(null);
         } catch {
-          setHistoryMessage("This result is displayed, but browser storage could not save it.");
+          if (browserEntries) {
+            setBacktestHistory(browserEntries.map(backtestHistorySummary));
+            setHistoryMessage("Account sync is temporarily unavailable; this result is cached in this browser.");
+          } else {
+            setHistoryMessage("This result is displayed, but it could not be saved to account history or browser cache.");
+          }
         }
+        setActiveHistoryId(stored.id);
       }
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
@@ -1840,8 +1914,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
 
         <section className="backtest-panel backtest-history-panel" aria-labelledby="backtest-history-title">
           <div className="panel-title">
-            <div><span className="section-kicker">Stored in this browser</span><h2 id="backtest-history-title">Recent backtests</h2></div>
-            <span className="cost-note">Latest 10 completed results · retained after refresh</span>
+            <div><span className="section-kicker">Synced to your account</span><h2 id="backtest-history-title">Recent backtests</h2></div>
+            <span className="cost-note">Latest 10 completed results · available in every signed-in browser</span>
           </div>
           {historyMessage && <div className="backtest-history-message"><AlertTriangle size={16} /><span>{historyMessage}</span></div>}
           {backtestHistory.length ? <div className="backtest-history-list">
@@ -1851,18 +1925,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                   <strong>{item.strategyName}</strong>
                   <span>{formatIst(item.completedAt)} · {item.durationYears}Y · {item.timeframe} · {item.symbolCount} symbol{item.symbolCount === 1 ? "" : "s"}</span>
                 </div>
-                <button type="button" className="secondary-action" onClick={() => {
-                  setResponse(item.response);
-                  setActiveHistoryId(item.id);
-                  setError(null);
-                  setOptimization(null);
-                  setRsiComparison(null);
-                  setOiComparison(null);
-                  setDetailSymbol(isRangeResponse(item.response) ? item.response.results[0]?.symbol ?? null : null);
-                }}>{activeHistoryId === item.id ? "Viewing" : "View result"}</button>
+                <button type="button" className="secondary-action" disabled={loadingHistoryId === item.id} onClick={() => void viewStoredBacktest(item)}>
+                  {loadingHistoryId === item.id ? "Loading..." : activeHistoryId === item.id ? "Viewing" : "View result"}
+                </button>
               </article>
             ))}
-          </div> : <p className="backtest-history-empty">Completed backtests will appear here automatically. Results stay in this browser and are not shared between devices.</p>}
+          </div> : <p className="backtest-history-empty">Completed backtests will appear here automatically and sync to the signed-in account.</p>}
         </section>
 
         {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}

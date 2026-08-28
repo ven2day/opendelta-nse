@@ -20,6 +20,20 @@ export type BacktestHistoryEntry<T = unknown> = {
   response: T;
 };
 
+export type BacktestHistorySummary = Omit<BacktestHistoryEntry, "response">;
+
+export function backtestHistorySummary<T>(entry: BacktestHistoryEntry<T>): BacktestHistorySummary {
+  return {
+    id: entry.id,
+    completedAt: entry.completedAt,
+    strategyMode: entry.strategyMode,
+    strategyName: entry.strategyName,
+    timeframe: entry.timeframe,
+    durationYears: entry.durationYears,
+    symbolCount: entry.symbolCount,
+  };
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   if (typeof indexedDB === "undefined") {
     return Promise.reject(new Error("Browser storage is unavailable"));
@@ -64,6 +78,73 @@ function isHistoryEntry(value: unknown): value is BacktestHistoryEntry {
     && Number.isInteger(entry.symbolCount)
     && entry.symbolCount > 0
     && Boolean(response && typeof response.metadata === "object" && Array.isArray(response.results));
+}
+
+function isHistorySummary(value: unknown): value is BacktestHistorySummary {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<BacktestHistorySummary>;
+  return typeof entry.id === "string"
+    && typeof entry.completedAt === "string"
+    && ["rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
+    && typeof entry.strategyName === "string"
+    && typeof entry.timeframe === "string"
+    && typeof entry.durationYears === "number"
+    && typeof entry.symbolCount === "number"
+    && Number.isInteger(entry.symbolCount)
+    && entry.symbolCount > 0;
+}
+
+async function responseDetail(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = JSON.parse(await response.text()) as { detail?: unknown };
+    return typeof payload.detail === "string" ? payload.detail : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function readAccountBacktestHistory(): Promise<BacktestHistorySummary[]> {
+  const response = await fetch("/api/backtest-history", { cache: "no-store" });
+  if (!response.ok) throw new Error(await responseDetail(response, "Account backtest history is unavailable"));
+  const payload = await response.json() as { runs?: unknown };
+  if (!Array.isArray(payload.runs)) throw new Error("Account backtest history is invalid");
+  return payload.runs.filter(isHistorySummary).slice(0, BACKTEST_HISTORY_LIMIT);
+}
+
+export async function readAccountBacktestResult<T>(id: string): Promise<BacktestHistoryEntry<T>> {
+  const response = await fetch(`/api/backtest-history?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(await responseDetail(response, "Saved backtest result is unavailable"));
+  const payload: unknown = await response.json();
+  if (!isHistoryEntry(payload)) throw new Error("Saved backtest result is invalid");
+  return payload as BacktestHistoryEntry<T>;
+}
+
+export async function saveAccountBacktestHistory<T>(
+  entry: BacktestHistoryEntry<T>,
+): Promise<BacktestHistorySummary> {
+  if (!isHistoryEntry(entry)) throw new Error("Completed backtest result is invalid");
+  const response = await fetch("/api/backtest-history", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(entry),
+  });
+  if (!response.ok) throw new Error(await responseDetail(response, "Backtest result could not be synced"));
+  const payload = await response.json() as { run?: unknown };
+  if (!isHistorySummary(payload.run)) throw new Error("Synced backtest summary is invalid");
+  return payload.run;
+}
+
+export async function migrateBrowserBacktestHistory<T>(
+  entries: BacktestHistoryEntry<T>[],
+): Promise<BacktestHistorySummary[]> {
+  for (const entry of entries.slice(0, BACKTEST_HISTORY_LIMIT)) {
+    try {
+      await saveAccountBacktestHistory(entry);
+    } catch {
+      // One malformed legacy browser entry must not prevent the other records from migrating.
+    }
+  }
+  return readAccountBacktestHistory();
 }
 
 function newestFirst<T>(entries: BacktestHistoryEntry<T>[]): BacktestHistoryEntry<T>[] {

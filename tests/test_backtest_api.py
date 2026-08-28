@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from backtest_api import (
+    BacktestHistorySaveRequest,
     BacktestRequest,
     IST,
     LiveSignalDecisionRequest,
@@ -322,6 +323,35 @@ class RequestTests(unittest.TestCase):
             for method in (route.methods or set())
         }
         self.assertTrue({"GET", "POST"}.issubset(symbol_methods))
+
+    def test_account_backtest_history_api_surface_is_registered(self) -> None:
+        methods = {
+            (route.path, method)
+            for route in app.routes
+            if route.path.startswith("/backtest-history")
+            for method in (route.methods or set())
+        }
+        self.assertTrue(
+            {
+                ("/backtest-history", "GET"),
+                ("/backtest-history", "POST"),
+                ("/backtest-history/{run_id}", "GET"),
+                ("/backtest-history/{run_id}", "DELETE"),
+            }.issubset(methods)
+        )
+
+    def test_backtest_history_request_preserves_result_metadata(self) -> None:
+        request = BacktestHistorySaveRequest(
+            id="run-1",
+            completedAt="2026-08-28T10:00:00+00:00",
+            strategyMode="rsi_recovery",
+            strategyName="RSI Recovery Scalping",
+            timeframe="5m",
+            durationYears=1,
+            symbolCount=1,
+            response={"metadata": {"runId": "run-1"}, "results": []},
+        )
+        self.assertEqual(request.persisted()["response"]["metadata"]["runId"], "run-1")
 
     def test_market_symbol_list_reads_the_runtime_registry(self) -> None:
         with TemporaryDirectory() as directory:

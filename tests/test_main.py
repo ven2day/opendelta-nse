@@ -12,6 +12,7 @@ from main import (
     RSI_PERIOD,
     DhanAPIError,
     DhanClient,
+    build_company_name_map,
     build_security_map,
     build_session_consistent_output,
     calculate_recent_levels,
@@ -294,6 +295,20 @@ class DhanHelpersTests(unittest.TestCase):
         self.assertEqual(security_map["LUPIN"], "333")
         self.assertEqual(missing, ["UNKNOWN"])
 
+    def test_company_names_come_from_dhan_instrument_metadata(self):
+        csv_data = (
+            b"SEM_EXM_EXCH_ID,SEM_SEGMENT,SEM_SMST_SECURITY_ID,"
+            b"SEM_INSTRUMENT_NAME,SEM_TRADING_SYMBOL,SEM_SERIES,"
+            b"SM_SYMBOL_NAME,SEM_CUSTOM_SYMBOL\n"
+            b"NSE,E,111,EQUITY,ALPHA,EQ,ALPHA INDUSTRIES LIMITED,Alpha Industries\n"
+            b"NSE,E,222,EQUITY,BETA,EQ,,Beta Holdings\n"
+        )
+
+        names = build_company_name_map(parse_instrument_master(csv_data))
+
+        self.assertEqual(names["ALPHA"], "Alpha Industries Limited")
+        self.assertEqual(names["BETA"], "Beta Holdings")
+
     def test_finds_two_most_recent_confirmed_daily_supports_and_resistances(self):
         index = pd.date_range(
             "2026-08-03",
@@ -337,6 +352,7 @@ class DhanHelpersTests(unittest.TestCase):
         self.assertEqual(output.loc[0, "entry_price"], 100)
         self.assertTrue(pd.isna(output.loc[2, "trading_date"]))
         self.assertTrue(pd.isna(output.loc[3, "entry_price"]))
+        self.assertEqual(output.loc[3, "company_name"], "D")
 
     def test_csv_write_is_atomic_and_keeps_all_rows(self):
         output = pd.DataFrame(

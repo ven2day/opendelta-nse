@@ -1,6 +1,7 @@
 export type StockRow = {
   rank: number | null;
   symbol: string;
+  company_name: string | null;
   trading_date: string | null;
   previous_date: string | null;
   previous_close: number | null;

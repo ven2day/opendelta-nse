@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  Plus,
   Radio,
   RefreshCw,
   Search,
@@ -43,6 +44,13 @@ type MarketDataRefreshStatus = {
   processedSymbols: number | null;
   totalSymbols: number | null;
   error: string | null;
+};
+type SymbolAddResult = {
+  symbol: string;
+  companyName: string;
+  symbolCount: number;
+  refresh: MarketDataRefreshStatus & { accepted: boolean };
+  detail?: string;
 };
 type SortKey =
   | "rank"
@@ -146,10 +154,7 @@ function formatRefreshStatus(status: MarketDataRefreshStatus, timestamp: string 
     return "Refreshing market data";
   }
   if (status.state === "FAILED") return "Refresh failed";
-  if (status.state === "SUCCEEDED" && status.rowsPublished !== null) {
-    return `${status.rowsPublished} symbols refreshed · ${formatDhanTimestamp(timestamp)}`;
-  }
-  return `Last refresh · ${formatDhanTimestamp(timestamp)}`;
+  return formatDhanTimestamp(timestamp);
 }
 
 function isMarketDataStale(value: string | null, now = new Date()) {
@@ -330,6 +335,12 @@ export function Dashboard({
   const [priceSliderMin, setPriceSliderMin] = useState(0);
   const [priceSliderMax, setPriceSliderMax] = useState(100);
   const [query, setQuery] = useState("");
+  const [newSymbol, setNewSymbol] = useState("");
+  const [addingSymbol, setAddingSymbol] = useState(false);
+  const [symbolAddMessage, setSymbolAddMessage] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("rank");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
@@ -438,6 +449,43 @@ export function Dashboard({
     }
   };
 
+  const addMarketSymbol = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const symbol = newSymbol.trim().toUpperCase().replace(/\.NS$/, "");
+    if (!symbol) {
+      setSymbolAddMessage({ tone: "error", text: "Enter an NSE equity symbol." });
+      return;
+    }
+
+    setAddingSymbol(true);
+    setSymbolAddMessage(null);
+    try {
+      const response = await fetch("/api/market-symbols", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ symbol }),
+        cache: "no-store",
+      });
+      const body = await response.json() as SymbolAddResult;
+      if (!response.ok) throw new Error(body.detail ?? "Unable to add the symbol");
+      setNewSymbol("");
+      setRefreshStatus(body.refresh);
+      setSymbolAddMessage({
+        tone: "success",
+        text: `${body.symbol} added as symbol ${body.symbolCount}. ${
+          body.refresh.accepted ? "Refresh started." : "It will be included in the next refresh."
+        }`,
+      });
+    } catch (error) {
+      setSymbolAddMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Unable to add the symbol",
+      });
+    } finally {
+      setAddingSymbol(false);
+    }
+  };
+
   const bandCounts = useMemo(
     () =>
       Object.fromEntries(
@@ -461,7 +509,8 @@ export function Dashboard({
     const filtered = marketStocks.filter((stock) => {
       const matchesBand = inBand(stock.rsi_14, band);
       const matchesSearch =
-        normalizedQuery.length === 0 || stock.symbol.toUpperCase().includes(normalizedQuery);
+        normalizedQuery.length === 0 ||
+        `${stock.symbol} ${stock.company_name ?? ""}`.toUpperCase().includes(normalizedQuery);
       const matchesMovement =
         movement === "all" ||
         (movement === "gainers" && (stock.change_percent ?? 0) > 0) ||
@@ -780,17 +829,54 @@ export function Dashboard({
                 </div>
               </div>
             </div>
-            <a
-              className="download-button"
-              href={LIVE_DATA_URL}
-              download
-              onClick={(event) => {
-                event.currentTarget.href = `${LIVE_DATA_URL}&download=${Date.now()}`;
-              }}
-            >
-              <Download size={16} />
-              Export CSV
-            </a>
+            <div className="market-table-actions">
+              <form className="symbol-add-form" onSubmit={(event) => void addMarketSymbol(event)}>
+                <label className="symbol-add-control">
+                  <span className="sr-only">Add NSE equity symbol</span>
+                  <input
+                    type="text"
+                    value={newSymbol}
+                    onChange={(event) => {
+                      setNewSymbol(event.target.value.toUpperCase());
+                      if (symbolAddMessage?.tone === "error") setSymbolAddMessage(null);
+                    }}
+                    placeholder="Add NSE symbol"
+                    maxLength={40}
+                    autoComplete="off"
+                    disabled={addingSymbol || refreshStatus.running}
+                    aria-describedby={symbolAddMessage ? "symbol-add-message" : undefined}
+                  />
+                  <button
+                    type="submit"
+                    disabled={addingSymbol || refreshStatus.running || !newSymbol.trim()}
+                    title="Validate with Dhan and add this symbol"
+                  >
+                    <Plus size={16} />
+                    {addingSymbol ? "Adding" : "Add"}
+                  </button>
+                </label>
+                {symbolAddMessage && (
+                  <span
+                    id="symbol-add-message"
+                    className={`symbol-add-message ${symbolAddMessage.tone}`}
+                    role={symbolAddMessage.tone === "error" ? "alert" : "status"}
+                  >
+                    {symbolAddMessage.text}
+                  </span>
+                )}
+              </form>
+              <a
+                className="download-button"
+                href={LIVE_DATA_URL}
+                download
+                onClick={(event) => {
+                  event.currentTarget.href = `${LIVE_DATA_URL}&download=${Date.now()}`;
+                }}
+              >
+                <Download size={16} />
+                Export CSV
+              </a>
+            </div>
           </div>
 
           <div className="table-scroll">
@@ -815,7 +901,12 @@ export function Dashboard({
                     <tr key={stock.symbol}>
                       <td data-label="Symbol">
                         <div className="symbol-cell">
-                          <strong>{stock.symbol}</strong>
+                          <strong
+                            title={stock.company_name ?? stock.symbol}
+                            aria-label={`${stock.symbol}: ${stock.company_name ?? stock.symbol}`}
+                          >
+                            {stock.symbol}
+                          </strong>
                         </div>
                       </td>
                       <td data-label="Yesterday RSI">

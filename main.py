@@ -45,6 +45,7 @@ IST = ZoneInfo("Asia/Kolkata")
 OUTPUT_COLUMNS = [
     "rank",
     "symbol",
+    "company_name",
     "trading_date",
     "previous_date",
     "previous_close",
@@ -684,6 +685,23 @@ def parse_instrument_master(csv_bytes: bytes) -> pd.DataFrame:
     return eligible.drop_duplicates("symbol", keep="first")
 
 
+def instrument_company_name(instrument: pd.Series | dict[str, Any]) -> str:
+    """Return the best human-readable company name supplied by Dhan."""
+    for column in ("SM_SYMBOL_NAME", "SEM_CUSTOM_SYMBOL"):
+        value = " ".join(str(instrument.get(column, "")).split())
+        if value:
+            return value.title() if value.isupper() else value
+    return ""
+
+
+def build_company_name_map(instruments: pd.DataFrame) -> dict[str, str]:
+    return {
+        str(instrument["symbol"]): company_name
+        for _, instrument in instruments.iterrows()
+        if (company_name := instrument_company_name(instrument))
+    }
+
+
 def download_instrument_master(url: str) -> pd.DataFrame:
     request = Request(url, headers={"User-Agent": "vento-nse-data/1.0"})
     try:
@@ -955,11 +973,16 @@ def build_session_consistent_output(
     symbols: list[str],
     results: dict[str, dict[str, Any]],
     target_session: date,
+    company_names: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for rank, symbol in enumerate(symbols, start=1):
         result = results.get(symbol)
-        row: dict[str, Any] = {"rank": rank, "symbol": symbol}
+        row: dict[str, Any] = {
+            "rank": rank,
+            "symbol": symbol,
+            "company_name": (company_names or {}).get(symbol, symbol),
+        }
         if result and result.get("trading_date") == target_session:
             row.update(result)
             row["rank"] = rank
@@ -1023,6 +1046,7 @@ def _run_screener_unlocked(
 
     instruments = download_instrument_master(config.instrument_master_url)
     security_map, unmapped = build_security_map(symbols, instruments)
+    company_names = build_company_name_map(instruments)
     if unmapped:
         print(
             f"Instrument mapping missing for {len(unmapped)} symbols: "
@@ -1117,7 +1141,12 @@ def _run_screener_unlocked(
             f"({coverage:.1%}, minimum {config.minimum_coverage:.1%})"
         )
 
-    output = build_session_consistent_output(symbols, results, target_session)
+    output = build_session_consistent_output(
+        symbols,
+        results,
+        target_session,
+        company_names,
+    )
     write_csv_atomically(output, config.output_file)
     print(f"Published session: {target_session} (IST)", flush=True)
     print(f"Session-consistent symbols: {valid_count}/{len(symbols)}", flush=True)

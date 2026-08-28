@@ -33,6 +33,11 @@ from live_signals import (
     LiveSignalSettings,
 )
 from market_data_refresh import MarketDataRefreshService
+from market_symbol_registry import (
+    MarketSymbolRegistry,
+    SymbolAlreadyExistsError,
+    SymbolNotFoundError,
+)
 from market_aligned_rsi_scalper import (
     STRATEGY_DESCRIPTION as MARKET_ALIGNED_DESCRIPTION,
     STRATEGY_KEY as MARKET_ALIGNED_STRATEGY_KEY,
@@ -44,6 +49,7 @@ from market_aligned_rsi_scalper import (
 )
 from dhan_oi import build_oi_service_from_environment
 from main import (
+    ConfigurationError,
     DEFAULT_SYMBOLS_FILE,
     IST,
     DhanAPIError,
@@ -929,6 +935,17 @@ class PaperBuyRequest(BaseModel):
 class PaperCloseRequest(BaseModel):
     actualExitPrice: float = Field(gt=0, le=10_000_000)
     notes: str | None = Field(default=None, max_length=1_000)
+
+
+class MarketSymbolRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=40)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_market_symbol(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip().upper().removesuffix(".NS")
 
 
 def _finite(value: Any, digits: int = 4) -> float | None:
@@ -2663,6 +2680,39 @@ def refresh_market_data() -> dict[str, Any]:
     try:
         return get_market_data_refresh_service().start()
     except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.post("/market-data/symbols")
+async def add_market_symbol(request: MarketSymbolRequest) -> dict[str, Any]:
+    """Add a Dhan-validated NSE equity and refresh the shared market snapshot."""
+    service = get_market_data_refresh_service()
+    if service.status()["running"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Wait for the current market-data refresh to finish before adding a symbol",
+        )
+
+    try:
+        config = DhanConfig.from_environment()
+        instruments = await asyncio.to_thread(
+            download_instrument_master,
+            config.instrument_master_url,
+        )
+        registry = MarketSymbolRegistry(config.symbols_file, DEFAULT_SYMBOLS_FILE)
+        addition = await asyncio.to_thread(registry.add, request.symbol, instruments)
+        refresh = service.start()
+        return {
+            "symbol": addition.symbol,
+            "companyName": addition.company_name,
+            "symbolCount": addition.symbol_count,
+            "refresh": refresh,
+        }
+    except SymbolAlreadyExistsError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SymbolNotFoundError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (ConfigurationError, DhanAPIError, OSError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 

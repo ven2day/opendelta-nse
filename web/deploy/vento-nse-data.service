@@ -12,6 +12,7 @@ ExecStartPre=-/usr/bin/docker rm -f vento-nse-data-refresh
 ExecStart=/usr/bin/docker run --rm --name vento-nse-data-refresh \
   --env-file /etc/vento-nse-dhan.env \
   --env NSE_DATA_FILE=/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv \
+  --env SYMBOLS_FILE=/var/lib/vento-nse/data/symbols.csv \
   --mount type=bind,source=/var/lib/vento-nse/data,target=/var/lib/vento-nse/data \
   --mount type=bind,source=/var/lib/vento-nse/dhan,target=/var/lib/vento-nse/dhan \
   --read-only \

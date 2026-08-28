@@ -96,7 +96,8 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(html, /Dhan market data/);
   assert.match(html, /Refresh all NSE data from Dhan/);
   assert.match(html, /\d{2} [A-Z][a-z]{2} \d{2}:\d{2} (?:AM|PM)/);
-  assert.match(html, /Last refresh/);
+  assert.doesNotMatch(html, /symbols refreshed/);
+  assert.match(html, /Add NSE symbol/);
   assert.doesNotMatch(html, /NSE ready/);
   assert.doesNotMatch(html, /All prices|Extra large/);
   assert.match(html, /IST/);

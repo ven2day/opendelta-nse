@@ -12,6 +12,7 @@ from backtest_api import (
     LiveSignalSettingsRequest,
     LiveUniverseRequest,
     LiveUniverseSaveRequest,
+    MarketSymbolRequest,
     PaperBuyRequest,
     PaperCloseRequest,
     app,
@@ -278,8 +279,12 @@ class RequestTests(unittest.TestCase):
                 "/market-data/status",
                 "/market-data/csv",
                 "/market-data/refresh",
+                "/market-data/symbols",
             }.issubset(paths)
         )
+
+    def test_market_symbol_request_normalizes_nse_suffix(self) -> None:
+        self.assertEqual(MarketSymbolRequest(symbol=" alpha.ns ").symbol, "ALPHA")
 
     def test_unavailable_batch_returns_symbol_errors_instead_of_failing_request(self) -> None:
         class UnavailableStore:

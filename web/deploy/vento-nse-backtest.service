@@ -19,6 +19,7 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-backtest \
   --env LIVE_SIGNAL_ENGINE_ENABLED=true \
   --env LIVE_SIGNAL_DIR=/var/lib/vento-nse/backtest/live-signals \
   --env LIVE_MARKET_DATA_FILE=/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv \
+  --env SYMBOLS_FILE=/var/lib/vento-nse/data/symbols.csv \
   --mount type=bind,source=/var/lib/vento-nse/backtest,target=/var/lib/vento-nse/backtest \
   --mount type=bind,source=/var/lib/vento-nse/dhan,target=/var/lib/vento-nse/dhan \
   --mount type=bind,source=/var/lib/vento-nse/data,target=/var/lib/vento-nse/data \

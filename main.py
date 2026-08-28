@@ -1005,9 +1005,14 @@ def _fetch_result(
     return process_symbol(symbol, frame)
 
 
-def _run_screener_unlocked(config: DhanConfig) -> pd.DataFrame:
+def _run_screener_unlocked(
+    config: DhanConfig,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> pd.DataFrame:
     symbols = load_symbols(config.symbols_file)
     print(f"Loaded {len(symbols)} symbols from {config.symbols_file}", flush=True)
+    if progress_callback is not None:
+        progress_callback(0, len(symbols))
 
     client = DhanClient(config)
     profile = client.profile()
@@ -1063,6 +1068,8 @@ def _run_screener_unlocked(config: DhanConfig) -> pd.DataFrame:
 
         if position % 25 == 0 or position == len(symbols):
             print(f"Downloaded {position}/{len(symbols)} symbols", flush=True)
+        if progress_callback is not None:
+            progress_callback(position, len(symbols))
 
     target_session = choose_target_session(results)
     if target_session is None:
@@ -1136,10 +1143,13 @@ def market_data_refresh_lock(output_file: Path) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def run_screener(config: DhanConfig | None = None) -> pd.DataFrame:
+def run_screener(
+    config: DhanConfig | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> pd.DataFrame:
     resolved = config or DhanConfig.from_environment()
     with market_data_refresh_lock(resolved.output_file):
-        return _run_screener_unlocked(resolved)
+        return _run_screener_unlocked(resolved, progress_callback)
 
 
 if __name__ == "__main__":

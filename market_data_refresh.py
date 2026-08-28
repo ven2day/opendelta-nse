@@ -13,7 +13,8 @@ import pandas as pd
 from main import ConfigurationError, DhanAPIError, DhanConfig, IST, run_screener
 
 
-RefreshRunner = Callable[[DhanConfig], pd.DataFrame]
+RefreshProgress = Callable[[int, int], None]
+RefreshRunner = Callable[[DhanConfig, RefreshProgress | None], pd.DataFrame]
 
 
 class MarketDataRefreshService:
@@ -41,6 +42,8 @@ class MarketDataRefreshService:
         self._started_at: datetime | None = None
         self._completed_at: datetime | None = None
         self._rows_published: int | None = None
+        self._processed_symbols: int | None = None
+        self._total_symbols: int | None = None
         self._error: str | None = None
 
     def _file_timestamp(self) -> str | None:
@@ -58,6 +61,8 @@ class MarketDataRefreshService:
             "completedAt": self._completed_at.isoformat() if self._completed_at else None,
             "lastRefreshTimestamp": self._file_timestamp(),
             "rowsPublished": self._rows_published,
+            "processedSymbols": self._processed_symbols,
+            "totalSymbols": self._total_symbols,
             "error": self._error,
         }
 
@@ -73,14 +78,21 @@ class MarketDataRefreshService:
             self._started_at = self.clock()
             self._completed_at = None
             self._rows_published = None
+            self._processed_symbols = 0
+            self._total_symbols = None
             self._error = None
             self._future = self._executor.submit(self._run)
             return {"accepted": True, **self._status_unlocked()}
 
+    def _record_progress(self, processed: int, total: int) -> None:
+        with self._lock:
+            self._processed_symbols = max(0, min(int(processed), int(total)))
+            self._total_symbols = max(0, int(total))
+
     def _run(self) -> None:
         try:
             config = replace(DhanConfig.from_environment(), output_file=self.output_file)
-            output = self.runner(config)
+            output = self.runner(config, self._record_progress)
         except (ConfigurationError, DhanAPIError, OSError, ValueError) as error:
             message = " ".join(str(error).split())[:300] or "Market-data refresh failed"
             with self._lock:
@@ -97,6 +109,9 @@ class MarketDataRefreshService:
                 self._state = "SUCCEEDED"
                 self._completed_at = self.clock()
                 self._rows_published = len(output)
+                completed_total = self._total_symbols or len(output)
+                self._processed_symbols = completed_total
+                self._total_symbols = completed_total
                 self._error = None
 
     def wait(self, timeout: float | None = None) -> dict[str, Any]:

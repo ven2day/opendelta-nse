@@ -96,7 +96,7 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(html, /Dhan market data/);
   assert.match(html, /Refresh all NSE data from Dhan/);
   assert.match(html, /\d{2} [A-Z][a-z]{2} \d{2}:\d{2} (?:AM|PM)/);
-  assert.doesNotMatch(html, /Last refresh/);
+  assert.match(html, /Last refresh/);
   assert.doesNotMatch(html, /NSE ready/);
   assert.doesNotMatch(html, /All prices|Extra large/);
   assert.match(html, /IST/);
@@ -236,9 +236,9 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(dashboardText, /STATUS_REFRESH_INTERVAL_MS = 10_000/);
   assert.match(dashboardText, /Refresh all NSE data from Dhan/);
   assert.match(dashboardText, /dhan-refresh-control/);
-  assert.doesNotMatch(dashboardText, /Refreshing all NSE data/);
+  assert.match(dashboardText, /Refreshing \$\{status\.processedSymbols\}\/\$\{status\.totalSymbols\} symbols/);
   assert.match(dashboardText, /fetch\("\/api\/market-data"/);
-  assert.match(dashboardText, /body\.marketSession === "CLOSED" && hasSettledMarketData/);
+  assert.match(dashboardText, /nextMarketSession === "CLOSED" \? "MARKET_CLOSED"/);
   assert.match(marketRefreshApiText, /getSessionUser/);
   assert.match(marketRefreshApiText, /\/market-data\/status/);
   assert.match(marketRefreshApiText, /\/market-data\/csv/);

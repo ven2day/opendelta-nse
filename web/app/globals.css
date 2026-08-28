@@ -633,6 +633,20 @@ input:focus-visible {
   box-shadow: 0 0 0 4px var(--amber-soft);
 }
 
+.dhan-refresh-control.market-closed .status-dot {
+  background: var(--muted);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--muted) 16%, transparent);
+}
+
+.dhan-refresh-control.market-closed .connection-state {
+  color: var(--muted);
+}
+
+.dhan-refresh-control.refreshing .status-dot {
+  background: var(--primary);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
 .dhan-data-status {
   display: flex;
   min-width: 0;
@@ -671,10 +685,13 @@ input:focus-visible {
 }
 
 .dhan-status-time {
+  max-width: 260px;
+  overflow: hidden;
   color: var(--muted);
   font-family: var(--font-jetbrains-mono), "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   font-weight: 600;
+  text-overflow: ellipsis;
 }
 
 .status-dot {

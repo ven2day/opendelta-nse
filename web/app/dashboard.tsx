@@ -40,6 +40,8 @@ type MarketDataRefreshStatus = {
   completedAt: string | null;
   lastRefreshTimestamp: string | null;
   rowsPublished: number | null;
+  processedSymbols: number | null;
+  totalSymbols: number | null;
   error: string | null;
 };
 type SortKey =
@@ -131,8 +133,23 @@ function formatDhanTimestamp(value: string | null) {
 
 function formatConnectionStatus(value: string) {
   return value
+    .replace(/_/g, " ")
     .toLowerCase()
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatRefreshStatus(status: MarketDataRefreshStatus, timestamp: string | null) {
+  if (status.running) {
+    if (status.processedSymbols !== null && status.totalSymbols) {
+      return `Refreshing ${status.processedSymbols}/${status.totalSymbols} symbols`;
+    }
+    return "Refreshing market data";
+  }
+  if (status.state === "FAILED") return "Refresh failed";
+  if (status.state === "SUCCEEDED" && status.rowsPublished !== null) {
+    return `${status.rowsPublished} symbols refreshed · ${formatDhanTimestamp(timestamp)}`;
+  }
+  return `Last refresh · ${formatDhanTimestamp(timestamp)}`;
 }
 
 function isMarketDataStale(value: string | null, now = new Date()) {
@@ -318,6 +335,7 @@ export function Dashboard({
   const [page, setPage] = useState(1);
   const [darkMode, setDarkMode] = useState(true);
   const [connectionStatus, setConnectionStatus] = useState("CHECKING");
+  const [marketSession, setMarketSession] = useState("UNKNOWN");
   const [refreshStatus, setRefreshStatus] = useState<MarketDataRefreshStatus>({
     state: "IDLE",
     running: false,
@@ -325,6 +343,8 @@ export function Dashboard({
     completedAt: null,
     lastRefreshTimestamp: generatedAt,
     rowsPublished: null,
+    processedSymbols: null,
+    totalSymbols: null,
     error: null,
   });
   const loadedRefreshTimestamp = useRef(generatedAt);
@@ -359,10 +379,8 @@ export function Dashboard({
         fetch("/api/market-data", { cache: "no-store" }),
         fetch("/api/live-signals?action=status", { cache: "no-store" }),
       ]);
-      let hasSettledMarketData = false;
       if (refreshResponse.ok) {
         const nextStatus = await refreshResponse.json() as MarketDataRefreshStatus;
-        hasSettledMarketData = nextStatus.state !== "FAILED" && Boolean(nextStatus.lastRefreshTimestamp);
         setRefreshStatus(nextStatus);
         if (
           nextStatus.lastRefreshTimestamp &&
@@ -377,8 +395,11 @@ export function Dashboard({
           connectionStatus?: string;
           marketSession?: string;
         };
-        const settledDataConnected = body.marketSession === "CLOSED" && hasSettledMarketData;
-        setConnectionStatus(settledDataConnected ? "CONNECTED" : (body.connectionStatus ?? "UNKNOWN"));
+        const nextMarketSession = body.marketSession ?? "UNKNOWN";
+        setMarketSession(nextMarketSession);
+        setConnectionStatus(
+          nextMarketSession === "CLOSED" ? "MARKET_CLOSED" : (body.connectionStatus ?? "UNKNOWN"),
+        );
       } else {
         setConnectionStatus("DISCONNECTED");
       }
@@ -432,7 +453,8 @@ export function Dashboard({
   const selectedMinPrice = priceFromSlider(priceSliderMin, priceLimits.min, priceLimits.max);
   const selectedMaxPrice = priceFromSlider(priceSliderMax, priceLimits.min, priceLimits.max);
   const refreshTimestamp = refreshStatus.lastRefreshTimestamp ?? marketGeneratedAt;
-  const marketDataStale = isMarketDataStale(refreshTimestamp);
+  const marketDataStale = marketSession !== "CLOSED" && isMarketDataStale(refreshTimestamp);
+  const refreshStatusText = formatRefreshStatus(refreshStatus, refreshTimestamp);
 
   const filteredStocks = useMemo(() => {
     const normalizedQuery = query.trim().toUpperCase();
@@ -553,7 +575,7 @@ export function Dashboard({
 
           <div className="header-actions">
             <div
-              className={`dhan-refresh-control ${marketDataStale || refreshStatus.state === "FAILED" ? "stale" : ""}`}
+              className={`dhan-refresh-control ${marketDataStale || refreshStatus.state === "FAILED" ? "stale" : ""} ${marketSession === "CLOSED" && refreshStatus.state !== "FAILED" ? "market-closed" : ""} ${refreshStatus.running ? "refreshing" : ""}`}
               title={refreshStatus.error ?? (marketDataStale ? "Market data has missed its expected refresh" : undefined)}
             >
               <div className="dhan-data-status" aria-label="Dhan market data status">
@@ -563,7 +585,7 @@ export function Dashboard({
                     <strong>Dhan</strong>
                     <span className="connection-state">{formatConnectionStatus(connectionStatus)}</span>
                   </span>
-                  <span className="dhan-status-time">{formatDhanTimestamp(refreshTimestamp)}</span>
+                  <span className="dhan-status-time" aria-live="polite">{refreshStatusText}</span>
                 </span>
               </div>
               <button
@@ -572,7 +594,7 @@ export function Dashboard({
                 onClick={() => void startManualRefresh()}
                 disabled={refreshStatus.running}
                 aria-label="Refresh all NSE data from Dhan"
-                title={refreshStatus.running ? "All-symbol refresh is running" : "Refresh all NSE data from Dhan"}
+                title={refreshStatus.running ? refreshStatusText : "Refresh all NSE data from Dhan"}
               >
                 <RefreshCw className={refreshStatus.running ? "spin" : ""} size={16} />
               </button>

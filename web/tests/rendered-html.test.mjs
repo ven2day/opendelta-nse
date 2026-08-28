@@ -259,12 +259,12 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(backtestText, /Signals execute at the next candle open/);
   assert.match(backtestText, /Performance summary/);
   assert.match(backtestText, /NIFTY 50/);
-  assert.match(backtestText, /symbolsToRun = useAllSymbols \? symbols : selectedSymbols/);
+  assert.match(backtestText, /symbolsToRun = useAllSymbols \? availableSymbols : selectedSymbols/);
   assert.match(backtestText, /const batchSize = 10/);
   assert.match(backtestText, /const body = await result\.text\(\)/);
   assert.match(backtestText, /returned an unreadable response near/);
   assert.doesNotMatch(backtestText, /await result\.json\(\)/);
-  assert.match(backtestText, /All \{symbols\.length\} symbols/);
+  assert.match(backtestText, /All \{availableSymbols\.length\} symbols/);
   assert.match(backtestText, /RSI Range Strategy/);
   assert.match(backtestText, /RSI Recovery Scalping/);
   assert.match(backtestText, /switchStrategy\("rsi_recovery"\)/);

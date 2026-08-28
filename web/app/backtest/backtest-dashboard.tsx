@@ -42,6 +42,11 @@ import {
   parameterDefinition,
   strategyDefaults,
 } from "./strategy-parameters";
+import {
+  readBacktestHistory,
+  saveBacktestHistory,
+  type BacktestHistoryEntry,
+} from "./backtest-history";
 
 type BacktestDashboardProps = {
   symbols: string[];
@@ -193,6 +198,8 @@ type OiFilterComparisonResponse = {
   detail?: string;
 };
 
+type StoredBacktest = BacktestHistoryEntry<BacktestResponse | RecoveryBacktestResponse>;
+
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
 const marketRecommendedDefaults = strategyDefaults("market_aligned_rsi_scalper");
 const rangeRecommendedDefaults = strategyDefaults("rsi_range");
@@ -218,6 +225,12 @@ function isRecoveryResponse(value: BacktestResponse | RecoveryBacktestResponse |
 
 function isRangeResponse(value: BacktestResponse | RecoveryBacktestResponse | null): value is BacktestResponse {
   return value?.metadata.strategyMode === "rsi_range";
+}
+
+function strategyDisplayName(strategy: StrategyMode): string {
+  if (strategy === "rsi_recovery") return "RSI Recovery Scalping";
+  if (strategy === "market_aligned_rsi_scalper") return "Market-Aligned RSI Scalper";
+  return "RSI Range Strategy";
 }
 
 async function readBacktestPayload(result: Response, batchStart: string): Promise<BacktestPayload> {
@@ -599,6 +612,8 @@ function PerformanceChart({
 export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
+  const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
+  const [symbolRegistryError, setSymbolRegistryError] = useState<string | null>(null);
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>(symbols.includes("LUPIN") ? ["LUPIN"] : symbols.slice(0, 1));
   const [useAllSymbols, setUseAllSymbols] = useState(false);
   const [symbolQuery, setSymbolQuery] = useState("");
@@ -869,10 +884,60 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | null>(null);
+  const [backtestHistory, setBacktestHistory] = useState<StoredBacktest[]>([]);
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
+  const [historyMessage, setHistoryMessage] = useState<string | null>(null);
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<{ completed: number; total: number } | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
   const exitProtectionEnabled = exitModel !== "LEGACY_FIXED_TARGET";
+
+  useEffect(() => {
+    let active = true;
+    const loadSymbols = () => {
+      void fetch("/api/market-symbols", { cache: "no-store" })
+        .then(async (result) => {
+          const payload = JSON.parse(await result.text()) as { symbols?: unknown; detail?: string };
+          if (!result.ok) throw new Error(payload.detail ?? "The live symbol list is unavailable");
+          if (!Array.isArray(payload.symbols)) throw new Error("The live symbol list is invalid");
+          const next = Array.from(new Set(payload.symbols.filter((item): item is string => typeof item === "string" && item.length > 0)))
+            .sort((left, right) => left.localeCompare(right));
+          if (!next.length) throw new Error("The live symbol list is empty");
+          if (active) {
+            setAvailableSymbols(next);
+            setSymbolRegistryError(null);
+          }
+        })
+        .catch(() => {
+          if (active) setSymbolRegistryError("Live symbol list unavailable; showing the bundled fallback.");
+        });
+    };
+    loadSymbols();
+    window.addEventListener("focus", loadSymbols);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", loadSymbols);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void readBacktestHistory<BacktestResponse | RecoveryBacktestResponse>()
+      .then((entries) => {
+        if (!active) return;
+        setBacktestHistory(entries);
+        if (entries.length) {
+          const latest = entries[0];
+          setResponse(latest.response);
+          setActiveHistoryId(latest.id);
+          if (isRangeResponse(latest.response)) setDetailSymbol(latest.response.results[0]?.symbol ?? null);
+        }
+      })
+      .catch(() => {
+        if (active) setHistoryMessage("Browser history is unavailable in this session; new backtests will still run.");
+      });
+    return () => { active = false; };
+  }, []);
 
   const switchStrategy = (next: StrategyMode) => {
     if (strategyMode === "rsi_recovery") {
@@ -931,13 +996,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     }
     setNumericErrors({});
     setStrategyMode(next); if (next !== "rsi_range") setTimeframe("5m");
-    setResponse(null); setError(null); setOiComparison(null);
+    setResponse(null); setActiveHistoryId(null); setError(null); setOiComparison(null);
   };
 
   const choices = useMemo(() => {
     const query = symbolQuery.trim().toUpperCase();
-    return symbols.filter((symbol) => !selectedSymbols.includes(symbol) && (!query || symbol.includes(query))).slice(0, 12);
-  }, [selectedSymbols, symbolQuery, symbols]);
+    return availableSymbols.filter((symbol) => !selectedSymbols.includes(symbol) && (!query || symbol.includes(query))).slice(0, 12);
+  }, [availableSymbols, selectedSymbols, symbolQuery]);
 
   const rangeResponse = isRangeResponse(response) ? response : null;
   const detail = rangeResponse?.results.find((result) => result.symbol === detailSymbol) ?? rangeResponse?.results[0] ?? null;
@@ -953,7 +1018,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    const symbolsToRun = useAllSymbols ? availableSymbols : selectedSymbols;
     if (!symbolsToRun.length) {
       setError("Select at least one symbol.");
       return;
@@ -1039,6 +1104,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
     setLoading(true);
     setError(null);
     setResponse(null);
+    setActiveHistoryId(null);
     setOptimization(null);
     setRsiComparison(null);
     setOiComparison(null);
@@ -1166,6 +1232,28 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           setDetailSymbol((current) => current ?? aggregate?.results[0]?.symbol ?? null);
         }
       }
+      if (aggregate) {
+        const completedAt = "completedAt" in aggregate.metadata
+          ? aggregate.metadata.completedAt
+          : aggregate.metadata.generatedAt;
+        const stored: StoredBacktest = {
+          id: aggregate.metadata.runId || runId,
+          completedAt,
+          strategyMode,
+          strategyName: strategyDisplayName(strategyMode),
+          timeframe,
+          durationYears,
+          symbolCount: symbolsToRun.length,
+          response: aggregate,
+        };
+        try {
+          setBacktestHistory(await saveBacktestHistory(stored));
+          setActiveHistoryId(stored.id);
+          setHistoryMessage(null);
+        } catch {
+          setHistoryMessage("This result is displayed, but browser storage could not save it.");
+        }
+      }
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
         setError(`Backtest stopped after ${completedCount} of ${symbolsToRun.length} symbols. Completed results are still shown.`);
@@ -1179,7 +1267,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   };
 
   const optimizeAtrExits = async () => {
-    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    const symbolsToRun = useAllSymbols ? availableSymbols : selectedSymbols;
     if (!symbolsToRun.length) {
       setError("Select at least one symbol before optimizing ATR exits.");
       return;
@@ -1261,7 +1349,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   };
 
   const compareRsiExits = async () => {
-    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    const symbolsToRun = useAllSymbols ? availableSymbols : selectedSymbols;
     if (!symbolsToRun.length) {
       setError("Select at least one symbol before comparing RSI exit settings.");
       return;
@@ -1338,7 +1426,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   };
 
   const compareOiFilter = async () => {
-    const symbolsToRun = useAllSymbols ? symbols : selectedSymbols;
+    const symbolsToRun = useAllSymbols ? availableSymbols : selectedSymbols;
     if (!symbolsToRun.length) {
       setError("Select at least one symbol before comparing the OI filter.");
       return;
@@ -1503,10 +1591,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
 
         <form className="backtest-controls" onSubmit={submit} noValidate>
           <div className="control-block symbol-control">
-            <label>Symbol universe <span>{useAllSymbols ? `${symbols.length} symbols` : `${selectedSymbols.length}/10 selected`}</span></label>
+            <label>Symbol universe <span>{useAllSymbols ? `${availableSymbols.length} symbols` : `${selectedSymbols.length}/10 selected`}</span></label>
             <div className="universe-toggle segmented backtest-segmented">
               <button type="button" className={!useAllSymbols ? "active" : ""} onClick={() => setUseAllSymbols(false)}>Selected symbols</button>
-              <button type="button" className={useAllSymbols ? "active" : ""} onClick={() => { setUseAllSymbols(true); setSymbolMenuOpen(false); }}>All {symbols.length} symbols</button>
+              <button type="button" className={useAllSymbols ? "active" : ""} onClick={() => { setUseAllSymbols(true); setSymbolMenuOpen(false); }}>All {availableSymbols.length} symbols</button>
             </div>
             {useAllSymbols ? (
               <div className="all-symbols-selection">
@@ -1532,6 +1620,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                 </div>
               </div>
             )}
+            {symbolRegistryError && <small className="symbol-registry-warning">{symbolRegistryError}</small>}
           </div>
 
           <div className="control-block compact-control"><span className="control-title">Duration</span><div className="segmented backtest-segmented">{([1, 3] as const).map((years) => <button key={years} type="button" className={durationYears === years ? "active" : ""} onClick={() => setDurationYears(years)}>{years} year{years > 1 ? "s" : ""}</button>)}</div></div>
@@ -1748,6 +1837,33 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
             <button className="run-backtest" type="submit" disabled={strategyMode === "market_aligned_rsi_scalper" && marketFormInvalid}><TrendingUp size={17} />Run backtest</button>
           )}
         </form>
+
+        <section className="backtest-panel backtest-history-panel" aria-labelledby="backtest-history-title">
+          <div className="panel-title">
+            <div><span className="section-kicker">Stored in this browser</span><h2 id="backtest-history-title">Recent backtests</h2></div>
+            <span className="cost-note">Latest 10 completed results · retained after refresh</span>
+          </div>
+          {historyMessage && <div className="backtest-history-message"><AlertTriangle size={16} /><span>{historyMessage}</span></div>}
+          {backtestHistory.length ? <div className="backtest-history-list">
+            {backtestHistory.map((item) => (
+              <article className={activeHistoryId === item.id ? "active" : ""} key={item.id}>
+                <div>
+                  <strong>{item.strategyName}</strong>
+                  <span>{formatIst(item.completedAt)} · {item.durationYears}Y · {item.timeframe} · {item.symbolCount} symbol{item.symbolCount === 1 ? "" : "s"}</span>
+                </div>
+                <button type="button" className="secondary-action" onClick={() => {
+                  setResponse(item.response);
+                  setActiveHistoryId(item.id);
+                  setError(null);
+                  setOptimization(null);
+                  setRsiComparison(null);
+                  setOiComparison(null);
+                  setDetailSymbol(isRangeResponse(item.response) ? item.response.results[0]?.symbol ?? null : null);
+                }}>{activeHistoryId === item.id ? "Viewing" : "View result"}</button>
+              </article>
+            ))}
+          </div> : <p className="backtest-history-empty">Completed backtests will appear here automatically. Results stay in this browser and are not shared between devices.</p>}
+        </section>
 
         {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}
         {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Fetching and testing historical candles</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols complete. ` : ""}Intraday universe runs can take much longer the first time; cached runs are faster.</span></div></div>}

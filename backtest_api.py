@@ -125,7 +125,7 @@ VARIABLE_FEE_RATE = 0.00111
 FIXED_FEE_PER_ORDER = 20.0
 SLIPPAGE_RATE = 0.0005
 MINIMUM_NET_PROFIT_PCT = 1.0
-MAX_SYMBOLS_PER_RUN = 750
+MAX_SYMBOLS_PER_RUN = int(os.environ.get("BACKTEST_MAX_SYMBOLS_PER_RUN", "2000"))
 MAX_BACKTEST_WORKERS = 10
 MAX_CHART_POINTS = 360
 MAX_EVENTS = 300
@@ -2713,6 +2713,17 @@ async def add_market_symbol(request: MarketSymbolRequest) -> dict[str, Any]:
     except SymbolNotFoundError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except (ConfigurationError, DhanAPIError, OSError, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.get("/market-data/symbols")
+def list_market_symbols() -> dict[str, Any]:
+    """Return the same managed symbol registry used by refreshes and backtests."""
+    try:
+        symbols_file = Path(os.environ.get("SYMBOLS_FILE", DEFAULT_SYMBOLS_FILE)).expanduser()
+        symbols = load_symbols(symbols_file)
+        return {"symbols": symbols, "symbolCount": len(symbols)}
+    except (OSError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 

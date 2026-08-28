@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -13,10 +16,12 @@ from backtest_api import (
     LiveUniverseRequest,
     LiveUniverseSaveRequest,
     MarketSymbolRequest,
+    MAX_SYMBOLS_PER_RUN,
     PaperBuyRequest,
     PaperCloseRequest,
     app,
     _entry_signal,
+    list_market_symbols,
     prepare_candles,
     run_backtest,
     simulate_symbol,
@@ -186,6 +191,11 @@ class RequestTests(unittest.TestCase):
         request = BacktestRequest(symbols=[" lupin.ns ", "LUPIN", "INFY"])
         self.assertEqual(request.symbols, ["LUPIN", "INFY"])
 
+    def test_managed_universe_can_grow_past_the_original_bundle(self) -> None:
+        self.assertGreater(MAX_SYMBOLS_PER_RUN, 750)
+        symbols = [f"SYMBOL{index}" for index in range(751)]
+        self.assertEqual(len(BacktestRequest(symbols=symbols).symbols), 751)
+
     def test_exit_model_contract_preserves_legacy_clients(self) -> None:
         legacy = BacktestRequest(symbols=["LUPIN"], strategyMode="rsi_recovery")
         self.assertEqual(legacy.resolved_exit_model(), "LEGACY_FIXED_TARGET")
@@ -282,6 +292,24 @@ class RequestTests(unittest.TestCase):
                 "/market-data/symbols",
             }.issubset(paths)
         )
+        symbol_methods = {
+            method
+            for route in app.routes
+            if route.path == "/market-data/symbols"
+            for method in (route.methods or set())
+        }
+        self.assertTrue({"GET", "POST"}.issubset(symbol_methods))
+
+    def test_market_symbol_list_reads_the_runtime_registry(self) -> None:
+        with TemporaryDirectory() as directory:
+            symbols_file = Path(directory) / "symbols.csv"
+            symbols_file.write_text("symbol\nALPHA\nBETA\nGAMMA\n", encoding="utf-8")
+            with patch.dict("os.environ", {"SYMBOLS_FILE": str(symbols_file)}):
+                response = list_market_symbols()
+        self.assertEqual(response, {
+            "symbols": ["ALPHA", "BETA", "GAMMA"],
+            "symbolCount": 3,
+        })
 
     def test_market_symbol_request_normalizes_nse_suffix(self) -> None:
         self.assertEqual(MarketSymbolRequest(symbol=" alpha.ns ").symbol, "ALPHA")

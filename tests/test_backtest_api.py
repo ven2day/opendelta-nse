@@ -161,6 +161,29 @@ class SignalTests(unittest.TestCase):
 
 
 class CandlePreparationTests(unittest.TestCase):
+    def test_fresh_second_resolution_candles_accept_microsecond_boundary(self) -> None:
+        index = pd.date_range("2025-01-01", periods=3, freq="1D", tz=IST).as_unit("s")
+        frame = pd.DataFrame(
+            {
+                "Open": [100, 101, 102],
+                "High": [101, 102, 103],
+                "Low": [99, 100, 101],
+                "Close": [100.5, 101.5, 102.5],
+                "Volume": [1_000, 1_100, 1_200],
+            },
+            index=index,
+        )
+
+        prepared = prepare_candles(
+            frame,
+            "1d",
+            datetime(2025, 1, 2, 0, 0, 0, 123456, tzinfo=IST),
+            datetime(2025, 1, 10, 16, 0, tzinfo=IST),
+        )
+
+        self.assertEqual(prepared.index.dtype, pd.DatetimeTZDtype(unit="us", tz=IST))
+        self.assertEqual(prepared.index.tolist(), [pd.Timestamp("2025-01-03", tz=IST)])
+
     def test_two_hour_candles_are_anchored_to_nse_open_in_ist(self) -> None:
         session_start = pd.Timestamp("2025-01-02 09:15", tz=IST)
         index = pd.date_range(session_start, periods=7, freq="60min")

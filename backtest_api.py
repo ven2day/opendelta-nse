@@ -1037,6 +1037,10 @@ def prepare_candles(
     data = frame[required].apply(pd.to_numeric, errors="coerce").dropna(subset=required[:4])
     data = data[(data["Open"] > 0) & (data["High"] > 0) & (data["Low"] > 0) & (data["Close"] > 0)]
     data = data.sort_index()
+    # Fresh Dhan payloads use second-resolution epochs while CSV cache reads use
+    # microseconds. Keep first and cached runs identical before comparing against
+    # a Python datetime that can include microseconds.
+    data.index = pd.DatetimeIndex(data.index).as_unit("us", round_ok=True)
 
     if spec.source == "intraday" and spec.minutes:
         latest_complete_start = pd.Timestamp(now_ist) - pd.Timedelta(minutes=spec.minutes)

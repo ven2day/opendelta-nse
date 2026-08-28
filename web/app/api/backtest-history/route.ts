@@ -1,4 +1,5 @@
 import { getSessionUser } from "../../server-auth";
+import { historyOwnerKey } from "../history-owner";
 
 export const dynamic = "force-dynamic";
 
@@ -6,14 +7,6 @@ const PROXY_TOKEN_HEADER = "x-opendelta-proxy-token";
 const OWNER_HEADER = "x-opendelta-history-owner";
 const MAX_BODY_BYTES = 100 * 1024 * 1024;
 const RUN_ID_PATTERN = /^[A-Za-z0-9._-]{1,120}$/;
-
-async function ownerKey(username: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(username.trim().toLocaleLowerCase()),
-  );
-  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
-}
 
 async function context(): Promise<
   | { service: string; headers: Record<string, string> }
@@ -23,7 +16,7 @@ async function context(): Promise<
   if (!username) return Response.json({ detail: "Authentication required" }, { status: 401 });
   const service = process.env.BACKTEST_SERVICE_URL?.trim();
   if (!service) return Response.json({ detail: "Backtest service is not configured" }, { status: 503 });
-  const headers: Record<string, string> = { [OWNER_HEADER]: await ownerKey(username) };
+  const headers: Record<string, string> = { [OWNER_HEADER]: await historyOwnerKey(username) };
   const proxyToken = process.env.BACKTEST_PROXY_TOKEN?.trim();
   if (proxyToken) headers[PROXY_TOKEN_HEADER] = proxyToken;
   return { service: service.replace(/\/$/, ""), headers };

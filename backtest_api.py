@@ -2014,9 +2014,11 @@ def _market_result_cache_root(store: "HistoricalDataStore") -> Path:
 def _market_task_batches(tasks: list[dict[str, Any]], workers: int) -> list[list[dict[str, Any]]]:
     if not tasks:
         return []
-    # Several bounded batches per worker balance uneven symbol histories without
-    # spawning a process per symbol.
-    batch_size = max(1, math.ceil(len(tasks) / max(1, workers * 4)))
+    # A fixed process pool still reuses each process for many symbols. Keeping the
+    # dispatch unit small makes progress observable and prevents one slow symbol
+    # from hiding the completion of every other symbol in a large batch.
+    configured = int(os.environ.get("BACKTEST_SYMBOL_BATCH_SIZE", "1"))
+    batch_size = max(1, min(configured, len(tasks)))
     return [tasks[index:index + batch_size] for index in range(0, len(tasks), batch_size)]
 
 
@@ -2044,25 +2046,43 @@ def _execute_market_batches(
             max_workers=workers,
             mp_context=multiprocessing.get_context("spawn"),
         )
-        futures = {
-            executor.submit(worker, batch): (index, len(batch))
-            for index, batch in enumerate(batches)
-        }
+        # Do not pickle and queue the complete universe at once. Two dispatch
+        # units per worker keeps every process busy while bounding queued memory.
+        batch_iterator = iter(enumerate(batches))
+        futures: dict[concurrent.futures.Future[Any], tuple[int, int]] = {}
+
+        def submit_next() -> bool:
+            try:
+                index, batch = next(batch_iterator)
+            except StopIteration:
+                return False
+            futures[executor.submit(worker, batch)] = (index, len(batch))
+            return True
+
+        for _ in range(min(len(batches), workers * 2)):
+            submit_next()
         completed = 0
         ordered: dict[int, list[dict[str, Any]]] = {}
         cancelled = False
         try:
-            for future in concurrent.futures.as_completed(futures):
+            while futures:
                 if cancel_event is not None and cancel_event.is_set():
                     cancelled = True
                     for pending in futures:
                         pending.cancel()
                     raise BacktestCancelledError("Backtest cancellation requested")
-                index, size = futures[future]
-                ordered[index] = future.result()
-                completed += size
-                if progress_callback is not None:
-                    progress_callback(completed)
+                done, _ = concurrent.futures.wait(
+                    futures,
+                    timeout=0.25,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in sorted(done, key=lambda item: futures[item][0]):
+                    index, size = futures.pop(future)
+                    ordered[index] = future.result()
+                    completed += size
+                    if progress_callback is not None:
+                        progress_callback(completed)
+                    submit_next()
             nested = [ordered[index] for index in range(len(batches))]
         finally:
             executor.shutdown(wait=not cancelled, cancel_futures=cancelled)
@@ -2078,6 +2098,37 @@ def _parent_peak_memory_bytes() -> int:
 
 class BacktestCancelledError(RuntimeError):
     pass
+
+
+MARKET_ALIGNED_OMITTED_PER_SYMBOL_FIELDS = (
+    "chart",
+    "configuration",
+    "events",
+    "marketAlignmentSkippedSignals",
+    "skippedCandidates",
+)
+
+
+def _compact_market_aligned_response(response: dict[str, Any]) -> dict[str, Any]:
+    """Remove duplicated transport fields after all result totals are finalized.
+
+    Complete candidate diagnostics and trades remain in the response. The
+    removed chart/events are not rendered by Market-Aligned results, the full
+    configuration already lives in metadata, and the two skipped collections
+    duplicate candidateDiagnostics.
+    """
+    for result in response.get("results", []):
+        if not isinstance(result, dict):
+            continue
+        for field in MARKET_ALIGNED_OMITTED_PER_SYMBOL_FIELDS:
+            result.pop(field, None)
+    metadata = response.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["payloadProfile"] = "COMPACT_MARKET_ALIGNED_V1"
+        metadata["omittedPerSymbolFields"] = list(
+            MARKET_ALIGNED_OMITTED_PER_SYMBOL_FIELDS
+        )
+    return response
 
 
 def _market_run_fingerprint(
@@ -2158,6 +2209,13 @@ def _optimized_market_alignment_pipeline(
         "rawCacheTtlSeconds": CACHE_TTL_SECONDS,
     }
     trading_started = time.perf_counter()
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "STOCK_FEATURES_AND_CANDIDATES",
+            "symbolsCompleted": 0,
+            "symbolsTotal": len(request.symbols),
+            "workersActive": worker_count,
+        })
     rows = _execute_market_batches(
         [{**common, "symbol": symbol} for symbol in request.symbols],
         worker_count,
@@ -2185,6 +2243,15 @@ def _optimized_market_alignment_pipeline(
     ]
     support_workers = max(1, min(requested_workers, len(support_symbols) or 1, 8))
     support_started = time.perf_counter()
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "SUPPORTING_MARKET_FEATURES",
+            "symbolsCompleted": len(request.symbols),
+            "symbolsTotal": len(request.symbols),
+            "supportSymbolsCompleted": 0,
+            "supportSymbolsTotal": len(support_symbols),
+            "workersActive": support_workers if support_symbols else 0,
+        })
     support_rows = _execute_market_batches(
         [{**common, "symbol": symbol} for symbol in support_symbols],
         support_workers,
@@ -2402,6 +2469,13 @@ def run_market_aligned_backtest(
         if request.cachePolicy == "USE_CACHE":
             cached_response = result_cache.load(fingerprint)
             if cached_response is not None:
+                already_compact = (
+                    cached_response.get("metadata", {}).get("payloadProfile")
+                    == "COMPACT_MARKET_ALIGNED_V1"
+                )
+                _compact_market_aligned_response(cached_response)
+                if not already_compact:
+                    result_cache.save(fingerprint, cached_response)
                 return cached_response
 
     warnings = [
@@ -2689,6 +2763,7 @@ def run_market_aligned_backtest(
         "errors": errors,
         "warnings": warnings,
     }
+    _compact_market_aligned_response(response)
     serialization_started = time.perf_counter()
     json.dumps(response, sort_keys=True, separators=(",", ":"), default=str)
     performance["stagesSeconds"]["resultSerialization"] = round(
@@ -3755,8 +3830,31 @@ def _completed_job_progress(
     }
 
 
+def _job_history_record(
+    result: dict[str, Any],
+    request: BacktestRequest,
+) -> dict[str, Any]:
+    metadata = result.get("metadata", {})
+    return BacktestHistorySaveRequest(
+        id=str(metadata.get("runId") or request.runId or uuid.uuid4()),
+        completedAt=metadata.get("completedAt") or datetime.now(IST),
+        strategyMode=MARKET_ALIGNED_STRATEGY_KEY,
+        strategyName=str(metadata.get("strategyName") or MARKET_ALIGNED_STRATEGY_NAME),
+        timeframe=str(metadata.get("timeframe") or request.timeframe),
+        durationYears=int(metadata.get("durationYears") or request.durationYears),
+        symbolCount=int(metadata.get("symbolsProcessed") or len(request.symbols)),
+        response=result,
+    ).persisted()
+
+
 @app.post("/backtest/jobs")
-def start_backtest_job(request: BacktestRequest) -> dict[str, Any]:
+def start_backtest_job(
+    request: BacktestRequest,
+    history_owner: str | None = Header(
+        default=None,
+        alias="x-opendelta-history-owner",
+    ),
+) -> dict[str, Any]:
     if request.strategyMode != MARKET_ALIGNED_STRATEGY_KEY:
         raise HTTPException(
             status_code=422,
@@ -3774,6 +3872,17 @@ def start_backtest_job(request: BacktestRequest) -> dict[str, Any]:
             progress_callback=progress,
             cancel_event=cancel_event,
         )
+        if history_owner:
+            metadata = result.setdefault("metadata", {})
+            metadata["historySaved"] = True
+            try:
+                get_backtest_history_repository().save(
+                    history_owner,
+                    _job_history_record(result, request),
+                )
+            except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
+                metadata["historySaved"] = False
+                metadata["historySaveError"] = str(error)
         progress(_completed_job_progress(result, len(request.symbols)))
         return result
 

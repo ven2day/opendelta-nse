@@ -176,6 +176,8 @@ type BacktestJobStatus = {
   currentStage: string;
   symbolsCompleted: number;
   symbolsTotal: number;
+  supportSymbolsCompleted: number;
+  supportSymbolsTotal: number;
   candlesProcessed: number;
   candidatesFound: number;
   acceptedSignals: number;
@@ -189,6 +191,8 @@ type BacktestJobStatus = {
 type RunProgress = {
   completed: number;
   total: number;
+  supportCompleted?: number;
+  supportTotal?: number;
   candles?: number;
   candidates?: number;
   accepted?: number;
@@ -1028,6 +1032,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
 
   useEffect(() => {
     let active = true;
+    let retryTimer: number | null = null;
     const loadSymbols = () => {
       void fetch("/api/market-symbols", { cache: "no-store" })
         .then(async (result) => {
@@ -1038,6 +1043,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             .sort((left, right) => left.localeCompare(right));
           if (!next.length) throw new Error("The live symbol list is empty");
           if (active) {
+            if (retryTimer !== null) window.clearTimeout(retryTimer);
+            retryTimer = null;
             setAvailableSymbols(next);
             if (payload.priceRange && Number.isFinite(payload.priceRange.minimumPrice) && Number.isFinite(payload.priceRange.maximumPrice)) {
               setGlobalPriceRange(payload.priceRange);
@@ -1050,13 +1057,18 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           }
         })
         .catch(() => {
-          if (active) setSymbolRegistryError("Live symbol list unavailable; showing the bundled fallback.");
+          if (active) {
+            setSymbolRegistryError("Live symbol list unavailable; showing the bundled fallback. Retrying automatically.");
+            if (retryTimer !== null) window.clearTimeout(retryTimer);
+            retryTimer = window.setTimeout(loadSymbols, 5_000);
+          }
         });
     };
     loadSymbols();
     window.addEventListener("focus", loadSymbols);
     return () => {
       active = false;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
       window.removeEventListener("focus", loadSymbols);
     };
   }, []);
@@ -1405,6 +1417,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             setRunProgress({
               completed: job.symbolsCompleted,
               total: job.symbolsTotal,
+              supportCompleted: job.supportSymbolsCompleted,
+              supportTotal: job.supportSymbolsTotal,
               candles: job.candlesProcessed,
               candidates: job.candidatesFound,
               accepted: job.acceptedSignals,
@@ -2156,7 +2170,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             }}
           />
           {loading ? (
-            <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? `${runProgress.completed}/${runProgress.total}` : "run"}</button>
+            <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? (runProgress.stage === "SUPPORTING_MARKET_FEATURES" && runProgress.supportTotal ? `support ${runProgress.supportCompleted ?? 0}/${runProgress.supportTotal}` : `${runProgress.completed}/${runProgress.total}`) : "run"}</button>
           ) : (
             <button className="run-backtest" type="submit" disabled={strategyMode === "market_aligned_rsi_scalper" && marketFormInvalid}><TrendingUp size={17} />Run backtest</button>
           )}
@@ -2184,7 +2198,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         </section>
 
         {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}
-        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>{runProgress?.stage ? runProgress.stage.replaceAll("_", " ") : "Fetching and testing historical candles"}</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols · ${number(runProgress.candles ?? 0, 0)} candles · ${number(runProgress.candidates ?? 0, 0)} candidates · ${number(runProgress.accepted ?? 0, 0)} accepted · ${number(runProgress.workers ?? 0, 0)} workers · ${number(runProgress.elapsedSeconds ?? 0, 0)}s elapsed${runProgress.estimatedRemainingSeconds == null ? "" : ` · about ${number(runProgress.estimatedRemainingSeconds, 0)}s remaining`}.` : "Intraday universe runs can take longer on a cold cache; identical completed runs can be reused safely."}</span></div></div>}
+        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>{runProgress?.stage ? runProgress.stage.replaceAll("_", " ") : "Fetching and testing historical candles"}</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} trading symbols${runProgress.supportTotal ? ` · ${runProgress.supportCompleted ?? 0} of ${runProgress.supportTotal} supporting symbols` : ""} · ${number(runProgress.candles ?? 0, 0)} candles · ${number(runProgress.candidates ?? 0, 0)} candidates · ${number(runProgress.accepted ?? 0, 0)} accepted · ${number(runProgress.workers ?? 0, 0)} workers · ${number(runProgress.elapsedSeconds ?? 0, 0)}s elapsed${runProgress.estimatedRemainingSeconds == null ? "" : ` · about ${number(runProgress.estimatedRemainingSeconds, 0)}s remaining`}.` : "Intraday universe runs can take longer on a cold cache; identical completed runs can be reused safely."}</span></div></div>}
         {optimizing && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Running chronological ATR walk-forward analysis</strong><span>The configurable grid is evaluated with one common setting across all selected symbols. This optional research run can take time.</span></div></div>}
         {optimization && <AtrOptimizationResults response={optimization} />}
         {comparingRsiExits && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing RSI exit settings chronologically</strong><span>Training and validation stay separate, costs are included, and one common configuration is applied to all selected symbols.</span></div></div>}

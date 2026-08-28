@@ -1,8 +1,10 @@
 import { getSessionUser } from "../../server-auth";
+import { historyOwnerKey } from "../history-owner";
 
 export const dynamic = "force-dynamic";
 
 const PROXY_TOKEN_HEADER = "x-opendelta-proxy-token";
+const OWNER_HEADER = "x-opendelta-history-owner";
 
 function hasValidProxyToken(request: Request): boolean {
   const expectedToken = process.env.BACKTEST_PROXY_TOKEN?.trim();
@@ -11,7 +13,8 @@ function hasValidProxyToken(request: Request): boolean {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!hasValidProxyToken(request) && !(await getSessionUser())) {
+  const sessionUser = await getSessionUser();
+  if (!hasValidProxyToken(request) && !sessionUser) {
     return Response.json({ detail: "Authentication required" }, { status: 401 });
   }
 
@@ -31,6 +34,7 @@ export async function POST(request: Request): Promise<Response> {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const proxyToken = process.env.BACKTEST_PROXY_TOKEN?.trim();
     if (proxyToken) headers[PROXY_TOKEN_HEADER] = proxyToken;
+    if (sessionUser) headers[OWNER_HEADER] = await historyOwnerKey(sessionUser);
 
     const action = new URL(request.url).searchParams.get("action");
     const historyStatus = action === "oi-history-status";

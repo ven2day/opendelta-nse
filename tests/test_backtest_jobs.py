@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from backtest_api import _completed_job_progress
 from backtest_jobs import BacktestJobService
 
 
@@ -53,3 +54,26 @@ def test_cancellation_never_exposes_partial_result() -> None:
         assert cancelled["result"] is None
     finally:
         service.shutdown()
+
+
+def test_cached_result_reports_terminal_progress_counts() -> None:
+    result = {
+        "metadata": {
+            "cachedResult": True,
+            "symbolsProcessed": 10,
+        },
+        "summary": {
+            "candleRowsProcessed": 185_000,
+            "candidateBuySignals": 37,
+            "candidateFunnel": {"executedTrades": 4},
+        },
+    }
+    assert _completed_job_progress(result, 10) == {
+        "currentStage": "CACHED_RESULT",
+        "symbolsCompleted": 10,
+        "symbolsTotal": 10,
+        "candlesProcessed": 185_000,
+        "candidatesFound": 37,
+        "acceptedSignals": 4,
+        "workersActive": 0,
+    }

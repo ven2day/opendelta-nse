@@ -3736,6 +3736,25 @@ async def backtest(request: BacktestRequest) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
 
+def _completed_job_progress(
+    result: Mapping[str, Any], symbol_count: int,
+) -> dict[str, Any]:
+    summary = result.get("summary", {})
+    metadata = result.get("metadata", {})
+    funnel = summary.get("candidateFunnel", {})
+    return {
+        "currentStage": (
+            "CACHED_RESULT" if bool(metadata.get("cachedResult")) else "FINALIZING"
+        ),
+        "symbolsCompleted": int(metadata.get("symbolsProcessed", symbol_count)),
+        "symbolsTotal": symbol_count,
+        "candlesProcessed": int(summary.get("candleRowsProcessed", 0)),
+        "candidatesFound": int(summary.get("candidateBuySignals", 0)),
+        "acceptedSignals": int(funnel.get("executedTrades", 0)),
+        "workersActive": 0,
+    }
+
+
 @app.post("/backtest/jobs")
 def start_backtest_job(request: BacktestRequest) -> dict[str, Any]:
     if request.strategyMode != MARKET_ALIGNED_STRATEGY_KEY:
@@ -3749,12 +3768,14 @@ def start_backtest_job(request: BacktestRequest) -> dict[str, Any]:
         progress: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
     ) -> dict[str, Any]:
-        return run_market_aligned_backtest(
+        result = run_market_aligned_backtest(
             request,
             store,
             progress_callback=progress,
             cancel_event=cancel_event,
         )
+        progress(_completed_job_progress(result, len(request.symbols)))
+        return result
 
     return _backtest_job_service.start(
         symbols_total=len(request.symbols),

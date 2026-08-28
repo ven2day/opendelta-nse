@@ -83,6 +83,7 @@ class NiftyOiConfig:
     minimum_valid_contract_fraction: float = 0.50
     minimum_futures_volume: float = 1.0
     minimum_component_coverage: float = 0.65
+    minimum_confidence: float = 0.50
     options_weight: float = 0.35
     futures_weight: float = 0.35
     spot_weight: float = 0.30
@@ -116,6 +117,8 @@ class NiftyOiConfig:
             raise ValueError("Minimum futures volume cannot be negative")
         if not 0 < self.minimum_component_coverage <= 1:
             raise ValueError("Minimum OI component coverage must be in (0, 1]")
+        if not 0 <= self.minimum_confidence <= 1:
+            raise ValueError("Minimum OI confidence must be between 0 and 1")
         weights = (self.options_weight, self.futures_weight, self.spot_weight)
         if any(weight < 0 for weight in weights) or sum(weights) <= 0:
             raise ValueError("OI component weights must be non-negative and sum above zero")
@@ -763,6 +766,16 @@ def decide_long_trade(
             "allowed": allowed,
             "decision": "ALLOW_MISSING_OI" if allowed else "SKIPPED_INSUFFICIENT_OI_DATA",
             "reason": regime.get("reason") or "Required OI data is unavailable",
+        }
+    raw_confidence = regime.get("confidence")
+    confidence = ({"LOW": 0.25, "MEDIUM": 0.50, "HIGH": 1.0}.get(str(raw_confidence).upper())
+                  if isinstance(raw_confidence, str) else _finite(raw_confidence))
+    if state != "VOLATILITY_EXPANSION" and (confidence is None or confidence < config.minimum_confidence):
+        allowed = config.fail_policy == "ALLOW"
+        return {
+            "allowed": allowed,
+            "decision": "ALLOW_LOW_OI_CONFIDENCE" if allowed else "SKIPPED_LOW_OI_CONFIDENCE",
+            "reason": f"OI confidence {confidence if confidence is not None else 'unavailable'} is below {config.minimum_confidence:g}",
         }
     if state == "STRONGLY_BEARISH":
         return {"allowed": False, "decision": "SKIPPED_STRONGLY_BEARISH_OI", "reason": "Strongly bearish NIFTY OI regime blocks long cash-equity entries"}

@@ -37,12 +37,13 @@ class MarketAlignedConfig:
     room_lookback_bars: int = 20
     target_pct: float = 0.5
     minimum_nifty_trend_score: float = 25.0
+    minimum_sector_bullish_pct: float = 50.0
     minimum_breadth_pct: float = 45.0
     minimum_breadth_symbols: int = 10
     minimum_sector_members: int = 2
     minimum_average_traded_value: float = 100_000.0
     maximum_intrabar_range_pct: float = 5.0
-    minimum_alignment_score: float = 75.0
+    minimum_alignment_score: float = 85.0
     stale_data_seconds: int = 360
     sector_by_symbol: Mapping[str, str] = field(default_factory=dict)
 
@@ -55,6 +56,8 @@ class MarketAlignedConfig:
             raise ValueError("Market-Aligned minimum RVOL must be positive")
         if not 0 <= self.minimum_breadth_pct <= 100:
             raise ValueError("Market breadth threshold must be between 0 and 100")
+        if not 0 <= self.minimum_sector_bullish_pct <= 100:
+            raise ValueError("Sector bullish threshold must be between 0 and 100")
         if not 0 <= self.minimum_alignment_score <= 100:
             raise ValueError("Market Alignment Score threshold must be between 0 and 100")
         if self.minimum_breadth_symbols < 1 or self.minimum_sector_members < 1:
@@ -194,11 +197,14 @@ def _sector_at(
             "reason": "Insufficient point-in-time sector coverage",
         }
     sector_return = float(np.mean(peer_returns))
+    bullish_pct = sum(value > 0 for value in peer_returns) / len(peer_returns) * 100.0
     return {
         "available": True,
         "sector": sector,
         "returnPct": _finite(sector_return),
-        "bullish": sector_return > 0,
+        "bullish": sector_return > 0 and bullish_pct >= config.minimum_sector_bullish_pct,
+        "bullishPct": _finite(bullish_pct),
+        "requiredBullishPct": config.minimum_sector_bullish_pct,
         "observedMembers": len(peer_returns),
         "sourceTimestamp": min(sources),
     }

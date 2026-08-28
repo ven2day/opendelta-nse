@@ -238,7 +238,7 @@ def test_spot_trend_uses_only_completed_candles_at_or_before_signal() -> None:
 
 def test_policy_modes_and_elevated_quality_rules() -> None:
     config = NiftyOiConfig()
-    bearish = {"regime": "BEARISH"}
+    bearish = {"regime": "BEARISH", "confidence": 0.8}
     assert decide_long_trade("OFF", bearish, stock_quality_score=0, config=config)["allowed"]
     assert decide_long_trade("ADVISORY", bearish, stock_quality_score=0, config=config)["allowed"]
     assert not decide_long_trade("ENFORCED", {"regime": "STRONGLY_BEARISH"}, stock_quality_score=100, config=config)["allowed"]
@@ -246,6 +246,15 @@ def test_policy_modes_and_elevated_quality_rules() -> None:
     assert decide_long_trade("ENFORCED", bearish, stock_quality_score=95, open_portfolio_positions=0, config=config)["allowed"]
     assert not decide_long_trade("ENFORCED", bearish, stock_quality_score=100, open_portfolio_positions=1, config=config)["allowed"]
     assert not decide_long_trade("ENFORCED", {"regime": "INSUFFICIENT_OI_DATA"}, stock_quality_score=100, config=config)["allowed"]
+
+
+def test_minimum_confidence_is_advisory_only_until_filtering_is_enabled() -> None:
+    config = NiftyOiConfig(minimum_confidence=0.5)
+    low_confidence = {"regime": "BULLISH", "confidence": 0.25}
+    assert decide_long_trade("ADVISORY", low_confidence, stock_quality_score=100, config=config)["allowed"]
+    enforced = decide_long_trade("ENFORCED", low_confidence, stock_quality_score=100, config=config)
+    assert not enforced["allowed"]
+    assert enforced["decision"] == "SKIPPED_LOW_OI_CONFIDENCE"
 
 
 def test_off_is_identical_advisory_does_not_block_and_portfolio_order_is_chronological(tmp_path: Path) -> None:

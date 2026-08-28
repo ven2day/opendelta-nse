@@ -1,7 +1,7 @@
 "use client";
 
 import { Download, Info, SortAsc, SortDesc } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { FeatureAnalysis } from "./feature-analysis";
 
 export type RecoveryTrade = {
@@ -800,6 +800,11 @@ export function RecoveryResults({ response }: { response: RecoveryBacktestRespon
     : <SignalRecoveryResults response={response} />;
 }
 
+function DiagnosticsContainer({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>;
+  return <details className="backtest-panel market-result-diagnostics"><summary><span><strong>Diagnostics</strong><small>Target timing, excursions and raw signal observations</small></span></summary><div className="market-result-diagnostics-body">{children}</div></details>;
+}
+
 function SignalRecoveryResults({ response }: { response: RecoveryBacktestResponse }) {
   const marketAligned = response.metadata.strategyMode === "market_aligned_rsi_scalper";
   const [activeView, setActiveView] = useState<"overview" | "signals" | "open" | "features">("overview");
@@ -856,9 +861,20 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
       </nav>
 
       {activeView === "overview" && <>
-      <section className="recovery-top-cards" aria-label={`${response.metadata.strategyName ?? "RSI Recovery Scalping"} summary`}>
-        {marketAligned && <div><span>RSI candidates</span><strong>{(summary.candidateBuySignals ?? summary.buySignals).toLocaleString("en-IN")}</strong></div>}
-        {marketAligned && <div><span>Alignment rejected</span><strong>{(summary.marketAlignmentRejectedSignals ?? 0).toLocaleString("en-IN")}</strong></div>}
+      {marketAligned ? <section className="recovery-top-cards market-primary-results" aria-label="Market-Aligned RSI Scalper primary results">
+        <div><span>Executed trades</span><strong>{summary.buySignals.toLocaleString("en-IN")}</strong></div>
+        <div><span>Winning trades</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
+        <div><span>Losing trades</span><strong title="Not available in the current independent-signal research model">—</strong></div>
+        <div><span>Win rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
+        <div><span>Net P&amp;L</span><strong title="Requires a chronological portfolio backtest">—</strong></div>
+        <div><span>Profit factor</span><strong title="Requires completed winning and losing portfolio trades">—</strong></div>
+        <div><span>Expectancy</span><strong title="Requires completed winning and losing portfolio trades">—</strong></div>
+        <div><span>Maximum drawdown</span><strong title="Requires a chronological portfolio equity curve">—</strong></div>
+        <div><span>Target exits</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
+        <div><span>Stop exits</span><strong title="Not available in the current independent-signal research model">—</strong></div>
+        <div><span>Time exits</span><strong title="Not available in the current independent-signal research model">—</strong></div>
+        <div><span>Skipped signals</span><strong>{((summary.marketAlignmentRejectedSignals ?? 0) + (summary.skippedOiSignals ?? 0)).toLocaleString("en-IN")}</strong></div>
+      </section> : <section className="recovery-top-cards" aria-label={`${response.metadata.strategyName ?? "RSI Recovery Scalping"} summary`}>
         <div><span>BUY Signals</span><strong>{summary.buySignals.toLocaleString("en-IN")}</strong></div>
         <div><span>Targets Hit</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
         <div><span>Hit Rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
@@ -866,9 +882,10 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
         <div><span>Max Concurrent Signals</span><strong>{summary.maximumConcurrentSignalsUniverse.toLocaleString("en-IN")}</strong></div>
         <div><span>Max Concurrent Same Symbol</span><strong>{summary.maximumConcurrentSignalsSameSymbol.toLocaleString("en-IN")}</strong></div>
         {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {summary.skippedOiSignals ?? 0}</strong></div>}
-      </section>
+      </section>}
       <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> {marketAligned ? "RSI candidates are evaluated only against completed point-in-time NIFTY, sector, breadth, stock and optional OI context." : "Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open."}</span></div>
 
+      <DiagnosticsContainer collapsed={marketAligned}>
       <section className="backtest-panel recovery-section">
         <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Target achievement</span><h2>Target speed</h2></div><span className="date-window">Percentages use completed targets only</span></div>
         <div className="speed-bucket-grid">{speedOrder.map(([key, label]) => {
@@ -913,6 +930,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
           </div>
         </section>
       </div>
+      </DiagnosticsContainer>
 
       </>}
 

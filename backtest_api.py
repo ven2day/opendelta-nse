@@ -61,6 +61,7 @@ from recovery_backtest import (
     simulate_recovery_symbol,
     summarize_recovery_trades,
 )
+from strategy_parameters import numeric_field_kwargs, parameter_definition
 from nifty_oi_regime import (
     NiftyOiConfig,
     OiRegimeRepository,
@@ -154,53 +155,69 @@ TIMEFRAMES: dict[str, TimeframeSpec] = {
 class MarketAlignedConfigurationRequest(BaseModel):
     """Configuration owned only by the Market-Aligned RSI Scalper."""
 
-    rsiLength: int = Field(default=14, gt=0, le=500)
-    rsiArmLow: float = Field(default=20, ge=0, le=100)
-    rsiArmHigh: float = Field(default=35, ge=0, le=100)
-    rsiRecovery: float = Field(default=40, ge=0, le=100)
-    signalRsiMaximum: float = Field(default=50, ge=0, le=100)
-    emaFast: int = Field(default=9, gt=0, le=500)
-    emaSlow: int = Field(default=20, gt=0, le=500)
-    rvolPeriod: int = Field(default=20, gt=0, le=500)
-    minimumRvol: float = Field(default=1.5, gt=0, le=100)
-    relativeStrengthLookbackBars: int = Field(default=3, gt=0, le=100)
-    roomLookbackBars: int = Field(default=20, gt=0, le=500)
-    targetPct: float = Field(default=0.5, gt=0, le=100)
-    setupExpiryBars: int = Field(default=50, ge=0, le=100_000)
-    executionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
-    buyCostBps: float = Field(default=0, ge=0, le=10_000)
-    sellCostBps: float = Field(default=0, ge=0, le=10_000)
-    slippageBps: float = Field(default=0, ge=0, le=10_000)
-    minimumNiftyTrendScore: float = Field(default=25, ge=-100, le=100)
-    minimumBreadthPct: float = Field(default=45, ge=0, le=100)
-    minimumBreadthSymbols: int = Field(default=10, ge=1, le=750)
-    minimumSectorMembers: int = Field(default=2, ge=1, le=750)
-    minimumAverageTradedValue: float = Field(default=100_000, ge=0)
-    maximumIntrabarRangePct: float = Field(default=5, gt=0, le=100)
-    minimumAlignmentScore: float = Field(default=75, ge=0, le=100)
-    marketDataStaleSeconds: int = Field(default=360, ge=1, le=86_400)
+    rsiLength: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiLength"))
+    rsiArmLow: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiArmLow"))
+    rsiArmHigh: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiArmHigh"))
+    rsiRecovery: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiRecovery"))
+    signalRsiMaximum: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "signalRsiMaximum"))
+    emaFast: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "emaFast"))
+    emaSlow: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "emaSlow"))
+    rvolPeriod: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rvolPeriod"))
+    minimumRvol: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumRvol"))
+    relativeStrengthLookbackBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "relativeStrengthLookbackBars"))
+    roomLookbackBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "roomLookbackBars"))
+    targetPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "targetPct"))
+    setupExpiryBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "setupExpiryBars"))
+    executionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "executionModel")["default"])
+    positionSizing: Literal["FIXED_QUANTITY", "RISK_BUDGET"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "positionSizing")["default"])
+    entryStartTime: str = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "entryStartTime")["default"])
+    lastEntryTime: str = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "lastEntryTime")["default"])
+    squareOffTime: str = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "squareOffTime")["default"])
+    stopLossPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "stopLossPct"))
+    quantityPerTrade: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "quantityPerTrade"))
+    maximumHoldingBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumHoldingBars"))
+    maximumTradesPerDay: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumTradesPerDay"))
+    maximumOpenPositions: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumOpenPositions"))
+    buyCostBps: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "buyCostBps"))
+    sellCostBps: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "sellCostBps"))
+    slippageBps: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "slippageBps"))
+    maximumCapitalPerPosition: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumCapitalPerPosition"))
+    maximumDailyLossPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumDailyLossPct"))
+    stopAfterFirstLoss: bool = bool(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "stopAfterFirstLoss")["default"])
+    cooldownBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "cooldownBars"))
+    maximumSpreadPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumSpreadPct"))
+    minimumNiftyTrendScore: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumNiftyTrendScore"))
+    minimumSectorBullishPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumSectorBullishPct"))
+    minimumBreadthPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumBreadthPct"))
+    minimumBreadthSymbols: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumBreadthSymbols"))
+    minimumSectorMembers: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumSectorMembers"))
+    minimumAverageTradedValue: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumAverageTradedValue"))
+    maximumIntrabarRangePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumIntrabarRangePct"))
+    minimumAlignmentScore: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumAlignmentScore"))
+    marketDataStaleSeconds: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "marketDataStaleSeconds"))
     sectorBySymbol: dict[str, str] = Field(default_factory=dict)
-    oiMode: Literal["OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"] = "ADVISORY"
-    oiLookbackBars: int = Field(default=3, ge=1, le=100)
-    oiStrikesEachSide: int = Field(default=5, ge=0, le=20)
-    oiMinimumPriceChangePct: float = Field(default=0.05, ge=0, le=100)
-    oiMinimumChangePct: float = Field(default=0.5, ge=0, le=10_000)
-    oiMaximumSpreadPct: float = Field(default=20.0, gt=0, le=1_000)
-    oiStaleDataSeconds: int = Field(default=360, ge=1, le=86_400)
-    oiMinimumValidContractFraction: float = Field(default=0.5, gt=0, le=1)
-    oiMinimumFuturesVolume: float = Field(default=1, ge=0)
-    oiVolatilityPriceRisePct: float = Field(default=0.25, ge=0, le=100)
-    oiVolatilityIvRise: float = Field(default=0.5, ge=0, le=100)
-    oiMinimumCoverage: float = Field(default=0.65, gt=0, le=1)
-    oiOptionsWeight: float = Field(default=0.35, ge=0, le=1)
-    oiFuturesWeight: float = Field(default=0.35, ge=0, le=1)
-    oiSpotWeight: float = Field(default=0.30, ge=0, le=1)
-    oiStronglyBearishThreshold: float = Field(default=-60, ge=-100, le=100)
-    oiBearishThreshold: float = Field(default=-20, ge=-100, le=100)
-    oiBullishThreshold: float = Field(default=20, ge=-100, le=100)
-    oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
-    oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
-    oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
+    oiMode: Literal["OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "oiMode")["default"])
+    oiMinimumConfidence: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumConfidence"))
+    oiLookbackBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiLookbackBars"))
+    oiStrikesEachSide: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStrikesEachSide"))
+    oiMinimumPriceChangePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumPriceChangePct"))
+    oiMinimumChangePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumChangePct"))
+    oiMaximumSpreadPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMaximumSpreadPct"))
+    oiStaleDataSeconds: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStaleDataSeconds"))
+    oiMinimumValidContractFraction: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumValidContractFraction"))
+    oiMinimumFuturesVolume: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumFuturesVolume"))
+    oiVolatilityPriceRisePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiVolatilityPriceRisePct"))
+    oiVolatilityIvRise: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiVolatilityIvRise"))
+    oiMinimumCoverage: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumCoverage"))
+    oiOptionsWeight: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiOptionsWeight"))
+    oiFuturesWeight: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiFuturesWeight"))
+    oiSpotWeight: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiSpotWeight"))
+    oiStronglyBearishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStronglyBearishThreshold"))
+    oiBearishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiBearishThreshold"))
+    oiBullishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiBullishThreshold"))
+    oiStronglyBullishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStronglyBullishThreshold"))
+    oiElevatedQualityThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiElevatedQualityThreshold"))
+    oiFailPolicy: Literal["SKIP", "ALLOW"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "oiFailPolicy")["default"])
 
     @field_validator("sectorBySymbol")
     @classmethod
@@ -213,10 +230,18 @@ class MarketAlignedConfigurationRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_configuration(self) -> "MarketAlignedConfigurationRequest":
-        if not self.rsiArmLow < self.rsiArmHigh < self.rsiRecovery < self.signalRsiMaximum:
+        if not self.rsiArmLow < self.rsiArmHigh < self.rsiRecovery <= self.signalRsiMaximum:
             raise ValueError(
-                "Market-Aligned RSI levels must satisfy arm low < arm high < recovery < signal maximum"
+                "Market-Aligned RSI levels must satisfy arm low < arm high < recovery <= signal maximum"
             )
+        try:
+            entry_start = datetime_time.fromisoformat(self.entryStartTime)
+            last_entry = datetime_time.fromisoformat(self.lastEntryTime)
+            square_off = datetime_time.fromisoformat(self.squareOffTime)
+        except ValueError as error:
+            raise ValueError("Market-Aligned session times must use HH:MM") from error
+        if not entry_start < last_entry < square_off:
+            raise ValueError("Market-Aligned session times must satisfy entry start < last entry < square-off")
         self.strategy_config().validate()
         self.oi_config()
         return self
@@ -257,6 +282,7 @@ class MarketAlignedConfigurationRequest(BaseModel):
             room_lookback_bars=self.roomLookbackBars,
             target_pct=self.targetPct,
             minimum_nifty_trend_score=self.minimumNiftyTrendScore,
+            minimum_sector_bullish_pct=self.minimumSectorBullishPct,
             minimum_breadth_pct=self.minimumBreadthPct,
             minimum_breadth_symbols=self.minimumBreadthSymbols,
             minimum_sector_members=self.minimumSectorMembers,
@@ -278,6 +304,7 @@ class MarketAlignedConfigurationRequest(BaseModel):
             minimum_valid_contract_fraction=self.oiMinimumValidContractFraction,
             minimum_futures_volume=self.oiMinimumFuturesVolume,
             minimum_component_coverage=self.oiMinimumCoverage,
+            minimum_confidence=self.oiMinimumConfidence,
             options_weight=self.oiOptionsWeight,
             futures_weight=self.oiFuturesWeight,
             spot_weight=self.oiSpotWeight,
@@ -314,27 +341,27 @@ class BacktestRequest(BaseModel):
     runId: str | None = Field(default=None, min_length=1, max_length=80)
     durationYears: Literal[1, 3] = 1
     timeframe: Literal["5m", "15m", "30m", "1h", "2h", "4h", "1d"] = "1d"
-    entryLow: float = Field(default=20, ge=0, le=100)
-    entryHigh: float = Field(default=30, ge=0, le=100)
-    exitLow: float = Field(default=50, ge=0, le=100)
-    exitHigh: float = Field(default=70, ge=0, le=100)
-    rsiLength: int = Field(default=14, gt=0, le=500)
-    rsiArmLow: float = Field(default=30, ge=0, le=100)
-    rsiArmHigh: float = Field(default=40, ge=0, le=100)
-    rsiRecovery: float = Field(default=40, ge=0, le=100)
+    entryLow: float = Field(**numeric_field_kwargs("rsi_range", "entryLow"))
+    entryHigh: float = Field(**numeric_field_kwargs("rsi_range", "entryHigh"))
+    exitLow: float = Field(**numeric_field_kwargs("rsi_range", "exitLow"))
+    exitHigh: float = Field(**numeric_field_kwargs("rsi_range", "exitHigh"))
+    rsiLength: int = Field(**numeric_field_kwargs("rsi_recovery", "rsiLength"))
+    rsiArmLow: float = Field(**numeric_field_kwargs("rsi_recovery", "rsiArmLow"))
+    rsiArmHigh: float = Field(**numeric_field_kwargs("rsi_recovery", "rsiArmHigh"))
+    rsiRecovery: float = Field(**numeric_field_kwargs("rsi_recovery", "rsiRecovery"))
     emaEnabled: bool = True
-    emaFast: int = Field(default=9, gt=0, le=500)
-    emaSlow: int = Field(default=20, gt=0, le=500)
+    emaFast: int = Field(**numeric_field_kwargs("rsi_recovery", "emaFast"))
+    emaSlow: int = Field(**numeric_field_kwargs("rsi_recovery", "emaSlow"))
     vwapEnabled: bool = True
     volumeEnabled: bool = True
-    volumeEma: int = Field(default=20, gt=0, le=500)
-    minimumConfirmations: int = Field(default=2, ge=0, le=3)
-    targetPct: float = Field(default=0.5, gt=0, le=100)
-    setupExpiryBars: int = Field(default=50, ge=0, le=100_000)
+    volumeEma: int = Field(**numeric_field_kwargs("rsi_recovery", "volumeEma"))
+    minimumConfirmations: int = Field(**numeric_field_kwargs("rsi_recovery", "minimumConfirmations"))
+    targetPct: float = Field(**numeric_field_kwargs("rsi_recovery", "targetPct"))
+    setupExpiryBars: int = Field(**numeric_field_kwargs("rsi_recovery", "setupExpiryBars"))
     executionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
-    buyCostBps: float = Field(default=0, ge=0, le=10_000)
-    sellCostBps: float = Field(default=0, ge=0, le=10_000)
-    slippageBps: float = Field(default=0, ge=0, le=10_000)
+    buyCostBps: float = Field(**numeric_field_kwargs("rsi_recovery", "buyCostBps"))
+    sellCostBps: float = Field(**numeric_field_kwargs("rsi_recovery", "sellCostBps"))
+    slippageBps: float = Field(**numeric_field_kwargs("rsi_recovery", "slippageBps"))
     exitModel: Literal[
         "LEGACY_FIXED_TARGET",
         "FIXED_TP_SL",
@@ -342,26 +369,24 @@ class BacktestRequest(BaseModel):
         "RSI_PROFIT_RISK_CONTROL",
     ] = "LEGACY_FIXED_TARGET"
     exitProtectionEnabled: bool = False
-    fixedStopLossPct: float = Field(default=1.0, gt=0, le=100)
-    atrLength: int = Field(default=14, ge=1, le=500)
-    stopAtrMultiplier: float = Field(default=1.25, gt=0, le=100)
-    rewardRiskRatio: float = Field(default=1.5, gt=0, le=100)
-    minimumStopPct: float = Field(default=0.75, gt=0, le=100)
-    maximumStopPct: float = Field(default=3.0, gt=0, le=100)
+    fixedStopLossPct: float = Field(**numeric_field_kwargs("rsi_recovery", "fixedStopLossPct"))
+    atrLength: int = Field(**numeric_field_kwargs("rsi_recovery", "atrLength"))
+    stopAtrMultiplier: float = Field(**numeric_field_kwargs("rsi_recovery", "stopAtrMultiplier"))
+    rewardRiskRatio: float = Field(**numeric_field_kwargs("rsi_recovery", "rewardRiskRatio"))
+    minimumStopPct: float = Field(**numeric_field_kwargs("rsi_recovery", "minimumStopPct"))
+    maximumStopPct: float = Field(**numeric_field_kwargs("rsi_recovery", "maximumStopPct"))
     positionSizing: Literal["FIXED_QUANTITY", "RISK_BUDGET"] = "FIXED_QUANTITY"
-    quantityPerTrade: int = Field(default=50, ge=1, le=1_000_000)
-    rupeeRiskBudget: float = Field(default=2_500, gt=0, le=1_000_000_000)
-    maximumQuantity: int = Field(default=10_000, ge=1, le=1_000_000)
-    maximumCapitalPerPosition: float = Field(
-        default=1_000_000, gt=0, le=100_000_000_000
-    )
-    maxOpenLotsPerSymbol: int = Field(default=1, ge=1, le=1_000)
-    maxHoldingTradingDays: int = Field(default=5, ge=1, le=1_000)
+    quantityPerTrade: int = Field(**numeric_field_kwargs("rsi_recovery", "quantityPerTrade"))
+    rupeeRiskBudget: float = Field(**numeric_field_kwargs("rsi_recovery", "rupeeRiskBudget"))
+    maximumQuantity: int = Field(**numeric_field_kwargs("rsi_recovery", "maximumQuantity"))
+    maximumCapitalPerPosition: float = Field(**numeric_field_kwargs("rsi_recovery", "maximumCapitalPerPosition"))
+    maxOpenLotsPerSymbol: int = Field(**numeric_field_kwargs("rsi_recovery", "maxOpenLotsPerSymbol"))
+    maxHoldingTradingDays: int = Field(**numeric_field_kwargs("rsi_recovery", "maxHoldingTradingDays"))
     timeExit: Literal["NEXT_TRADING_SESSION_OPEN"] = "NEXT_TRADING_SESSION_OPEN"
-    minimumProfitPct: float = Field(default=0.5, gt=0, le=100)
-    profitExitRsi: float = Field(default=50, ge=0, le=100)
-    upperRsiLevel: float = Field(default=70, ge=0, le=100)
-    hardStopLossPct: float = Field(default=1.5, gt=0, lt=100)
+    minimumProfitPct: float = Field(**numeric_field_kwargs("rsi_recovery", "minimumProfitPct"))
+    profitExitRsi: float = Field(**numeric_field_kwargs("rsi_recovery", "profitExitRsi"))
+    upperRsiLevel: float = Field(**numeric_field_kwargs("rsi_recovery", "upperRsiLevel"))
+    hardStopLossPct: float = Field(**numeric_field_kwargs("rsi_recovery", "hardStopLossPct"))
     rsiExitExecutionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = "SIGNAL_CLOSE"
     oiFilterMode: Literal["OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"] = "OFF"
     oiLookbackBars: int = Field(default=3, ge=1, le=100)
@@ -398,6 +423,22 @@ class BacktestRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_strategy_parameters(self) -> "BacktestRequest":
+        positive_recovery_values = (
+            self.targetPct,
+            self.fixedStopLossPct,
+            self.stopAtrMultiplier,
+            self.rewardRiskRatio,
+            self.minimumStopPct,
+            self.maximumStopPct,
+            self.rupeeRiskBudget,
+            self.maximumCapitalPerPosition,
+            self.minimumProfitPct,
+            self.hardStopLossPct,
+        )
+        if any(value <= 0 for value in positive_recovery_values):
+            raise ValueError("RSI Recovery targets, stops, risk budgets, and capital limits must be positive")
+        if self.hardStopLossPct >= 100:
+            raise ValueError("RSI Recovery hard stop must be below 100 percent")
         if self.strategyMode == "rsi_range":
             if self.exitProtectionEnabled or self.exitModel != "LEGACY_FIXED_TARGET" or self.oiFilterMode != "OFF":
                 raise ValueError("Position exit models and the NIFTY OI filter are available only for RSI Recovery")

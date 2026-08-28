@@ -37,6 +37,11 @@ import {
   RsiExitComparisonResults,
   type RsiExitComparisonResponse,
 } from "./rsi-exit-comparison-results";
+import {
+  NumericField,
+  parameterDefinition,
+  strategyDefaults,
+} from "./strategy-parameters";
 
 type BacktestDashboardProps = {
   symbols: string[];
@@ -150,6 +155,7 @@ type BacktestResponse = {
 type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse) & { detail?: string };
 type StrategyMode = "rsi_range" | "rsi_recovery" | "market_aligned_rsi_scalper";
 type OiFilterMode = "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
+type MarketAlignedPreset = "Recommended" | "Strict" | "Custom";
 type OiHistoryStatus = {
   state: string;
   request?: { fromDate?: string; toDate?: string; strikesEachSide?: number };
@@ -188,6 +194,23 @@ type OiFilterComparisonResponse = {
 };
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
+const marketRecommendedDefaults = strategyDefaults("market_aligned_rsi_scalper");
+const rangeRecommendedDefaults = strategyDefaults("rsi_range");
+const recoveryRecommendedDefaults = strategyDefaults("rsi_recovery");
+
+function defaultNumber(strategy: "rsi_range" | "rsi_recovery", key: string) {
+  const defaults = strategy === "rsi_range" ? rangeRecommendedDefaults : recoveryRecommendedDefaults;
+  return Number(defaults[key]);
+}
+
+function numericConstraints(strategy: "rsi_range" | "rsi_recovery", key: string) {
+  const definition = parameterDefinition(strategy, key);
+  return {
+    min: definition.minimum ?? undefined,
+    max: definition.maximum ?? undefined,
+    step: definition.step ?? undefined,
+  };
+}
 
 function isRecoveryResponse(value: BacktestResponse | RecoveryBacktestResponse | null): value is RecoveryBacktestResponse {
   return value?.metadata.strategyMode === "rsi_recovery" || value?.metadata.strategyMode === "market_aligned_rsi_scalper";
@@ -582,45 +605,45 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
   const [durationYears, setDurationYears] = useState<1 | 3>(1);
   const [timeframe, setTimeframe] = useState<(typeof timeframes)[number]>("1d");
-  const [entryLow, setEntryLow] = useState(20);
-  const [entryHigh, setEntryHigh] = useState(30);
-  const [exitLow, setExitLow] = useState(50);
-  const [exitHigh, setExitHigh] = useState(70);
-  const [rsiLength, setRsiLength] = useState(14);
-  const [rsiArmLow, setRsiArmLow] = useState(30);
-  const [rsiArmHigh, setRsiArmHigh] = useState(40);
-  const [rsiRecovery, setRsiRecovery] = useState(40);
-  const [setupExpiryBars, setSetupExpiryBars] = useState(50);
+  const [entryLow, setEntryLow] = useState(defaultNumber("rsi_range", "entryLow"));
+  const [entryHigh, setEntryHigh] = useState(defaultNumber("rsi_range", "entryHigh"));
+  const [exitLow, setExitLow] = useState(defaultNumber("rsi_range", "exitLow"));
+  const [exitHigh, setExitHigh] = useState(defaultNumber("rsi_range", "exitHigh"));
+  const [rsiLength, setRsiLength] = useState(defaultNumber("rsi_recovery", "rsiLength"));
+  const [rsiArmLow, setRsiArmLow] = useState(defaultNumber("rsi_recovery", "rsiArmLow"));
+  const [rsiArmHigh, setRsiArmHigh] = useState(defaultNumber("rsi_recovery", "rsiArmHigh"));
+  const [rsiRecovery, setRsiRecovery] = useState(defaultNumber("rsi_recovery", "rsiRecovery"));
+  const [setupExpiryBars, setSetupExpiryBars] = useState(defaultNumber("rsi_recovery", "setupExpiryBars"));
   const [emaEnabled, setEmaEnabled] = useState(true);
-  const [emaFast, setEmaFast] = useState(9);
-  const [emaSlow, setEmaSlow] = useState(20);
+  const [emaFast, setEmaFast] = useState(defaultNumber("rsi_recovery", "emaFast"));
+  const [emaSlow, setEmaSlow] = useState(defaultNumber("rsi_recovery", "emaSlow"));
   const [vwapEnabled, setVwapEnabled] = useState(true);
   const [volumeEnabled, setVolumeEnabled] = useState(true);
-  const [volumeEma, setVolumeEma] = useState(20);
-  const [minimumConfirmations, setMinimumConfirmations] = useState(2);
-  const [targetPct, setTargetPct] = useState(0.5);
+  const [volumeEma, setVolumeEma] = useState(defaultNumber("rsi_recovery", "volumeEma"));
+  const [minimumConfirmations, setMinimumConfirmations] = useState(defaultNumber("rsi_recovery", "minimumConfirmations"));
+  const [targetPct, setTargetPct] = useState(defaultNumber("rsi_recovery", "targetPct"));
   const [executionModel, setExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
-  const [buyCostBps, setBuyCostBps] = useState(0);
-  const [sellCostBps, setSellCostBps] = useState(0);
-  const [slippageBps, setSlippageBps] = useState(0);
+  const [buyCostBps, setBuyCostBps] = useState(defaultNumber("rsi_recovery", "buyCostBps"));
+  const [sellCostBps, setSellCostBps] = useState(defaultNumber("rsi_recovery", "sellCostBps"));
+  const [slippageBps, setSlippageBps] = useState(defaultNumber("rsi_recovery", "slippageBps"));
   const [exitModel, setExitModel] = useState<"LEGACY_FIXED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL">("LEGACY_FIXED_TARGET");
-  const [fixedStopLossPct, setFixedStopLossPct] = useState(1);
-  const [atrLength, setAtrLength] = useState(14);
-  const [stopAtrMultiplier, setStopAtrMultiplier] = useState(1.25);
-  const [rewardRiskRatio, setRewardRiskRatio] = useState(1.5);
-  const [minimumStopPct, setMinimumStopPct] = useState(0.75);
-  const [maximumStopPct, setMaximumStopPct] = useState(3);
+  const [fixedStopLossPct, setFixedStopLossPct] = useState(defaultNumber("rsi_recovery", "fixedStopLossPct"));
+  const [atrLength, setAtrLength] = useState(defaultNumber("rsi_recovery", "atrLength"));
+  const [stopAtrMultiplier, setStopAtrMultiplier] = useState(defaultNumber("rsi_recovery", "stopAtrMultiplier"));
+  const [rewardRiskRatio, setRewardRiskRatio] = useState(defaultNumber("rsi_recovery", "rewardRiskRatio"));
+  const [minimumStopPct, setMinimumStopPct] = useState(defaultNumber("rsi_recovery", "minimumStopPct"));
+  const [maximumStopPct, setMaximumStopPct] = useState(defaultNumber("rsi_recovery", "maximumStopPct"));
   const [positionSizing, setPositionSizing] = useState<"FIXED_QUANTITY" | "RISK_BUDGET">("FIXED_QUANTITY");
-  const [quantityPerTrade, setQuantityPerTrade] = useState(50);
-  const [rupeeRiskBudget, setRupeeRiskBudget] = useState(2500);
-  const [maximumQuantity, setMaximumQuantity] = useState(10000);
-  const [maximumCapitalPerPosition, setMaximumCapitalPerPosition] = useState(1000000);
-  const [maxOpenLotsPerSymbol, setMaxOpenLotsPerSymbol] = useState(1);
-  const [maxHoldingTradingDays, setMaxHoldingTradingDays] = useState(5);
-  const [minimumProfitPct, setMinimumProfitPct] = useState(0.5);
-  const [profitExitRsi, setProfitExitRsi] = useState(50);
-  const [upperRsiLevel, setUpperRsiLevel] = useState(70);
-  const [hardStopLossPct, setHardStopLossPct] = useState(1.5);
+  const [quantityPerTrade, setQuantityPerTrade] = useState(defaultNumber("rsi_recovery", "quantityPerTrade"));
+  const [rupeeRiskBudget, setRupeeRiskBudget] = useState(defaultNumber("rsi_recovery", "rupeeRiskBudget"));
+  const [maximumQuantity, setMaximumQuantity] = useState(defaultNumber("rsi_recovery", "maximumQuantity"));
+  const [maximumCapitalPerPosition, setMaximumCapitalPerPosition] = useState(defaultNumber("rsi_recovery", "maximumCapitalPerPosition"));
+  const [maxOpenLotsPerSymbol, setMaxOpenLotsPerSymbol] = useState(defaultNumber("rsi_recovery", "maxOpenLotsPerSymbol"));
+  const [maxHoldingTradingDays, setMaxHoldingTradingDays] = useState(defaultNumber("rsi_recovery", "maxHoldingTradingDays"));
+  const [minimumProfitPct, setMinimumProfitPct] = useState(defaultNumber("rsi_recovery", "minimumProfitPct"));
+  const [profitExitRsi, setProfitExitRsi] = useState(defaultNumber("rsi_recovery", "profitExitRsi"));
+  const [upperRsiLevel, setUpperRsiLevel] = useState(defaultNumber("rsi_recovery", "upperRsiLevel"));
+  const [hardStopLossPct, setHardStopLossPct] = useState(defaultNumber("rsi_recovery", "hardStopLossPct"));
   const [rsiExitExecutionModel, setRsiExitExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
   const [oiFilterMode, setOiFilterMode] = useState<OiFilterMode>("ADVISORY");
   const [signalRsiMaximum, setSignalRsiMaximum] = useState(50);
@@ -633,7 +656,24 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [roomLookbackBars, setRoomLookbackBars] = useState(20);
   const [minimumAverageTradedValue, setMinimumAverageTradedValue] = useState(100000);
   const [maximumIntrabarRangePct, setMaximumIntrabarRangePct] = useState(5);
-  const [minimumAlignmentScore, setMinimumAlignmentScore] = useState(75);
+  const [minimumAlignmentScore, setMinimumAlignmentScore] = useState(85);
+  const [minimumSectorBullishPct, setMinimumSectorBullishPct] = useState(50);
+  const [marketPreset, setMarketPreset] = useState<MarketAlignedPreset>("Recommended");
+  const [entryStartTime, setEntryStartTime] = useState("09:20");
+  const [lastEntryTime, setLastEntryTime] = useState("14:45");
+  const [squareOffTime, setSquareOffTime] = useState("15:15");
+  const [marketStopLossPct, setMarketStopLossPct] = useState(1);
+  const [maximumHoldingBars, setMaximumHoldingBars] = useState(12);
+  const [maximumTradesPerDay, setMaximumTradesPerDay] = useState(5);
+  const [maximumOpenPositions, setMaximumOpenPositions] = useState(3);
+  const [maximumDailyLossPct, setMaximumDailyLossPct] = useState(2);
+  const [stopAfterFirstLoss, setStopAfterFirstLoss] = useState(false);
+  const [cooldownBars, setCooldownBars] = useState(1);
+  const [maximumSpreadPct, setMaximumSpreadPct] = useState(0.5);
+  const [marketDataStaleSeconds, setMarketDataStaleSeconds] = useState(360);
+  const [oiMinimumConfidence, setOiMinimumConfidence] = useState(0.5);
+  const [numericErrors, setNumericErrors] = useState<Record<string, string>>({});
+  const [marketFormRevision, setMarketFormRevision] = useState(0);
   const [oiHistoryStatus, setOiHistoryStatus] = useState<OiHistoryStatus | null>(null);
   const [oiLookbackBars, setOiLookbackBars] = useState(3);
   const [oiStrikesEachSide, setOiStrikesEachSide] = useState(5);
@@ -655,6 +695,137 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const [oiStronglyBullishThreshold, setOiStronglyBullishThreshold] = useState(60);
   const [oiElevatedQualityThreshold, setOiElevatedQualityThreshold] = useState(95);
   const [oiFailPolicy, setOiFailPolicy] = useState<"SKIP" | "ALLOW">("SKIP");
+
+  const setNumericValidity = (key: string, value: string | null) => {
+    setNumericErrors((current) => {
+      if (!value) {
+        if (!(key in current)) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      }
+      return current[key] === value ? current : { ...current, [key]: value };
+    });
+  };
+
+  const markMarketPresetCustom = () => setMarketPreset("Custom");
+
+  const applyMarketValues = (values: Record<string, number | string | boolean>) => {
+    const numeric = (key: string) => Number(values[key] ?? marketRecommendedDefaults[key]);
+    setRsiLength(numeric("rsiLength"));
+    setRsiArmLow(numeric("rsiArmLow"));
+    setRsiArmHigh(numeric("rsiArmHigh"));
+    setRsiRecovery(numeric("rsiRecovery"));
+    setSignalRsiMaximum(numeric("signalRsiMaximum"));
+    setSetupExpiryBars(numeric("setupExpiryBars"));
+    setEmaFast(numeric("emaFast"));
+    setEmaSlow(numeric("emaSlow"));
+    setVolumeEma(numeric("rvolPeriod"));
+    setMinimumRvol(numeric("minimumRvol"));
+    setMinimumNiftyTrendScore(numeric("minimumNiftyTrendScore"));
+    setMinimumSectorBullishPct(numeric("minimumSectorBullishPct"));
+    setMinimumBreadthPct(numeric("minimumBreadthPct"));
+    setTargetPct(numeric("targetPct"));
+    setMarketStopLossPct(numeric("stopLossPct"));
+    setQuantityPerTrade(numeric("quantityPerTrade"));
+    setMaximumHoldingBars(numeric("maximumHoldingBars"));
+    setMaximumTradesPerDay(numeric("maximumTradesPerDay"));
+    setMaximumOpenPositions(numeric("maximumOpenPositions"));
+    setMinimumAlignmentScore(numeric("minimumAlignmentScore"));
+    setBuyCostBps(numeric("buyCostBps"));
+    setSellCostBps(numeric("sellCostBps"));
+    setSlippageBps(numeric("slippageBps"));
+    setMaximumCapitalPerPosition(numeric("maximumCapitalPerPosition"));
+    setMaximumDailyLossPct(numeric("maximumDailyLossPct"));
+    setCooldownBars(numeric("cooldownBars"));
+    setMaximumSpreadPct(numeric("maximumSpreadPct"));
+    setMinimumAverageTradedValue(numeric("minimumAverageTradedValue"));
+    setRoomLookbackBars(numeric("roomLookbackBars"));
+    setOiMinimumConfidence(numeric("oiMinimumConfidence"));
+    setOiStronglyBearishThreshold(numeric("oiStronglyBearishThreshold"));
+    setOiStaleDataSeconds(numeric("oiStaleDataSeconds"));
+    setRelativeStrengthLookbackBars(numeric("relativeStrengthLookbackBars"));
+    setMinimumBreadthSymbols(numeric("minimumBreadthSymbols"));
+    setMinimumSectorMembers(numeric("minimumSectorMembers"));
+    setMaximumIntrabarRangePct(numeric("maximumIntrabarRangePct"));
+    setMarketDataStaleSeconds(numeric("marketDataStaleSeconds"));
+    setOiLookbackBars(numeric("oiLookbackBars"));
+    setOiStrikesEachSide(numeric("oiStrikesEachSide"));
+    setOiMinimumPriceChangePct(numeric("oiMinimumPriceChangePct"));
+    setOiMinimumChangePct(numeric("oiMinimumChangePct"));
+    setOiMaximumSpreadPct(numeric("oiMaximumSpreadPct"));
+    setOiMinimumValidContractFraction(numeric("oiMinimumValidContractFraction"));
+    setOiMinimumFuturesVolume(numeric("oiMinimumFuturesVolume"));
+    setOiVolatilityPriceRisePct(numeric("oiVolatilityPriceRisePct"));
+    setOiVolatilityIvRise(numeric("oiVolatilityIvRise"));
+    setOiMinimumCoverage(numeric("oiMinimumCoverage"));
+    setOiOptionsWeight(numeric("oiOptionsWeight"));
+    setOiFuturesWeight(numeric("oiFuturesWeight"));
+    setOiSpotWeight(numeric("oiSpotWeight"));
+    setOiBearishThreshold(numeric("oiBearishThreshold"));
+    setOiBullishThreshold(numeric("oiBullishThreshold"));
+    setOiStronglyBullishThreshold(numeric("oiStronglyBullishThreshold"));
+    setOiElevatedQualityThreshold(numeric("oiElevatedQualityThreshold"));
+    setExecutionModel(String(values.executionModel ?? "SIGNAL_CLOSE") as typeof executionModel);
+    setPositionSizing(String(values.positionSizing ?? "FIXED_QUANTITY") as typeof positionSizing);
+    setEntryStartTime(String(values.entryStartTime ?? "09:20"));
+    setLastEntryTime(String(values.lastEntryTime ?? "14:45"));
+    setSquareOffTime(String(values.squareOffTime ?? "15:15"));
+    setStopAfterFirstLoss(Boolean(values.stopAfterFirstLoss));
+    setOiFilterMode(String(values.oiMode ?? "ADVISORY") as OiFilterMode);
+    setOiFailPolicy(String(values.oiFailPolicy ?? "SKIP") as typeof oiFailPolicy);
+    setNumericErrors({});
+    setMarketFormRevision((current) => current + 1);
+  };
+
+  const applyMarketPreset = (preset: Exclude<MarketAlignedPreset, "Custom">) => {
+    const values = {
+      ...marketRecommendedDefaults,
+      ...(preset === "Strict" ? { minimumAlignmentScore: 90, maximumTradesPerDay: 2, oiMode: "ADVISORY" } : {}),
+    };
+    applyMarketValues(values);
+    setMarketPreset(preset);
+  };
+
+  const restoreExpertOiDefaults = () => {
+    const numeric = (key: string) => Number(marketRecommendedDefaults[key]);
+    setOiLookbackBars(numeric("oiLookbackBars"));
+    setOiStrikesEachSide(numeric("oiStrikesEachSide"));
+    setOiMinimumPriceChangePct(numeric("oiMinimumPriceChangePct"));
+    setOiMinimumChangePct(numeric("oiMinimumChangePct"));
+    setOiMaximumSpreadPct(numeric("oiMaximumSpreadPct"));
+    setOiMinimumValidContractFraction(numeric("oiMinimumValidContractFraction"));
+    setOiMinimumFuturesVolume(numeric("oiMinimumFuturesVolume"));
+    setOiVolatilityPriceRisePct(numeric("oiVolatilityPriceRisePct"));
+    setOiVolatilityIvRise(numeric("oiVolatilityIvRise"));
+    setOiMinimumCoverage(numeric("oiMinimumCoverage"));
+    setOiOptionsWeight(numeric("oiOptionsWeight"));
+    setOiFuturesWeight(numeric("oiFuturesWeight"));
+    setOiSpotWeight(numeric("oiSpotWeight"));
+    setOiBearishThreshold(numeric("oiBearishThreshold"));
+    setOiBullishThreshold(numeric("oiBullishThreshold"));
+    setOiStronglyBullishThreshold(numeric("oiStronglyBullishThreshold"));
+    setOiElevatedQualityThreshold(numeric("oiElevatedQualityThreshold"));
+    setOiFailPolicy(String(marketRecommendedDefaults.oiFailPolicy ?? "SKIP") as typeof oiFailPolicy);
+    setNumericErrors({});
+    setMarketFormRevision((current) => current + 1);
+    markMarketPresetCustom();
+  };
+
+  const marketRelationshipErrors = useMemo(() => {
+    const errors: Record<string, string> = {};
+    if (!(rsiArmLow < rsiArmHigh)) errors.rsiArmHigh = "RSI arm minimum must be below RSI arm maximum.";
+    if (!(rsiArmHigh < rsiRecovery)) errors.rsiRecovery = "RSI arm maximum must be below the recovery level.";
+    if (!(rsiRecovery <= signalRsiMaximum)) errors.signalRsiMaximum = "Maximum signal RSI must be at least the recovery level.";
+    if (!(emaFast < emaSlow)) errors.emaSlow = "EMA fast length must be below EMA slow length.";
+    if (!(entryStartTime < lastEntryTime && lastEntryTime < squareOffTime)) errors.sessionTimes = "Use entry start < last entry < square-off.";
+    const weightTotal = oiOptionsWeight + oiFuturesWeight + oiSpotWeight;
+    if (Math.abs(weightTotal - 1) > 1e-9) errors.oiWeights = "Options, futures and spot weights must total 1.00.";
+    if (!(oiStronglyBearishThreshold < oiBearishThreshold && oiBearishThreshold < oiBullishThreshold && oiBullishThreshold < oiStronglyBullishThreshold)) errors.oiThresholds = "Use strongly bearish < bearish < bullish < strongly bullish.";
+    return errors;
+  }, [emaFast, emaSlow, entryStartTime, lastEntryTime, oiBearishThreshold, oiBullishThreshold, oiFuturesWeight, oiOptionsWeight, oiSpotWeight, oiStronglyBearishThreshold, oiStronglyBullishThreshold, rsiArmHigh, rsiArmLow, rsiRecovery, signalRsiMaximum, squareOffTime]);
+
+  const marketFormInvalid = Object.keys(numericErrors).length > 0 || Object.keys(marketRelationshipErrors).length > 0;
 
   useEffect(() => {
     let active = true;
@@ -704,55 +875,61 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
   const exitProtectionEnabled = exitModel !== "LEGACY_FIXED_TARGET";
 
   const switchStrategy = (next: StrategyMode) => {
-    if (strategyMode === "rsi_recovery" || strategyMode === "market_aligned_rsi_scalper") {
-      window.localStorage.setItem(`vento-nse-backtest-preset:${strategyMode}`, JSON.stringify({
+    if (strategyMode === "rsi_recovery") {
+      window.localStorage.setItem("vento-nse-backtest-preset:rsi_recovery", JSON.stringify({
         rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
         emaFast, emaSlow, volumeEma, minimumRvol, targetPct, setupExpiryBars,
-        executionModel, buyCostBps, sellCostBps, slippageBps, oiFilterMode,
-        minimumNiftyTrendScore, minimumBreadthPct, minimumBreadthSymbols,
-        minimumSectorMembers, relativeStrengthLookbackBars, roomLookbackBars,
-        minimumAverageTradedValue, maximumIntrabarRangePct, minimumAlignmentScore,
+        executionModel, buyCostBps, sellCostBps, slippageBps,
       }));
     }
-    const defaults = next === "market_aligned_rsi_scalper" ? {
-      rsiLength: 14, rsiArmLow: 20, rsiArmHigh: 35, rsiRecovery: 40,
-      signalRsiMaximum: 50, emaFast: 9, emaSlow: 20, volumeEma: 20,
-      minimumRvol: 1.5, targetPct: 0.5, setupExpiryBars: 50,
-      executionModel: "SIGNAL_CLOSE", buyCostBps: 0, sellCostBps: 0,
-      slippageBps: 0, oiFilterMode: "ADVISORY", minimumNiftyTrendScore: 25,
-      minimumBreadthPct: 45, minimumBreadthSymbols: 10, minimumSectorMembers: 2,
-      relativeStrengthLookbackBars: 3, roomLookbackBars: 20,
-      minimumAverageTradedValue: 100000, maximumIntrabarRangePct: 5,
-      minimumAlignmentScore: 75,
-    } : {
+    if (strategyMode === "market_aligned_rsi_scalper") {
+      window.localStorage.setItem("vento-nse-backtest-preset:market_aligned_rsi_scalper", JSON.stringify({
+        marketPreset, rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
+        emaFast, emaSlow, rvolPeriod: volumeEma, minimumRvol, targetPct,
+        stopLossPct: marketStopLossPct, setupExpiryBars, executionModel, positionSizing,
+        entryStartTime, lastEntryTime, squareOffTime, quantityPerTrade, maximumHoldingBars,
+        maximumTradesPerDay, maximumOpenPositions, buyCostBps, sellCostBps, slippageBps,
+        maximumCapitalPerPosition, maximumDailyLossPct, stopAfterFirstLoss, cooldownBars,
+        maximumSpreadPct, minimumNiftyTrendScore, minimumSectorBullishPct, minimumBreadthPct,
+        minimumBreadthSymbols, minimumSectorMembers, relativeStrengthLookbackBars,
+        roomLookbackBars, minimumAverageTradedValue, maximumIntrabarRangePct,
+        minimumAlignmentScore, marketDataStaleSeconds, oiMode: oiFilterMode,
+        oiMinimumConfidence, oiLookbackBars, oiStrikesEachSide, oiMinimumPriceChangePct,
+        oiMinimumChangePct, oiMaximumSpreadPct, oiStaleDataSeconds,
+        oiMinimumValidContractFraction, oiMinimumFuturesVolume, oiVolatilityPriceRisePct,
+        oiVolatilityIvRise, oiMinimumCoverage, oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
+        oiStronglyBearishThreshold, oiBearishThreshold, oiBullishThreshold,
+        oiStronglyBullishThreshold, oiElevatedQualityThreshold,
+      }));
+    }
+    if (next === "market_aligned_rsi_scalper") {
+      let values = { ...marketRecommendedDefaults };
+      try {
+        values = { ...values, ...JSON.parse(window.localStorage.getItem("vento-nse-backtest-preset:market_aligned_rsi_scalper") ?? "{}") };
+      } catch { values = { ...marketRecommendedDefaults }; }
+      applyMarketValues(values);
+      setMarketPreset((values.marketPreset as MarketAlignedPreset | undefined) ?? "Recommended");
+      setExitModel("LEGACY_FIXED_TARGET");
+    } else if (next === "rsi_recovery") {
+      const defaults = {
       rsiLength: 14, rsiArmLow: 30, rsiArmHigh: 40, rsiRecovery: 40,
       signalRsiMaximum: 50, emaFast: 9, emaSlow: 20, volumeEma: 20,
       minimumRvol: 1.5, targetPct: 0.5, setupExpiryBars: 50,
       executionModel: "SIGNAL_CLOSE", buyCostBps: 0, sellCostBps: 0,
-      slippageBps: 0, oiFilterMode: "OFF", minimumNiftyTrendScore: 25,
-      minimumBreadthPct: 45, minimumBreadthSymbols: 10, minimumSectorMembers: 2,
-      relativeStrengthLookbackBars: 3, roomLookbackBars: 20,
-      minimumAverageTradedValue: 100000, maximumIntrabarRangePct: 5,
-      minimumAlignmentScore: 75,
-    };
-    let preset = defaults;
-    if (next === "rsi_recovery" || next === "market_aligned_rsi_scalper") {
+      slippageBps: 0,
+      };
+      let preset = defaults;
       try {
-        preset = { ...defaults, ...JSON.parse(window.localStorage.getItem(`vento-nse-backtest-preset:${next}`) ?? "{}") };
+        preset = { ...defaults, ...JSON.parse(window.localStorage.getItem("vento-nse-backtest-preset:rsi_recovery") ?? "{}") };
       } catch { preset = defaults; }
+      setRsiLength(preset.rsiLength); setRsiArmLow(preset.rsiArmLow); setRsiArmHigh(preset.rsiArmHigh);
+      setRsiRecovery(preset.rsiRecovery); setSignalRsiMaximum(preset.signalRsiMaximum);
+      setEmaFast(preset.emaFast); setEmaSlow(preset.emaSlow); setVolumeEma(preset.volumeEma);
+      setMinimumRvol(preset.minimumRvol); setTargetPct(preset.targetPct); setSetupExpiryBars(preset.setupExpiryBars);
+      setExecutionModel(preset.executionModel as typeof executionModel); setBuyCostBps(preset.buyCostBps);
+      setSellCostBps(preset.sellCostBps); setSlippageBps(preset.slippageBps);
     }
-    setRsiLength(preset.rsiLength); setRsiArmLow(preset.rsiArmLow); setRsiArmHigh(preset.rsiArmHigh);
-    setRsiRecovery(preset.rsiRecovery); setSignalRsiMaximum(preset.signalRsiMaximum);
-    setEmaFast(preset.emaFast); setEmaSlow(preset.emaSlow); setVolumeEma(preset.volumeEma);
-    setMinimumRvol(preset.minimumRvol); setTargetPct(preset.targetPct); setSetupExpiryBars(preset.setupExpiryBars);
-    setExecutionModel(preset.executionModel as typeof executionModel); setBuyCostBps(preset.buyCostBps);
-    setSellCostBps(preset.sellCostBps); setSlippageBps(preset.slippageBps);
-    setOiFilterMode(preset.oiFilterMode as OiFilterMode); setMinimumNiftyTrendScore(preset.minimumNiftyTrendScore);
-    setMinimumBreadthPct(preset.minimumBreadthPct); setMinimumBreadthSymbols(preset.minimumBreadthSymbols);
-    setMinimumSectorMembers(preset.minimumSectorMembers); setRelativeStrengthLookbackBars(preset.relativeStrengthLookbackBars);
-    setRoomLookbackBars(preset.roomLookbackBars); setMinimumAverageTradedValue(preset.minimumAverageTradedValue);
-    setMaximumIntrabarRangePct(preset.maximumIntrabarRangePct); setMinimumAlignmentScore(preset.minimumAlignmentScore);
-    if (next === "market_aligned_rsi_scalper") setExitModel("LEGACY_FIXED_TARGET");
+    setNumericErrors({});
     setStrategyMode(next); if (next !== "rsi_range") setTimeframe("5m");
     setResponse(null); setError(null); setOiComparison(null);
   };
@@ -786,6 +963,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
         setError("RSI ranges must be ordered from the low entry range to the high exit range.");
         return;
       }
+    } else if (strategyMode === "market_aligned_rsi_scalper") {
+      if (marketFormInvalid) {
+        setError(Object.values(numericErrors)[0] ?? Object.values(marketRelationshipErrors)[0] ?? "Review the highlighted Market-Aligned settings.");
+        return;
+      }
     } else {
       const rsiValues = [rsiArmLow, rsiArmHigh, rsiRecovery];
       if (!rsiValues.every((value) => Number.isFinite(value) && value >= 0 && value <= 100)) {
@@ -794,13 +976,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
       }
       if (!(rsiArmLow < rsiArmHigh)) {
         setError("RSI arm low must be lower than RSI arm high.");
-        return;
-      }
-      if (strategyMode === "market_aligned_rsi_scalper" && !(
-        rsiArmHigh < rsiRecovery && rsiRecovery < signalRsiMaximum
-        && minimumRvol >= 1.5 && minimumNiftyTrendScore >= 25
-      )) {
-        setError("Market-Aligned RSI levels must be ordered, RVOL must be at least 1.5, and NIFTY score must be at least +25.");
         return;
       }
       if (![rsiLength, emaFast, emaSlow, volumeEma].every((value) => Number.isInteger(value) && value > 0)) {
@@ -890,13 +1065,17 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
             rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
             emaFast, emaSlow, rvolPeriod: volumeEma, minimumRvol,
             relativeStrengthLookbackBars, roomLookbackBars, targetPct,
-            setupExpiryBars, executionModel, buyCostBps, sellCostBps, slippageBps,
-            minimumNiftyTrendScore, minimumBreadthPct, minimumBreadthSymbols,
+            setupExpiryBars, executionModel, positionSizing,
+            entryStartTime, lastEntryTime, squareOffTime, stopLossPct: marketStopLossPct,
+            quantityPerTrade, maximumHoldingBars, maximumTradesPerDay, maximumOpenPositions,
+            buyCostBps, sellCostBps, slippageBps, maximumCapitalPerPosition,
+            maximumDailyLossPct, stopAfterFirstLoss, cooldownBars, maximumSpreadPct,
+            minimumNiftyTrendScore, minimumSectorBullishPct, minimumBreadthPct, minimumBreadthSymbols,
             minimumSectorMembers, minimumAverageTradedValue, maximumIntrabarRangePct,
-            minimumAlignmentScore, marketDataStaleSeconds: oiStaleDataSeconds,
+            minimumAlignmentScore, marketDataStaleSeconds,
             oiMode: oiFilterMode, oiLookbackBars, oiStrikesEachSide,
             oiMinimumPriceChangePct, oiMinimumChangePct, oiMaximumSpreadPct,
-            oiStaleDataSeconds, oiMinimumValidContractFraction, oiMinimumFuturesVolume,
+            oiStaleDataSeconds, oiMinimumConfidence, oiMinimumValidContractFraction, oiMinimumFuturesVolume,
             oiVolatilityPriceRisePct, oiVolatilityIvRise, oiMinimumCoverage,
             oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
             oiStronglyBearishThreshold, oiBearishThreshold, oiBullishThreshold,
@@ -1185,13 +1364,17 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
             rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
             emaFast, emaSlow, rvolPeriod: volumeEma, minimumRvol,
             relativeStrengthLookbackBars, roomLookbackBars, targetPct,
-            setupExpiryBars, executionModel, buyCostBps, sellCostBps, slippageBps,
-            minimumNiftyTrendScore, minimumBreadthPct, minimumBreadthSymbols,
+            setupExpiryBars, executionModel, positionSizing,
+            entryStartTime, lastEntryTime, squareOffTime, stopLossPct: marketStopLossPct,
+            quantityPerTrade, maximumHoldingBars, maximumTradesPerDay, maximumOpenPositions,
+            buyCostBps, sellCostBps, slippageBps, maximumCapitalPerPosition,
+            maximumDailyLossPct, stopAfterFirstLoss, cooldownBars, maximumSpreadPct,
+            minimumNiftyTrendScore, minimumSectorBullishPct, minimumBreadthPct, minimumBreadthSymbols,
             minimumSectorMembers, minimumAverageTradedValue, maximumIntrabarRangePct,
-            minimumAlignmentScore, marketDataStaleSeconds: oiStaleDataSeconds,
+            minimumAlignmentScore, marketDataStaleSeconds,
             oiMode: "ADVISORY", oiLookbackBars, oiStrikesEachSide,
             oiMinimumPriceChangePct, oiMinimumChangePct, oiMaximumSpreadPct,
-            oiStaleDataSeconds, oiMinimumValidContractFraction, oiMinimumFuturesVolume,
+            oiStaleDataSeconds, oiMinimumConfidence, oiMinimumValidContractFraction, oiMinimumFuturesVolume,
             oiVolatilityPriceRisePct, oiVolatilityIvRise, oiMinimumCoverage,
             oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
             oiStronglyBearishThreshold, oiBearishThreshold, oiBullishThreshold,
@@ -1234,6 +1417,23 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
       setPositionSizing("FIXED_QUANTITY");
     }
   };
+
+  const marketNumber = (
+    parameterKey: string,
+    value: number,
+    setter: (value: number) => void,
+    options: { externalError?: string | null; presetControlled?: boolean; disabled?: boolean } = {},
+  ) => <NumericField
+    key={`${parameterKey}:${marketFormRevision}`}
+    strategy="market_aligned_rsi_scalper"
+    parameterKey={parameterKey}
+    value={value}
+    onValueChange={setter}
+    onValidityChange={setNumericValidity}
+    onManualChange={options.presetControlled ? markMarketPresetCustom : undefined}
+    externalError={options.externalError}
+    disabled={options.disabled}
+  />;
 
   return (
     <div className="site-shell backtest-shell" data-theme={darkMode ? "dark" : "light"}>
@@ -1301,7 +1501,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           </button>
         </section>
 
-        <form className="backtest-controls" onSubmit={submit}>
+        <form className="backtest-controls" onSubmit={submit} noValidate>
           <div className="control-block symbol-control">
             <label>Symbol universe <span>{useAllSymbols ? `${symbols.length} symbols` : `${selectedSymbols.length}/10 selected`}</span></label>
             <div className="universe-toggle segmented backtest-segmented">
@@ -1337,34 +1537,131 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           <div className="control-block compact-control"><span className="control-title">Duration</span><div className="segmented backtest-segmented">{([1, 3] as const).map((years) => <button key={years} type="button" className={durationYears === years ? "active" : ""} onClick={() => setDurationYears(years)}>{years} year{years > 1 ? "s" : ""}</button>)}</div></div>
           <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
           {strategyMode === "rsi_range" ? <>
-            <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" min="0" max="100" value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" min="0" max="100" value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
-            <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" min="0" max="100" value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" min="0" max="100" value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
-          </> : <>
+            <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "entryLow")} value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "entryHigh")} value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
+            <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "exitLow")} value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "exitHigh")} value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
+          </> : strategyMode === "market_aligned_rsi_scalper" ? <div className="market-aligned-settings">
+            <section className="market-preset-bar" aria-label="Market-Aligned presets">
+              <div><span className="section-kicker">Preset</span><strong>{marketPreset}</strong><small>Presets are research starting points and do not guarantee profitability.</small></div>
+              <div className="market-preset-actions">
+                {(["Recommended", "Strict"] as const).map((preset) => <button key={preset} type="button" className={marketPreset === preset ? "active" : ""} onClick={() => applyMarketPreset(preset)}>{preset}</button>)}
+                <button type="button" className={marketPreset === "Custom" ? "active" : ""} onClick={markMarketPresetCustom}>Custom</button>
+              </div>
+            </section>
+
+            <section className="market-settings-card market-main-settings" aria-labelledby="market-main-settings-title">
+              <div className="market-section-heading"><div><span className="section-kicker">Common controls</span><h2 id="market-main-settings-title">Main settings</h2></div><span>Strategy, universe, duration and timeframe are selected above.</span></div>
+              <div className="market-settings-grid">
+                <label className="parameter-field"><span className="parameter-label">Execution model</span><small className="parameter-description">Choose the price used after a completed signal bar.</small><select value={executionModel} onChange={(event) => setExecutionModel(event.target.value as typeof executionModel)}><option value="SIGNAL_CLOSE">Signal close</option><option value="NEXT_BAR_OPEN">Next bar open</option></select></label>
+                {marketNumber("quantityPerTrade", quantityPerTrade, setQuantityPerTrade)}
+                <label className="parameter-field"><span className="parameter-label">Position sizing</span><small className="parameter-description">The strategy never increases size because of a bullish OI reading.</small><select value={positionSizing} onChange={(event) => setPositionSizing(event.target.value as typeof positionSizing)}><option value="FIXED_QUANTITY">Fixed quantity</option><option value="RISK_BUDGET">Risk budget</option></select></label>
+                <label className="parameter-field"><span className="parameter-label">Entry start time</span><small className="parameter-description">First IST time at which a new entry may be considered.</small><input type="time" value={entryStartTime} onChange={(event) => setEntryStartTime(event.target.value)} />{marketRelationshipErrors.sessionTimes && <span className="parameter-error" role="alert">{marketRelationshipErrors.sessionTimes}</span>}</label>
+                <label className="parameter-field"><span className="parameter-label">Last entry time</span><small className="parameter-description">No new entries are accepted at or after this IST time.</small><input type="time" value={lastEntryTime} onChange={(event) => setLastEntryTime(event.target.value)} />{marketRelationshipErrors.sessionTimes && <span className="parameter-error" role="alert">{marketRelationshipErrors.sessionTimes}</span>}</label>
+                <label className="parameter-field"><span className="parameter-label">Square-off time</span><small className="parameter-description">Open positions are closed by this IST time.</small><input type="time" value={squareOffTime} onChange={(event) => setSquareOffTime(event.target.value)} />{marketRelationshipErrors.sessionTimes && <span className="parameter-error" role="alert">{marketRelationshipErrors.sessionTimes}</span>}</label>
+                {marketNumber("targetPct", targetPct, setTargetPct)}
+                {marketNumber("stopLossPct", marketStopLossPct, setMarketStopLossPct)}
+                {marketNumber("maximumHoldingBars", maximumHoldingBars, setMaximumHoldingBars)}
+                {marketNumber("maximumTradesPerDay", maximumTradesPerDay, setMaximumTradesPerDay, { presetControlled: true })}
+                {marketNumber("maximumOpenPositions", maximumOpenPositions, setMaximumOpenPositions)}
+                {marketNumber("minimumAlignmentScore", minimumAlignmentScore, setMinimumAlignmentScore, { presetControlled: true })}
+                <label className="parameter-field"><span className="parameter-label">OI mode</span><small className="parameter-description">ADVISORY records point-in-time OI without blocking a trade.</small><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); markMarketPresetCustom(); }}><option value="OFF">OFF — no OI context</option><option value="ADVISORY">ADVISORY — record only (default)</option><option value="RESEARCH_FILTER">RESEARCH FILTER — experimental</option><option value="ENFORCED">ENFORCED — validated data only</option></select></label>
+              </div>
+            </section>
+
+            <details className="market-settings-card market-settings-section">
+              <summary><span><strong>Entry filters</strong><small>RSI, EMA and market-alignment gates</small></span><ChevronDown size={17} /></summary>
+              <div className="market-settings-grid">
+                {marketNumber("rsiLength", rsiLength, setRsiLength)}
+                {marketNumber("rsiArmLow", rsiArmLow, setRsiArmLow)}
+                {marketNumber("rsiArmHigh", rsiArmHigh, setRsiArmHigh, { externalError: marketRelationshipErrors.rsiArmHigh })}
+                {marketNumber("rsiRecovery", rsiRecovery, setRsiRecovery, { externalError: marketRelationshipErrors.rsiRecovery })}
+                {marketNumber("signalRsiMaximum", signalRsiMaximum, setSignalRsiMaximum, { externalError: marketRelationshipErrors.signalRsiMaximum })}
+                {marketNumber("setupExpiryBars", setupExpiryBars, setSetupExpiryBars)}
+                {marketNumber("emaFast", emaFast, setEmaFast)}
+                {marketNumber("emaSlow", emaSlow, setEmaSlow, { externalError: marketRelationshipErrors.emaSlow })}
+                {marketNumber("minimumRvol", minimumRvol, setMinimumRvol)}
+                {marketNumber("minimumNiftyTrendScore", minimumNiftyTrendScore, setMinimumNiftyTrendScore)}
+                {marketNumber("minimumSectorBullishPct", minimumSectorBullishPct, setMinimumSectorBullishPct)}
+                {marketNumber("minimumBreadthPct", minimumBreadthPct, setMinimumBreadthPct)}
+              </div>
+            </details>
+
+            <details className="market-settings-card market-settings-section">
+              <summary><span><strong>Risk and execution</strong><small>Costs, capacity, loss and liquidity limits</small></span><ChevronDown size={17} /></summary>
+              <div className="market-settings-grid">
+                {marketNumber("buyCostBps", buyCostBps, setBuyCostBps)}
+                {marketNumber("sellCostBps", sellCostBps, setSellCostBps)}
+                {marketNumber("slippageBps", slippageBps, setSlippageBps)}
+                {marketNumber("maximumCapitalPerPosition", maximumCapitalPerPosition, setMaximumCapitalPerPosition)}
+                {marketNumber("maximumDailyLossPct", maximumDailyLossPct, setMaximumDailyLossPct)}
+                <label className="parameter-field parameter-checkbox"><span className="parameter-label">Stop after first loss</span><small className="parameter-description">Prevent another entry after the first realised loss of the session.</small><span><input type="checkbox" checked={stopAfterFirstLoss} onChange={(event) => setStopAfterFirstLoss(event.target.checked)} /> Enabled</span></label>
+                {marketNumber("cooldownBars", cooldownBars, setCooldownBars)}
+                {marketNumber("maximumSpreadPct", maximumSpreadPct, setMaximumSpreadPct)}
+                {marketNumber("minimumAverageTradedValue", minimumAverageTradedValue, setMinimumAverageTradedValue)}
+                {marketNumber("roomLookbackBars", roomLookbackBars, setRoomLookbackBars)}
+              </div>
+            </details>
+
+            <details className="market-settings-card market-settings-section open-interest-settings">
+              <summary><span><strong>Open Interest</strong><small>Normal OI controls and data status</small></span><ChevronDown size={17} /></summary>
+              <div className="market-settings-grid">
+                <label className="parameter-field"><span className="parameter-label">OI mode</span><small className="parameter-description">The default is ADVISORY.</small><select value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); markMarketPresetCustom(); }}><option value="OFF">OFF</option><option value="ADVISORY">ADVISORY</option><option value="RESEARCH_FILTER">RESEARCH FILTER</option><option value="ENFORCED">ENFORCED</option></select></label>
+                {marketNumber("oiMinimumConfidence", oiMinimumConfidence, setOiMinimumConfidence)}
+                {marketNumber("oiStronglyBearishThreshold", oiStronglyBearishThreshold, setOiStronglyBearishThreshold)}
+                {marketNumber("oiStaleDataSeconds", oiStaleDataSeconds, setOiStaleDataSeconds)}
+              </div>
+              <div className="oi-mode-explainer"><span><b>OFF</b> — OI is ignored</span><span><b>ADVISORY</b> — OI is displayed but cannot block trades</span><span><b>RESEARCH FILTER</b> — experimental backtest filter</span><span><b>ENFORCED</b> — can block trades only when validated data is available</span></div>
+              <div className={`oi-history-status ${oiHistoryStatus?.enforcementReady ? "ready" : "limited"}`}>
+                <strong>Historical OI: {oiHistoryStatus?.state ?? "CHECKING"}</strong>
+                {oiHistoryStatus?.request?.fromDate && <span>{oiHistoryStatus.request.fromDate} to {oiHistoryStatus.request.toDate} · {oiHistoryStatus.optionRowsImported ?? 0} option rows</span>}
+                <span>{oiHistoryStatus?.enforcementReady ? `${oiHistoryStatus.enforceableSnapshots ?? 0} enforceable regimes` : oiHistoryStatus?.reason ?? "Checking imported coverage…"}</span>
+              </div>
+
+              <details className="expert-oi-settings">
+                <summary><span><strong>Expert OI settings</strong><small>Research and engineering parameters</small></span><ChevronDown size={16} /></summary>
+                <div className="market-settings-grid expert-settings-grid">
+                  {marketNumber("oiLookbackBars", oiLookbackBars, setOiLookbackBars)}
+                  {marketNumber("oiStrikesEachSide", oiStrikesEachSide, setOiStrikesEachSide)}
+                  {marketNumber("oiMinimumPriceChangePct", oiMinimumPriceChangePct, setOiMinimumPriceChangePct)}
+                  {marketNumber("oiMinimumChangePct", oiMinimumChangePct, setOiMinimumChangePct)}
+                  {marketNumber("oiMaximumSpreadPct", oiMaximumSpreadPct, setOiMaximumSpreadPct)}
+                  {marketNumber("oiMinimumValidContractFraction", oiMinimumValidContractFraction, setOiMinimumValidContractFraction)}
+                  {marketNumber("oiMinimumFuturesVolume", oiMinimumFuturesVolume, setOiMinimumFuturesVolume)}
+                  {marketNumber("oiVolatilityPriceRisePct", oiVolatilityPriceRisePct, setOiVolatilityPriceRisePct)}
+                  {marketNumber("oiVolatilityIvRise", oiVolatilityIvRise, setOiVolatilityIvRise)}
+                  {marketNumber("oiMinimumCoverage", oiMinimumCoverage, setOiMinimumCoverage)}
+                  {marketNumber("oiOptionsWeight", oiOptionsWeight, setOiOptionsWeight, { externalError: marketRelationshipErrors.oiWeights })}
+                  {marketNumber("oiFuturesWeight", oiFuturesWeight, setOiFuturesWeight, { externalError: marketRelationshipErrors.oiWeights })}
+                  {marketNumber("oiSpotWeight", oiSpotWeight, setOiSpotWeight, { externalError: marketRelationshipErrors.oiWeights })}
+                  {marketNumber("oiBearishThreshold", oiBearishThreshold, setOiBearishThreshold, { externalError: marketRelationshipErrors.oiThresholds })}
+                  {marketNumber("oiBullishThreshold", oiBullishThreshold, setOiBullishThreshold, { externalError: marketRelationshipErrors.oiThresholds })}
+                  {marketNumber("oiStronglyBullishThreshold", oiStronglyBullishThreshold, setOiStronglyBullishThreshold, { externalError: marketRelationshipErrors.oiThresholds })}
+                  {marketNumber("oiElevatedQualityThreshold", oiElevatedQualityThreshold, setOiElevatedQualityThreshold)}
+                  <label className="parameter-field"><span className="parameter-label">Missing-data policy</span><small className="parameter-description">Research defaults skip decisions that do not meet data coverage.</small><select value={oiFailPolicy} onChange={(event) => setOiFailPolicy(event.target.value as typeof oiFailPolicy)}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow long (explicit override)</option></select></label>
+                  {marketNumber("relativeStrengthLookbackBars", relativeStrengthLookbackBars, setRelativeStrengthLookbackBars)}
+                  {marketNumber("minimumBreadthSymbols", minimumBreadthSymbols, setMinimumBreadthSymbols)}
+                  {marketNumber("minimumSectorMembers", minimumSectorMembers, setMinimumSectorMembers)}
+                  {marketNumber("maximumIntrabarRangePct", maximumIntrabarRangePct, setMaximumIntrabarRangePct)}
+                  {marketNumber("marketDataStaleSeconds", marketDataStaleSeconds, setMarketDataStaleSeconds)}
+                </div>
+                <div className="expert-actions"><button type="button" className="secondary-action" onClick={restoreExpertOiDefaults}>Restore recommended defaults</button><button type="button" className="secondary-action" disabled={comparingOi || loading || marketFormInvalid} onClick={compareOiFilter}>{comparingOi ? <><LoaderCircle className="spin" size={15} />Comparing…</> : "Compare OI filter"}</button></div>
+              </details>
+            </details>
+          </div> : <>
             <div className="recovery-config recovery-simple-config">
               <fieldset className="recovery-config-card target-card">
                 <legend>Execution &amp; target</legend>
-                <label><span>{exitModel === "RSI_PROFIT_RISK_CONTROL" ? "Minimum profit" : exitModel === "ATR_DYNAMIC_TP_SL" ? "Target" : "Profit target"}</span>{exitModel === "ATR_DYNAMIC_TP_SL" ? <strong className="derived-value">ATR-derived</strong> : <span className="suffixed-input"><input aria-label={exitModel === "RSI_PROFIT_RISK_CONTROL" ? "Minimum profitable exit" : "Profit target"} type="number" min="0.01" step="0.01" value={exitModel === "RSI_PROFIT_RISK_CONTROL" ? minimumProfitPct : targetPct} onChange={(event) => exitModel === "RSI_PROFIT_RISK_CONTROL" ? setMinimumProfitPct(Number(event.target.value)) : setTargetPct(Number(event.target.value))} /><i>%</i></span>}</label>
+                <label><span>{exitModel === "RSI_PROFIT_RISK_CONTROL" ? "Minimum profit" : exitModel === "ATR_DYNAMIC_TP_SL" ? "Target" : "Profit target"}</span>{exitModel === "ATR_DYNAMIC_TP_SL" ? <strong className="derived-value">ATR-derived</strong> : <span className="suffixed-input"><input aria-label={exitModel === "RSI_PROFIT_RISK_CONTROL" ? "Minimum profitable exit" : "Profit target"} type="number" {...numericConstraints("rsi_recovery", exitModel === "RSI_PROFIT_RISK_CONTROL" ? "minimumProfitPct" : "targetPct")} value={exitModel === "RSI_PROFIT_RISK_CONTROL" ? minimumProfitPct : targetPct} onChange={(event) => exitModel === "RSI_PROFIT_RISK_CONTROL" ? setMinimumProfitPct(Number(event.target.value)) : setTargetPct(Number(event.target.value))} /><i>%</i></span>}</label>
                 <div className="execution-model"><span>Execution model</span><div className="segmented backtest-segmented"><button type="button" className={executionModel === "SIGNAL_CLOSE" ? "active" : ""} onClick={() => setExecutionModel("SIGNAL_CLOSE")}>Signal close</button><button type="button" className={executionModel === "NEXT_BAR_OPEN" ? "active" : ""} onClick={() => setExecutionModel("NEXT_BAR_OPEN")}>Next open</button></div></div>
                 {strategyMode === "rsi_recovery" && <label><span>Exit model</span><select aria-label="Exit model" value={exitModel} onChange={(event) => changeExitModel(event.target.value as typeof exitModel)}><option value="LEGACY_FIXED_TARGET">Legacy fixed target</option><option value="FIXED_TP_SL">Fixed TP and SL</option><option value="ATR_DYNAMIC_TP_SL">ATR dynamic TP and SL</option><option value="RSI_PROFIT_RISK_CONTROL">RSI profitable exit with risk control</option></select></label>}
-                <div className="fixed-strategy-rules">{strategyMode === "market_aligned_rsi_scalper" ? <><span>Separate signal backtest</span><span>No automatic size increase</span><span>Research candidate</span></> : exitModel === "LEGACY_FIXED_TARGET" ? <><span>No stop loss</span><span>No end-of-day exit</span><span>Hold until target</span></> : exitModel === "FIXED_TP_SL" ? <><span>Fixed TP + SL</span><span>Session time exit</span><span>Stop-first OHLC rule</span></> : exitModel === "ATR_DYNAMIC_TP_SL" ? <><span>ATR-frozen TP + SL</span><span>Session time exit</span><span>Stop-first OHLC rule</span></> : <><span>Profitable RSI exit</span><span>Hard stop</span><span>Session time exit</span></>}</div>
+                <div className="fixed-strategy-rules">{exitModel === "LEGACY_FIXED_TARGET" ? <><span>No stop loss</span><span>No end-of-day exit</span><span>Hold until target</span></> : exitModel === "FIXED_TP_SL" ? <><span>Fixed TP + SL</span><span>Session time exit</span><span>Stop-first OHLC rule</span></> : exitModel === "ATR_DYNAMIC_TP_SL" ? <><span>ATR-frozen TP + SL</span><span>Session time exit</span><span>Stop-first OHLC rule</span></> : <><span>Profitable RSI exit</span><span>Hard stop</span><span>Session time exit</span></>}</div>
               </fieldset>
               {strategyMode === "rsi_recovery" && <fieldset className="recovery-config-card position-config-card">
                 <legend>Position limits</legend>
-                <label><span>Quantity</span><span className="suffixed-input"><input aria-label="Quantity per trade" type="number" min="1" step="1" value={quantityPerTrade} disabled={!exitProtectionEnabled || positionSizing === "RISK_BUDGET"} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label>
-                <label><span>Maximum open lots</span><input aria-label="Maximum open lots per symbol" type="number" min="1" step="1" value={maxOpenLotsPerSymbol} disabled={!exitProtectionEnabled} onChange={(event) => setMaxOpenLotsPerSymbol(Number(event.target.value))} /></label>
-                <label><span>Maximum holding sessions</span><span className="suffixed-input"><input aria-label="Maximum holding trading sessions" type="number" min="1" step="1" value={maxHoldingTradingDays} disabled={!exitProtectionEnabled} onChange={(event) => setMaxHoldingTradingDays(Number(event.target.value))} /><i>NSE sessions</i></span><small>Entry session is session 1. An unresolved position exits at the next available session open.</small></label>
+                <label><span>Quantity</span><span className="suffixed-input"><input aria-label="Quantity per trade" type="number" {...numericConstraints("rsi_recovery", "quantityPerTrade")} value={quantityPerTrade} disabled={!exitProtectionEnabled || positionSizing === "RISK_BUDGET"} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label>
+                <label><span>Maximum open lots</span><input aria-label="Maximum open lots per symbol" type="number" {...numericConstraints("rsi_recovery", "maxOpenLotsPerSymbol")} value={maxOpenLotsPerSymbol} disabled={!exitProtectionEnabled} onChange={(event) => setMaxOpenLotsPerSymbol(Number(event.target.value))} /></label>
+                <label><span>Maximum holding sessions</span><span className="suffixed-input"><input aria-label="Maximum holding trading sessions" type="number" {...numericConstraints("rsi_recovery", "maxHoldingTradingDays")} value={maxHoldingTradingDays} disabled={!exitProtectionEnabled} onChange={(event) => setMaxHoldingTradingDays(Number(event.target.value))} /><i>NSE sessions</i></span><small>Entry session is session 1. An unresolved position exits at the next available session open.</small></label>
                 {exitModel === "ATR_DYNAMIC_TP_SL" && <small>TP and SL are calculated from each signal&apos;s ATR and frozen at entry.</small>}
-                {exitModel === "RSI_PROFIT_RISK_CONTROL" && <><label><span>Profit-exit RSI</span><input aria-label="Profit-exit RSI" type="number" min="0" max="100" step="1" value={profitExitRsi} onChange={(event) => setProfitExitRsi(Number(event.target.value))} /></label><label><span>Hard stop</span><span className="suffixed-input"><input aria-label="Hard stop loss" type="number" min="0.01" max="99.99" step="0.05" value={hardStopLossPct} onChange={(event) => setHardStopLossPct(Number(event.target.value))} /><i>%</i></span></label></>}
-              </fieldset>}
-              {strategyMode === "market_aligned_rsi_scalper" && <fieldset className="recovery-config-card oi-mode-card">
-                <legend>NIFTY OI regime filter</legend>
-                <label><span>Mode</span><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); }}><option value="OFF">OFF — no OI context</option><option value="ADVISORY">ADVISORY — record only (default)</option><option value="RESEARCH_FILTER">RESEARCH_FILTER — comparison only</option><option value="ENFORCED">ENFORCED — gate long trades</option></select></label>
-                <small>ADVISORY is this strategy&apos;s default. OI never creates BUY signals or increases position size.</small>
-                <div className={`oi-history-status ${oiHistoryStatus?.enforcementReady ? "ready" : "limited"}`}>
-                  <strong>Historical OI: {oiHistoryStatus?.state ?? "CHECKING"}</strong>
-                  {oiHistoryStatus?.request?.fromDate && <span>{oiHistoryStatus.request.fromDate} to {oiHistoryStatus.request.toDate} · {oiHistoryStatus.optionRowsImported ?? 0} option rows</span>}
-                  <span>{oiHistoryStatus?.enforcementReady ? `${oiHistoryStatus.enforceableSnapshots ?? 0} enforceable regimes` : oiHistoryStatus?.reason ?? "Checking imported coverage…"}</span>
-                </div>
+                {exitModel === "RSI_PROFIT_RISK_CONTROL" && <><label><span>Profit-exit RSI</span><input aria-label="Profit-exit RSI" type="number" {...numericConstraints("rsi_recovery", "profitExitRsi")} value={profitExitRsi} onChange={(event) => setProfitExitRsi(Number(event.target.value))} /></label><label><span>Hard stop</span><span className="suffixed-input"><input aria-label="Hard stop loss" type="number" {...numericConstraints("rsi_recovery", "hardStopLossPct")} value={hardStopLossPct} onChange={(event) => setHardStopLossPct(Number(event.target.value))} /><i>%</i></span></label></>}
               </fieldset>}
             </div>
             {strategyMode === "rsi_recovery" && exitModel === "RSI_PROFIT_RISK_CONTROL" && <div className="research-semantics"><Info size={16} /><span>The setup is armed when RSI enters the low zone. BUY occurs after RSI recovery and confirmation. SELL occurs when RSI recovers above the profit-exit level and the configured minimum profit is available. Stop and time exits prevent indefinite losing positions.</span></div>}
@@ -1373,80 +1670,45 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
               <div className="recovery-config advanced-recovery-grid">
                 <fieldset className="recovery-config-card">
                   <legend>Detailed RSI configuration</legend>
-                  <label><span>RSI length</span><input type="number" min="1" step="1" value={rsiLength} onChange={(event) => setRsiLength(Number(event.target.value))} /></label>
-                  <label className="wide-config-field"><span>Arm RSI</span><div className="inline-number-range"><input type="number" min="0" max="100" value={rsiArmLow} onChange={(event) => setRsiArmLow(Number(event.target.value))} /><i>to</i><input type="number" min="0" max="100" value={rsiArmHigh} onChange={(event) => setRsiArmHigh(Number(event.target.value))} /></div></label>
-                  <label><span>Recovery</span><input type="number" min="0" max="100" value={rsiRecovery} onChange={(event) => setRsiRecovery(Number(event.target.value))} /></label>
-                  {strategyMode === "market_aligned_rsi_scalper" && <label><span>Maximum signal RSI</span><input type="number" min={rsiRecovery} max="100" value={signalRsiMaximum} onChange={(event) => setSignalRsiMaximum(Number(event.target.value))} /></label>}
-                  <label><span>Setup expiry</span><span className="suffixed-input"><input type="number" min="0" step="1" value={setupExpiryBars} onChange={(event) => setSetupExpiryBars(Number(event.target.value))} /><i>bars</i></span><small>0 = never expire</small></label>
+                  <label><span>RSI length</span><input type="number" {...numericConstraints("rsi_recovery", "rsiLength")} value={rsiLength} onChange={(event) => setRsiLength(Number(event.target.value))} /></label>
+                  <label className="wide-config-field"><span>Arm RSI</span><div className="inline-number-range"><input type="number" {...numericConstraints("rsi_recovery", "rsiArmLow")} value={rsiArmLow} onChange={(event) => setRsiArmLow(Number(event.target.value))} /><i>to</i><input type="number" {...numericConstraints("rsi_recovery", "rsiArmHigh")} value={rsiArmHigh} onChange={(event) => setRsiArmHigh(Number(event.target.value))} /></div></label>
+                  <label><span>Recovery</span><input type="number" {...numericConstraints("rsi_recovery", "rsiRecovery")} value={rsiRecovery} onChange={(event) => setRsiRecovery(Number(event.target.value))} /></label>
+                  <label><span>Setup expiry</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "setupExpiryBars")} value={setupExpiryBars} onChange={(event) => setSetupExpiryBars(Number(event.target.value))} /><i>bars</i></span><small>0 = never expire</small></label>
                 </fieldset>
                 {strategyMode === "rsi_recovery" && <fieldset className="recovery-config-card confirmation-card">
                   <legend>EMA · VWAP · volume</legend>
-                  <label className="toggle-config"><input type="checkbox" checked={emaEnabled} onChange={(event) => setEmaEnabled(event.target.checked)} /><span>EMA trend</span><span className="inline-number-range"><input aria-label="Fast EMA length" type="number" min="1" step="1" value={emaFast} onChange={(event) => setEmaFast(Number(event.target.value))} /><i>/</i><input aria-label="Slow EMA length" type="number" min="1" step="1" value={emaSlow} onChange={(event) => setEmaSlow(Number(event.target.value))} /></span></label>
+                  <label className="toggle-config"><input type="checkbox" checked={emaEnabled} onChange={(event) => setEmaEnabled(event.target.checked)} /><span>EMA trend</span><span className="inline-number-range"><input aria-label="Fast EMA length" type="number" {...numericConstraints("rsi_recovery", "emaFast")} value={emaFast} onChange={(event) => setEmaFast(Number(event.target.value))} /><i>/</i><input aria-label="Slow EMA length" type="number" {...numericConstraints("rsi_recovery", "emaSlow")} value={emaSlow} onChange={(event) => setEmaSlow(Number(event.target.value))} /></span></label>
                   <label className="toggle-config"><input type="checkbox" checked={vwapEnabled} onChange={(event) => setVwapEnabled(event.target.checked)} /><span>VWAP</span><small>Close &gt; session VWAP</small></label>
-                  <label className="toggle-config"><input type="checkbox" checked={volumeEnabled} onChange={(event) => setVolumeEnabled(event.target.checked)} /><span>Volume</span><span className="suffixed-input"><input aria-label="Volume EMA length" type="number" min="1" step="1" value={volumeEma} onChange={(event) => setVolumeEma(Number(event.target.value))} /><i>EMA</i></span></label>
-                  <label><span>Minimum confirmations</span><input type="number" min="0" max="3" step="1" value={minimumConfirmations} onChange={(event) => setMinimumConfirmations(Number(event.target.value))} /><small>RSI recovery remains mandatory and is not scored</small></label>
-                </fieldset>}
-                {strategyMode === "market_aligned_rsi_scalper" && <fieldset className="recovery-config-card confirmation-card">
-                  <legend>Market alignment gates</legend>
-                  <label><span>NIFTY trend minimum</span><input type="number" min="25" max="100" value={minimumNiftyTrendScore} onChange={(event) => setMinimumNiftyTrendScore(Number(event.target.value))} /></label>
-                  <label><span>Minimum RVOL</span><input type="number" min="1.5" step="0.1" value={minimumRvol} onChange={(event) => setMinimumRvol(Number(event.target.value))} /></label>
-                  <label><span>Minimum breadth</span><span className="suffixed-input"><input type="number" min="0" max="100" value={minimumBreadthPct} onChange={(event) => setMinimumBreadthPct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>Breadth coverage</span><input type="number" min="1" max="750" value={minimumBreadthSymbols} onChange={(event) => setMinimumBreadthSymbols(Number(event.target.value))} /></label>
-                  <label><span>Sector members</span><input type="number" min="1" max="750" value={minimumSectorMembers} onChange={(event) => setMinimumSectorMembers(Number(event.target.value))} /></label>
-                  <label><span>Relative-strength lookback</span><span className="suffixed-input"><input type="number" min="1" value={relativeStrengthLookbackBars} onChange={(event) => setRelativeStrengthLookbackBars(Number(event.target.value))} /><i>bars</i></span></label>
-                  <label><span>Room lookback</span><span className="suffixed-input"><input type="number" min="1" value={roomLookbackBars} onChange={(event) => setRoomLookbackBars(Number(event.target.value))} /><i>bars</i></span></label>
-                  <label><span>Minimum traded value</span><input type="number" min="0" step="10000" value={minimumAverageTradedValue} onChange={(event) => setMinimumAverageTradedValue(Number(event.target.value))} /></label>
-                  <label><span>Maximum candle range proxy</span><span className="suffixed-input"><input type="number" min="0.01" max="100" step="0.1" value={maximumIntrabarRangePct} onChange={(event) => setMaximumIntrabarRangePct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>Minimum alignment score</span><input type="number" min="0" max="100" value={minimumAlignmentScore} onChange={(event) => setMinimumAlignmentScore(Number(event.target.value))} /></label>
-                  <small>EMA9/20, VWAP, RVOL, liquidity, breadth, sector and relative-strength gates are mandatory and point-in-time.</small>
-                </fieldset>}
-                {strategyMode === "market_aligned_rsi_scalper" && <fieldset className="recovery-config-card oi-advanced-card">
-                  <legend>NIFTY OI scoring</legend>
-                  <label><span>Completed-bar lookback</span><span className="suffixed-input"><input type="number" min="1" max="100" step="1" value={oiLookbackBars} onChange={(event) => setOiLookbackBars(Number(event.target.value))} /><i>5m bars</i></span></label>
-                  <label><span>Strikes around ATM</span><span className="suffixed-input"><input type="number" min="0" max="20" step="1" value={oiStrikesEachSide} onChange={(event) => setOiStrikesEachSide(Number(event.target.value))} /><i>each side</i></span></label>
-                  <label><span>Minimum premium change</span><span className="suffixed-input"><input type="number" min="0" step="0.01" value={oiMinimumPriceChangePct} onChange={(event) => setOiMinimumPriceChangePct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>Minimum OI change</span><span className="suffixed-input"><input type="number" min="0" step="0.1" value={oiMinimumChangePct} onChange={(event) => setOiMinimumChangePct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>Maximum spread</span><span className="suffixed-input"><input type="number" min="0.01" step="0.5" value={oiMaximumSpreadPct} onChange={(event) => setOiMaximumSpreadPct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>Stale after</span><span className="suffixed-input"><input type="number" min="1" step="30" value={oiStaleDataSeconds} onChange={(event) => setOiStaleDataSeconds(Number(event.target.value))} /><i>seconds</i></span></label>
-                  <label><span>Minimum valid contracts</span><input type="number" min="0.01" max="1" step="0.05" value={oiMinimumValidContractFraction} onChange={(event) => setOiMinimumValidContractFraction(Number(event.target.value))} /></label>
-                  <label><span>Minimum futures volume</span><input type="number" min="0" step="1" value={oiMinimumFuturesVolume} onChange={(event) => setOiMinimumFuturesVolume(Number(event.target.value))} /></label>
-                  <label><span>IV expansion premium rise</span><span className="suffixed-input"><input type="number" min="0" step="0.05" value={oiVolatilityPriceRisePct} onChange={(event) => setOiVolatilityPriceRisePct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>IV expansion IV rise</span><input type="number" min="0" step="0.1" value={oiVolatilityIvRise} onChange={(event) => setOiVolatilityIvRise(Number(event.target.value))} /></label>
-                  <label><span>Minimum component coverage</span><input type="number" min="0.01" max="1" step="0.05" value={oiMinimumCoverage} onChange={(event) => setOiMinimumCoverage(Number(event.target.value))} /></label>
-                  <label><span>Options / futures / spot weights</span><span className="inline-number-range"><input aria-label="Options OI weight" type="number" min="0" max="1" step="0.05" value={oiOptionsWeight} onChange={(event) => setOiOptionsWeight(Number(event.target.value))} /><i>/</i><input aria-label="Futures OI weight" type="number" min="0" max="1" step="0.05" value={oiFuturesWeight} onChange={(event) => setOiFuturesWeight(Number(event.target.value))} /><i>/</i><input aria-label="NIFTY spot weight" type="number" min="0" max="1" step="0.05" value={oiSpotWeight} onChange={(event) => setOiSpotWeight(Number(event.target.value))} /></span></label>
-                  <label><span>Regime thresholds</span><span className="inline-number-range"><input aria-label="Strong bearish threshold" type="number" min="-100" max="100" value={oiStronglyBearishThreshold} onChange={(event) => setOiStronglyBearishThreshold(Number(event.target.value))} /><i>/</i><input aria-label="Bearish threshold" type="number" min="-100" max="100" value={oiBearishThreshold} onChange={(event) => setOiBearishThreshold(Number(event.target.value))} /><i>/</i><input aria-label="Bullish threshold" type="number" min="-100" max="100" value={oiBullishThreshold} onChange={(event) => setOiBullishThreshold(Number(event.target.value))} /><i>/</i><input aria-label="Strong bullish threshold" type="number" min="-100" max="100" value={oiStronglyBullishThreshold} onChange={(event) => setOiStronglyBullishThreshold(Number(event.target.value))} /></span></label>
-                  <label><span>Elevated quality threshold</span><input type="number" min="0" max="100" step="1" value={oiElevatedQualityThreshold} onChange={(event) => setOiElevatedQualityThreshold(Number(event.target.value))} /></label>
-                  <label><span>Missing-data policy</span><select value={oiFailPolicy} onChange={(event) => setOiFailPolicy(event.target.value as typeof oiFailPolicy)}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow long (explicit override)</option></select></label>
-                  <button type="button" className="secondary-action" disabled={comparingOi || loading} onClick={compareOiFilter}>{comparingOi ? <><LoaderCircle className="spin" size={15} />Comparing…</> : "Compare OI filter"}</button>
-                  <small>Runs identical candidates through OFF, ADVISORY, RESEARCH_FILTER and ENFORCED. Rejected outcomes are research-only.</small>
+                  <label className="toggle-config"><input type="checkbox" checked={volumeEnabled} onChange={(event) => setVolumeEnabled(event.target.checked)} /><span>Volume</span><span className="suffixed-input"><input aria-label="Volume EMA length" type="number" {...numericConstraints("rsi_recovery", "volumeEma")} value={volumeEma} onChange={(event) => setVolumeEma(Number(event.target.value))} /><i>EMA</i></span></label>
+                  <label><span>Minimum confirmations</span><input type="number" {...numericConstraints("rsi_recovery", "minimumConfirmations")} value={minimumConfirmations} onChange={(event) => setMinimumConfirmations(Number(event.target.value))} /><small>RSI recovery remains mandatory and is not scored</small></label>
                 </fieldset>}
                 {strategyMode === "rsi_recovery" && exitModel === "FIXED_TP_SL" && <fieldset className="recovery-config-card">
                   <legend>Fixed exits</legend>
-                  <label title="Take-profit price = actual entry × (1 + take-profit %)"><span>Take-profit</span><span className="suffixed-input"><input type="number" min="0.01" step="0.01" value={targetPct} onChange={(event) => setTargetPct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label title="Stop-loss price = actual entry × (1 - stop-loss %)"><span>Stop-loss</span><span className="suffixed-input"><input type="number" min="0.01" step="0.01" value={fixedStopLossPct} onChange={(event) => setFixedStopLossPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label title="Take-profit price = actual entry × (1 + take-profit %)"><span>Take-profit</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "targetPct")} value={targetPct} onChange={(event) => setTargetPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label title="Stop-loss price = actual entry × (1 - stop-loss %)"><span>Stop-loss</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "fixedStopLossPct")} value={fixedStopLossPct} onChange={(event) => setFixedStopLossPct(Number(event.target.value))} /><i>%</i></span></label>
                 </fieldset>}
                 {strategyMode === "rsi_recovery" && exitModel === "ATR_DYNAMIC_TP_SL" && <fieldset className="recovery-config-card">
                   <legend>ATR dynamic exits</legend>
-                  <label title="Wilder RMA of true range on completed strategy candles"><span>ATR length</span><input type="number" min="1" step="1" value={atrLength} onChange={(event) => setAtrLength(Number(event.target.value))} /></label>
-                  <label title="Raw ATR % × this multiplier, then clamped to the configured stop bounds"><span>Stop ATR multiplier</span><input type="number" min="0.01" step="0.05" value={stopAtrMultiplier} onChange={(event) => setStopAtrMultiplier(Number(event.target.value))} /></label>
-                  <label title="Dynamic take-profit % = dynamic stop % × reward:risk"><span>Reward:risk</span><input type="number" min="0.01" step="0.05" value={rewardRiskRatio} onChange={(event) => setRewardRiskRatio(Number(event.target.value))} /></label>
-                  <label><span>Minimum stop</span><span className="suffixed-input"><input type="number" min="0.01" step="0.05" value={minimumStopPct} onChange={(event) => setMinimumStopPct(Number(event.target.value))} /><i>%</i></span></label>
-                  <label><span>Maximum stop</span><span className="suffixed-input"><input type="number" min="0.01" step="0.05" value={maximumStopPct} onChange={(event) => setMaximumStopPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label title="Wilder RMA of true range on completed strategy candles"><span>ATR length</span><input type="number" {...numericConstraints("rsi_recovery", "atrLength")} value={atrLength} onChange={(event) => setAtrLength(Number(event.target.value))} /></label>
+                  <label title="Raw ATR % × this multiplier, then clamped to the configured stop bounds"><span>Stop ATR multiplier</span><input type="number" {...numericConstraints("rsi_recovery", "stopAtrMultiplier")} value={stopAtrMultiplier} onChange={(event) => setStopAtrMultiplier(Number(event.target.value))} /></label>
+                  <label title="Dynamic take-profit % = dynamic stop % × reward:risk"><span>Reward:risk</span><input type="number" {...numericConstraints("rsi_recovery", "rewardRiskRatio")} value={rewardRiskRatio} onChange={(event) => setRewardRiskRatio(Number(event.target.value))} /></label>
+                  <label><span>Minimum stop</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "minimumStopPct")} value={minimumStopPct} onChange={(event) => setMinimumStopPct(Number(event.target.value))} /><i>%</i></span></label>
+                  <label><span>Maximum stop</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "maximumStopPct")} value={maximumStopPct} onChange={(event) => setMaximumStopPct(Number(event.target.value))} /><i>%</i></span></label>
                   <small>TP and SL use the signal candle ATR and are frozen when the position is created.</small>
                 </fieldset>}
                 {strategyMode === "rsi_recovery" && exitModel === "RSI_PROFIT_RISK_CONTROL" && <fieldset className="recovery-config-card">
                   <legend>RSI profitable exit</legend>
-                  <label><span>Upper RSI level</span><input aria-label="Upper RSI level" type="number" min={profitExitRsi} max="100" step="1" value={upperRsiLevel} onChange={(event) => setUpperRsiLevel(Number(event.target.value))} /></label>
+                  <label><span>Upper RSI level</span><input aria-label="Upper RSI level" type="number" {...numericConstraints("rsi_recovery", "upperRsiLevel")} min={profitExitRsi} value={upperRsiLevel} onChange={(event) => setUpperRsiLevel(Number(event.target.value))} /></label>
                   <label><span>RSI exit execution</span><select aria-label="RSI exit execution model" value={rsiExitExecutionModel} onChange={(event) => setRsiExitExecutionModel(event.target.value as typeof rsiExitExecutionModel)}><option value="SIGNAL_CLOSE">Signal close</option><option value="NEXT_BAR_OPEN">Next bar open</option></select><small>Next-open exits recheck that the configured minimum profit still exists.</small></label>
                   <small>Exit priority: hard stop, profitable RSI exit, then next-session time exit. RSI never forces a sale below the minimum profit.</small>
                 </fieldset>}
                 {strategyMode === "rsi_recovery" && exitProtectionEnabled && exitModel !== "RSI_PROFIT_RISK_CONTROL" && <fieldset className="recovery-config-card">
                   <legend>Position sizing</legend>
                   <label><span>Method</span><select value={positionSizing} onChange={(event) => setPositionSizing(event.target.value as typeof positionSizing)}><option value="FIXED_QUANTITY">Fixed quantity</option><option value="RISK_BUDGET">Risk budget</option></select></label>
-                  {positionSizing === "FIXED_QUANTITY" ? <label><span>Quantity</span><span className="suffixed-input"><input type="number" min="1" step="1" value={quantityPerTrade} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label> : <>
-                    <label title="Quantity = floor(rupee risk budget ÷ risk per share)"><span>Rupee risk budget</span><span className="suffixed-input"><input type="number" min="1" step="100" value={rupeeRiskBudget} onChange={(event) => setRupeeRiskBudget(Number(event.target.value))} /><i>INR</i></span></label>
-                    <label><span>Maximum quantity</span><input type="number" min="1" step="1" value={maximumQuantity} onChange={(event) => setMaximumQuantity(Number(event.target.value))} /></label>
-                    <label><span>Maximum capital</span><span className="suffixed-input"><input type="number" min="1" step="1000" value={maximumCapitalPerPosition} onChange={(event) => setMaximumCapitalPerPosition(Number(event.target.value))} /><i>INR</i></span></label>
+                  {positionSizing === "FIXED_QUANTITY" ? <label><span>Quantity</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "quantityPerTrade")} value={quantityPerTrade} onChange={(event) => setQuantityPerTrade(Number(event.target.value))} /><i>shares</i></span></label> : <>
+                    <label title="Quantity = floor(rupee risk budget ÷ risk per share)"><span>Rupee risk budget</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "rupeeRiskBudget")} value={rupeeRiskBudget} onChange={(event) => setRupeeRiskBudget(Number(event.target.value))} /><i>INR</i></span></label>
+                    <label><span>Maximum quantity</span><input type="number" {...numericConstraints("rsi_recovery", "maximumQuantity")} value={maximumQuantity} onChange={(event) => setMaximumQuantity(Number(event.target.value))} /></label>
+                    <label><span>Maximum capital</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "maximumCapitalPerPosition")} value={maximumCapitalPerPosition} onChange={(event) => setMaximumCapitalPerPosition(Number(event.target.value))} /><i>INR</i></span></label>
                   </>}
                 </fieldset>}
                 {strategyMode === "rsi_recovery" && exitModel === "ATR_DYNAMIC_TP_SL" && <fieldset className="recovery-config-card optimizer-card">
@@ -1472,9 +1734,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
                 </fieldset>}
                 <fieldset className="recovery-config-card cost-card">
                   <legend>Estimated costs</legend>
-                  <label><span>Buy cost</span><span className="suffixed-input"><input type="number" min="0" step="1" value={buyCostBps} onChange={(event) => setBuyCostBps(Number(event.target.value))} /><i>bps</i></span></label>
-                  <label><span>Sell cost</span><span className="suffixed-input"><input type="number" min="0" step="1" value={sellCostBps} onChange={(event) => setSellCostBps(Number(event.target.value))} /><i>bps</i></span></label>
-                  <label><span>Slippage / side</span><span className="suffixed-input"><input type="number" min="0" step="1" value={slippageBps} onChange={(event) => setSlippageBps(Number(event.target.value))} /><i>bps</i></span></label>
+                  <label><span>Buy cost</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "buyCostBps")} value={buyCostBps} onChange={(event) => setBuyCostBps(Number(event.target.value))} /><i>bps</i></span></label>
+                  <label><span>Sell cost</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "sellCostBps")} value={sellCostBps} onChange={(event) => setSellCostBps(Number(event.target.value))} /><i>bps</i></span></label>
+                  <label><span>Slippage / side</span><span className="suffixed-input"><input type="number" {...numericConstraints("rsi_recovery", "slippageBps")} value={slippageBps} onChange={(event) => setSlippageBps(Number(event.target.value))} /><i>bps</i></span></label>
                   <small>Defaults remain zero. These assumptions are applied to net position P&amp;L.</small>
                 </fieldset>
               </div>
@@ -1483,7 +1745,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref }: BacktestDa
           {loading ? (
             <button className="run-backtest stop-backtest" type="button" onClick={() => runAbortRef.current?.abort()}><Square size={15} />Stop {runProgress ? `${runProgress.completed}/${runProgress.total}` : "run"}</button>
           ) : (
-            <button className="run-backtest" type="submit"><TrendingUp size={17} />Run backtest</button>
+            <button className="run-backtest" type="submit" disabled={strategyMode === "market_aligned_rsi_scalper" && marketFormInvalid}><TrendingUp size={17} />Run backtest</button>
           )}
         </form>
 

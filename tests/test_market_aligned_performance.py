@@ -7,7 +7,11 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 
 import market_aligned_performance as performance
-from backtest_api import _market_result_cache_root
+from backtest_api import (
+    BacktestRequest,
+    _market_result_cache_root,
+    _market_run_fingerprint,
+)
 from main import IST
 from market_aligned_rsi_scalper import (
     MarketAlignedConfig,
@@ -193,6 +197,45 @@ def test_result_cache_defaults_inside_writable_backtest_directory(
     monkeypatch.delenv("BACKTEST_RESULT_CACHE_DIRECTORY", raising=False)
     store = SimpleNamespace(cache_directory=tmp_path / "backtest")
     assert _market_result_cache_root(store) == store.cache_directory / "result-cache"
+
+
+def test_run_fingerprint_uses_data_versions_not_run_identity(tmp_path: Path) -> None:
+    def cache_path(symbol: str, interval: str, duration: int) -> Path:
+        return tmp_path / f"{symbol}-{interval}-{duration}y.csv.gz"
+
+    cache_path("TEST", "5", 1).write_bytes(b"stock-v1")
+    cache_path("NIFTY50", "5", 1).write_bytes(b"nifty-v1")
+    store = SimpleNamespace(_cache_path=cache_path)
+    common = {
+        "store": store,
+        "support_plan": {"allSymbols": []},
+        "sector_path": None,
+        "breadth_path": None,
+    }
+    first = _market_run_fingerprint(
+        request=BacktestRequest(
+            symbols=["TEST"], strategyMode="market_aligned_rsi_scalper",
+            timeframe="5m", runId="first", cachePolicy="USE_CACHE",
+        ),
+        **common,
+    )
+    repeated = _market_run_fingerprint(
+        request=BacktestRequest(
+            symbols=["TEST"], strategyMode="market_aligned_rsi_scalper",
+            timeframe="5m", runId="second", cachePolicy="RUN_AGAIN",
+        ),
+        **common,
+    )
+    assert repeated == first
+    cache_path("TEST", "5", 1).write_bytes(b"stock-v2-changed")
+    changed = _market_run_fingerprint(
+        request=BacktestRequest(
+            symbols=["TEST"], strategyMode="market_aligned_rsi_scalper",
+            timeframe="5m",
+        ),
+        **common,
+    )
+    assert changed != first
 
 
 def test_support_worker_builds_then_reuses_stable_local_feature_cache(

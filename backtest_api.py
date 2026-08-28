@@ -2087,7 +2087,6 @@ def _market_run_fingerprint(
     support_plan: Mapping[str, Any],
     sector_path: Path | None,
     breadth_path: Path | None,
-    now: datetime,
 ) -> str:
     source_interval = TIMEFRAMES[request.timeframe].source_interval or "daily"
     symbols = sorted(set(request.symbols) | set(support_plan["allSymbols"]))
@@ -2103,7 +2102,6 @@ def _market_run_fingerprint(
     resolved = request.model_dump(mode="json")
     resolved.pop("runId", None)
     resolved.pop("cachePolicy", None)
-    completed_bucket = pd.Timestamp(now).floor("5min").isoformat()
     return stable_fingerprint({
         "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
         "strategyVersion": MARKET_ALIGNED_STRATEGY_VERSION,
@@ -2111,7 +2109,7 @@ def _market_run_fingerprint(
         "sharedContextCodeVersion": SHARED_CONTEXT_CODE_VERSION,
         "configuration": resolved,
         "selectedUniverse": request.symbols,
-        "dateRangeEndBucket": completed_bucket,
+        "requestedDurationYears": request.durationYears,
         "timeframe": request.timeframe,
         "candleDataVersions": data_versions,
         "sectorDataVersion": file_stat_fingerprint(sector_path),
@@ -2399,7 +2397,6 @@ def run_market_aligned_backtest(
             support_plan=support_plan,
             sector_path=sector_path,
             breadth_path=breadth_path,
-            now=now,
         )
         result_cache = BacktestResultCache(_market_result_cache_root(store))
         if request.cachePolicy == "USE_CACHE":

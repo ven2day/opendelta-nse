@@ -10,7 +10,13 @@ import pandas as pd
 import backtest_api
 from backtest_api import HistoricalDataStore
 from main import IST
-from stock_scanner import StockScannerService, build_stock_scanner_snapshot
+from daily_scalping_watchlist import calculate_watchlist_features
+from stock_scanner import (
+    SCANNER_CONFIG,
+    StockScannerService,
+    build_stock_scanner_snapshot,
+    prepare_scanner_feature_task,
+)
 
 
 def _frame(symbol_number: int, future_score: bool = False) -> pd.DataFrame:
@@ -235,3 +241,47 @@ def test_local_scanner_reader_accepts_an_old_completed_cache(tmp_path: Path) -> 
     )
     assert len(result) == 2
     assert result.index[-1] == pd.Timestamp("2026-08-28T09:25:00+05:30")
+
+
+def test_process_feature_task_matches_full_local_reader(tmp_path: Path) -> None:
+    sessions = pd.bdate_range("2025-12-15", periods=180)
+    timestamps = pd.DatetimeIndex([
+        timestamp
+        for session in sessions
+        for timestamp in pd.date_range(
+            pd.Timestamp(session.date(), tz=IST) + pd.Timedelta(hours=9, minutes=15),
+            periods=75,
+            freq="5min",
+        )
+    ], name="Timestamp")
+    sequence = pd.Series(range(len(timestamps)), index=timestamps, dtype=float)
+    close = 200.0 + sequence * 0.001 + (sequence % 17) * 0.01
+    raw = pd.DataFrame({
+        "Open": close - 0.1,
+        "High": close + 0.3,
+        "Low": close - 0.3,
+        "Close": close,
+        "Volume": 100_000.0 + (sequence % 31) * 1_000.0,
+    }, index=timestamps)
+    source = tmp_path / "TEST-5-1y.csv.gz"
+    raw.to_csv(source, compression="gzip")
+    now = timestamps[-1].to_pydatetime() + pd.Timedelta(minutes=10)
+    analysis_start = now - pd.Timedelta(days=120)
+
+    store = object.__new__(HistoricalDataStore)
+    store.cache_directory = tmp_path
+    full_candles = store.cached_candles("TEST", "5m", 1, analysis_start, now)
+    full_features = calculate_watchlist_features(full_candles, SCANNER_CONFIG)
+    latest_day = full_features.index.max().date()
+    expected = full_features[full_features.index.date == latest_day]
+
+    prepared = prepare_scanner_feature_task({
+        "symbol": "TEST",
+        "sourcePath": str(source),
+        "featurePath": str(tmp_path / "features" / "TEST.parquet"),
+        "analysisStart": analysis_start,
+        "now": now,
+    })
+
+    assert prepared["error"] is None
+    pd.testing.assert_frame_equal(prepared["frame"], expected)

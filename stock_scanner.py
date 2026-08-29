@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections import deque
+import gzip
+import io
+import multiprocessing
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, time as datetime_time, timedelta
 from pathlib import Path
@@ -27,6 +31,7 @@ from main import IST
 SCANNER_VERSION = "stock-scanner-1.1.0"
 SCANNER_FEATURE_CACHE_VERSION = "stock-scanner-features-1.0.0"
 SCANNER_TIMEFRAME = "5m"
+SCANNER_MAX_SOURCE_ROWS = 12_000
 SCANNER_CONFIG = DailyWatchlistConfig(
     mode="ROLLING",
     selection_time="09:30",
@@ -93,6 +98,79 @@ def _company_name(symbol: str, names: Mapping[str, str]) -> str:
 def _entry_with_name(entry: Mapping[str, Any], names: Mapping[str, str]) -> dict[str, Any]:
     symbol = str(entry.get("symbol", ""))
     return {**entry, "companyName": _company_name(symbol, names)}
+
+
+def _read_recent_cached_candles(
+    source: Path,
+    *,
+    analysis_start: datetime,
+    now: datetime,
+) -> pd.DataFrame:
+    """Read a bounded 5-minute tail while preserving the requested analysis window."""
+    from backtest_api import prepare_candles
+
+    with gzip.open(source, "rt", newline="") as stream:
+        header = next(stream)
+        rows = deque(stream, maxlen=SCANNER_MAX_SOURCE_ROWS)
+    raw = pd.read_csv(
+        io.StringIO(header + "".join(rows)),
+        index_col="Timestamp",
+        parse_dates=["Timestamp"],
+    )
+    raw.index = pd.DatetimeIndex(raw.index)
+    raw.index = raw.index.tz_localize(IST) if raw.index.tz is None else raw.index.tz_convert(IST)
+    if (
+        len(raw) == SCANNER_MAX_SOURCE_ROWS
+        and not raw.empty
+        and pd.Timestamp(raw.index.min()) > pd.Timestamp(analysis_start)
+    ):
+        raw = pd.read_csv(source, index_col="Timestamp", parse_dates=["Timestamp"])
+        raw.index = pd.DatetimeIndex(raw.index)
+        raw.index = raw.index.tz_localize(IST) if raw.index.tz is None else raw.index.tz_convert(IST)
+    return prepare_candles(raw, SCANNER_TIMEFRAME, analysis_start, now)
+
+
+def prepare_scanner_feature_task(task: Mapping[str, Any]) -> dict[str, Any]:
+    """Process-safe local feature preparation for one scanner instrument."""
+    symbol = str(task["symbol"])
+    feature_path = Path(str(task["featurePath"]))
+    try:
+        if feature_path.is_file():
+            frame = pd.read_parquet(feature_path)
+            frame.index = pd.DatetimeIndex(frame.index)
+            frame.index = (
+                frame.index.tz_localize(IST)
+                if frame.index.tz is None
+                else frame.index.tz_convert(IST)
+            )
+            return {"symbol": symbol, "frame": frame, "error": None, "cacheHit": True}
+        candles = _read_recent_cached_candles(
+            Path(str(task["sourcePath"])),
+            analysis_start=task["analysisStart"],
+            now=task["now"],
+        )
+        if candles.empty:
+            return {
+                "symbol": symbol,
+                "frame": None,
+                "error": "CACHED_CANDLE_DATA_UNAVAILABLE",
+                "cacheHit": False,
+            }
+        features = calculate_watchlist_features(candles, SCANNER_CONFIG)
+        latest_day = pd.Timestamp(features.index.max()).date()
+        latest_session = features[pd.DatetimeIndex(features.index).date == latest_day].copy()
+        feature_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = feature_path.with_suffix(f".{os.getpid()}.tmp.parquet")
+        latest_session.to_parquet(temporary, index=True)
+        os.replace(temporary, feature_path)
+        return {"symbol": symbol, "frame": latest_session, "error": None, "cacheHit": False}
+    except (EOFError, OSError, RuntimeError, StopIteration, ValueError, KeyError) as error:
+        return {
+            "symbol": symbol,
+            "frame": None,
+            "error": f"{type(error).__name__}: {error}",
+            "cacheHit": False,
+        }
 
 
 def _empty_snapshot(
@@ -436,6 +514,28 @@ class StockScannerService:
             os.replace(temporary, feature_path)
         return latest_session, False
 
+    def _process_task(
+        self,
+        symbol: str,
+        *,
+        analysis_start: datetime,
+        now: datetime,
+        benchmark: bool = False,
+    ) -> dict[str, Any] | None:
+        path_getter = getattr(self.store, "cached_candle_path", None)
+        if not callable(path_getter):
+            return None
+        feature_path = self._feature_cache_path(symbol, now=now, benchmark=benchmark)
+        if feature_path is None:
+            return None
+        return {
+            "symbol": symbol,
+            "sourcePath": str(path_getter(symbol, SCANNER_TIMEFRAME, 1, benchmark=benchmark)),
+            "featurePath": str(feature_path),
+            "analysisStart": analysis_start,
+            "now": now,
+        }
+
     def snapshot(
         self,
         symbols: Sequence[str],
@@ -465,7 +565,10 @@ class StockScannerService:
 
             calculation_started = time.perf_counter()
             analysis_start = now - timedelta(days=120)
-            workers = min(max((os.cpu_count() or 2) - 1, 1), 8)
+            workers = min(
+                max(int(os.environ.get("STOCK_SCANNER_WORKERS", (os.cpu_count() or 2) - 1)), 1),
+                4,
+            )
 
             def load(symbol: str) -> tuple[str, pd.DataFrame | None, str | None, bool]:
                 try:
@@ -482,18 +585,55 @@ class StockScannerService:
             errors: list[dict[str, str]] = []
             feature_cache_hits = 0
             feature_cache_misses = 0
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="stock-scanner") as executor:
-                for symbol, frame, error, cache_hit in executor.map(load, normalized_symbols):
-                    feature_cache_hits += int(cache_hit)
-                    feature_cache_misses += int(not cache_hit)
-                    if frame is not None:
-                        frames[symbol] = frame
-                    else:
-                        errors.append({"symbol": symbol, "reason": error or "CACHED_CANDLE_DATA_UNAVAILABLE"})
+            process_tasks = [
+                self._process_task(symbol, analysis_start=analysis_start, now=now)
+                for symbol in normalized_symbols
+            ]
+            use_process_pool = bool(
+                getattr(self.store, "scanner_process_pool_enabled", False)
+                and all(task is not None for task in process_tasks)
+            )
+            if use_process_pool:
+                with ProcessPoolExecutor(
+                    max_workers=workers,
+                    mp_context=multiprocessing.get_context("spawn"),
+                ) as executor:
+                    loaded = (
+                        (
+                            str(item["symbol"]),
+                            item.get("frame"),
+                            item.get("error"),
+                            bool(item.get("cacheHit")),
+                        )
+                        for item in executor.map(
+                            prepare_scanner_feature_task,
+                            process_tasks,
+                            chunksize=4,
+                        )
+                    )
+                    loaded_rows = list(loaded)
+            else:
+                with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="stock-scanner") as executor:
+                    loaded_rows = list(executor.map(load, normalized_symbols))
+            for symbol, frame, error, cache_hit in loaded_rows:
+                feature_cache_hits += int(cache_hit)
+                feature_cache_misses += int(not cache_hit)
+                if frame is not None:
+                    frames[symbol] = frame
+                else:
+                    errors.append({"symbol": symbol, "reason": error or "CACHED_CANDLE_DATA_UNAVAILABLE"})
 
-            nifty_features, nifty_cache_hit = self._load_features(
+            nifty_task = self._process_task(
                 "NIFTY50", analysis_start=analysis_start, now=now, benchmark=True
             )
+            if use_process_pool and nifty_task is not None:
+                nifty_result = prepare_scanner_feature_task(nifty_task)
+                nifty_features = nifty_result.get("frame")
+                nifty_cache_hit = bool(nifty_result.get("cacheHit"))
+            else:
+                nifty_features, nifty_cache_hit = self._load_features(
+                    "NIFTY50", analysis_start=analysis_start, now=now, benchmark=True
+                )
             feature_cache_hits += int(nifty_cache_hit)
             feature_cache_misses += int(not nifty_cache_hit)
             result = build_stock_scanner_snapshot(

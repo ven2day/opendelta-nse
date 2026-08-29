@@ -1491,6 +1491,8 @@ def simulate_symbol(
 
 
 class HistoricalDataStore:
+    scanner_process_pool_enabled = True
+
     def __init__(self, config: DhanConfig, cache_directory: Path) -> None:
         self.config = config
         self.client = DhanClient(config)

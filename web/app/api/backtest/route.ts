@@ -46,15 +46,13 @@ export async function POST(request: Request): Promise<Response> {
       ? "/backtest/optimize-atr"
       : action === "compare-rsi-exits"
         ? "/backtest/compare-rsi-exits"
-        : action === "compare-oi-filter"
-          ? "/backtest/compare-oi-filter"
         : "/backtest";
     const upstream = await fetch(`${serviceUrl.replace(/\/$/, "")}${upstreamPath}`, {
       method: historyStatus ? "GET" : "POST",
       headers,
       body: historyStatus ? undefined : JSON.stringify(payload),
       cache: "no-store",
-      signal: AbortSignal.timeout((action === "optimize-atr" || action === "compare-rsi-exits" || action === "compare-oi-filter" ? 60 : action === "start-job" ? 1 : 15) * 60 * 1_000),
+      signal: AbortSignal.timeout((action === "optimize-atr" || action === "compare-rsi-exits" ? 60 : action === "start-job" ? 1 : 15) * 60 * 1_000),
     });
     const body = await upstream.text();
     return new Response(body, {

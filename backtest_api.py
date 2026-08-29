@@ -55,29 +55,25 @@ from market_symbol_registry import (
     SymbolAlreadyExistsError,
     SymbolNotFoundError,
 )
-from market_aligned_rsi_scalper import (
-    STRATEGY_DESCRIPTION as MARKET_ALIGNED_DESCRIPTION,
-    STRATEGY_KEY as MARKET_ALIGNED_STRATEGY_KEY,
-    STRATEGY_NAME as MARKET_ALIGNED_STRATEGY_NAME,
-    STRATEGY_VERSION as MARKET_ALIGNED_STRATEGY_VERSION,
-    MarketAlignedConfig,
-    REASON_MESSAGES as MARKET_ALIGNMENT_REASON_MESSAGES,
-    apply_market_alignment_chronologically,
-    load_sector_mapping,
-)
-from market_aligned_performance import (
-    BacktestResultCache,
-    FEATURE_CODE_VERSION as MARKET_FEATURE_CODE_VERSION,
-    SHARED_CONTEXT_CODE_VERSION,
-    build_nifty_context,
-    build_support_context,
-    candidate_sector_key,
-    candidate_timestamp_index,
-    evaluate_precomputed_market_alignment,
-    prepare_market_symbol_batch,
-    prepare_support_symbol_batch,
-    file_stat_fingerprint,
-    stable_fingerprint,
+from market_aligned_vwap_pullback_scalper import (
+    FEATURE_CODE_VERSION as VWAP_PULLBACK_FEATURE_VERSION,
+    PORTFOLIO_RULE_VERSION as VWAP_PULLBACK_PORTFOLIO_VERSION,
+    SESSION_RULE_VERSION as VWAP_PULLBACK_SESSION_VERSION,
+    STRATEGY_DESCRIPTION as VWAP_PULLBACK_DESCRIPTION,
+    STRATEGY_KEY as VWAP_PULLBACK_STRATEGY_KEY,
+    STRATEGY_NAME as VWAP_PULLBACK_STRATEGY_NAME,
+    STRATEGY_VERSION as VWAP_PULLBACK_STRATEGY_VERSION,
+    VwapPullbackConfig,
+    VwapPullbackResultCache,
+    build_nifty_candidate_context,
+    build_supporting_context as build_vwap_supporting_context,
+    enrich_candidates as enrich_vwap_candidates,
+    execute_portfolio as execute_vwap_portfolio,
+    file_stat_fingerprint as vwap_file_stat_fingerprint,
+    load_sector_mapping as load_vwap_sector_mapping,
+    prepare_symbol_batch as prepare_vwap_symbol_batch,
+    stable_fingerprint as vwap_fingerprint,
+    summarize_results as summarize_vwap_results,
 )
 from dhan_oi import build_oi_service_from_environment
 from main import (
@@ -104,8 +100,6 @@ from nifty_oi_regime import (
     NiftyOiConfig,
     OiRegimeRepository,
     apply_oi_filter_chronologically,
-    chronological_walk_forward_folds,
-    compare_oi_modes,
 )
 from recovery_backtest import (
     STRATEGY_VERSION as RECOVERY_STRATEGY_VERSION,
@@ -201,174 +195,126 @@ TIMEFRAMES: dict[str, TimeframeSpec] = {
 }
 
 
-class MarketAlignedConfigurationRequest(BaseModel):
-    """Configuration owned only by the Market-Aligned RSI Scalper."""
+class VwapPullbackConfigurationRequest(BaseModel):
+    """Authoritative configuration for Market-Aligned VWAP Pullback Scalper."""
 
-    rsiLength: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiLength"))
-    rsiArmLow: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiArmLow"))
-    rsiArmHigh: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiArmHigh"))
-    rsiRecovery: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rsiRecovery"))
-    signalRsiMaximum: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "signalRsiMaximum"))
-    emaFast: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "emaFast"))
-    emaSlow: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "emaSlow"))
-    rvolPeriod: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "rvolPeriod"))
-    minimumRvol: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumRvol"))
-    relativeStrengthLookbackBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "relativeStrengthLookbackBars"))
-    roomLookbackBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "roomLookbackBars"))
-    targetPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "targetPct"))
-    setupExpiryBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "setupExpiryBars"))
-    executionModel: Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "executionModel")["default"])
-    positionSizing: Literal["FIXED_QUANTITY", "RISK_BUDGET"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "positionSizing")["default"])
-    entryStartTime: str = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "entryStartTime")["default"])
-    lastEntryTime: str = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "lastEntryTime")["default"])
-    squareOffTime: str = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "squareOffTime")["default"])
-    stopLossPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "stopLossPct"))
-    quantityPerTrade: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "quantityPerTrade"))
-    maximumHoldingBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumHoldingBars"))
-    maximumTradesPerDay: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumTradesPerDay"))
-    maximumOpenPositions: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumOpenPositions"))
-    buyCostBps: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "buyCostBps"))
-    sellCostBps: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "sellCostBps"))
-    slippageBps: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "slippageBps"))
-    maximumCapitalPerPosition: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumCapitalPerPosition"))
-    maximumDailyLossPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumDailyLossPct"))
-    stopAfterFirstLoss: bool = bool(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "stopAfterFirstLoss")["default"])
-    cooldownBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "cooldownBars"))
-    maximumSpreadPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumSpreadPct"))
-    minimumNiftyTrendScore: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumNiftyTrendScore"))
-    minimumSectorBullishPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumSectorBullishPct"))
-    minimumBreadthPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumBreadthPct"))
-    minimumBreadthSymbols: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumBreadthSymbols"))
-    minimumSectorMembers: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumSectorMembers"))
-    minimumAverageTradedValue: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumAverageTradedValue"))
-    maximumIntrabarRangePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "maximumIntrabarRangePct"))
-    minimumAlignmentScore: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "minimumAlignmentScore"))
-    marketDataStaleSeconds: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "marketDataStaleSeconds"))
-    sectorBySymbol: dict[str, str] = Field(default_factory=dict)
-    oiMode: Literal["OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "oiMode")["default"])
-    oiMinimumConfidence: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumConfidence"))
-    oiLookbackBars: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiLookbackBars"))
-    oiStrikesEachSide: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStrikesEachSide"))
-    oiMinimumPriceChangePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumPriceChangePct"))
-    oiMinimumChangePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumChangePct"))
-    oiMaximumSpreadPct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMaximumSpreadPct"))
-    oiStaleDataSeconds: int = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStaleDataSeconds"))
-    oiMinimumValidContractFraction: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumValidContractFraction"))
-    oiMinimumFuturesVolume: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumFuturesVolume"))
-    oiVolatilityPriceRisePct: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiVolatilityPriceRisePct"))
-    oiVolatilityIvRise: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiVolatilityIvRise"))
-    oiMinimumCoverage: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiMinimumCoverage"))
-    oiOptionsWeight: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiOptionsWeight"))
-    oiFuturesWeight: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiFuturesWeight"))
-    oiSpotWeight: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiSpotWeight"))
-    oiStronglyBearishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStronglyBearishThreshold"))
-    oiBearishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiBearishThreshold"))
-    oiBullishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiBullishThreshold"))
-    oiStronglyBullishThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiStronglyBullishThreshold"))
-    oiElevatedQualityThreshold: float = Field(**numeric_field_kwargs(MARKET_ALIGNED_STRATEGY_KEY, "oiElevatedQualityThreshold"))
-    oiFailPolicy: Literal["SKIP", "ALLOW"] = str(parameter_definition(MARKET_ALIGNED_STRATEGY_KEY, "oiFailPolicy")["default"])
-
-    @field_validator("sectorBySymbol")
-    @classmethod
-    def normalize_sector_map(cls, mapping: dict[str, str]) -> dict[str, str]:
-        return {
-            symbol.strip().upper().removesuffix(".NS"): sector.strip()
-            for symbol, sector in mapping.items()
-            if symbol.strip() and sector.strip()
-        }
+    executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
+    entryStartTime: str = str(parameter_definition(VWAP_PULLBACK_STRATEGY_KEY, "entryStartTime")["default"])
+    lastEntryTime: str = str(parameter_definition(VWAP_PULLBACK_STRATEGY_KEY, "lastEntryTime")["default"])
+    squareOffTime: str = str(parameter_definition(VWAP_PULLBACK_STRATEGY_KEY, "squareOffTime")["default"])
+    rsiLength: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiLength"))
+    rsiPullbackMinimum: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiPullbackMinimum"))
+    rsiPullbackMaximum: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiPullbackMaximum"))
+    rsiTriggerLevel: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiTriggerLevel"))
+    maximumTriggerRsi: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumTriggerRsi"))
+    setupExpiryBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "setupExpiryBars"))
+    emaFast: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "emaFast"))
+    emaSlow: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "emaSlow"))
+    emaSlopeLookbackBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "emaSlopeLookbackBars"))
+    atrLength: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "atrLength"))
+    rvolPeriod: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rvolPeriod"))
+    minimumTriggerRvol: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumTriggerRvol"))
+    pullbackApproachAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "pullbackApproachAtr"))
+    materialBelowEmaAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "materialBelowEmaAtr"))
+    maximumEntryGapAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumEntryGapAtr"))
+    structuralStopBufferAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "structuralStopBufferAtr"))
+    volatilityStopAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "volatilityStopAtr"))
+    minimumStopPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumStopPct"))
+    maximumStopPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumStopPct"))
+    rewardRiskRatio: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rewardRiskRatio"))
+    maximumHoldingBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumHoldingBars"))
+    minimumAverageTradedValue: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumAverageTradedValue"))
+    maximumCandleRangeAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumCandleRangeAtr"))
+    historicalSpreadMode: Literal["ADVISORY"] = "ADVISORY"
+    liveMaximumSpreadPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "liveMaximumSpreadPct"))
+    marketContextFailPolicy: Literal["ADVISORY", "REJECT"] = "ADVISORY"
+    marketContextStaleSeconds: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "marketContextStaleSeconds"))
+    minimumBreadthPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumBreadthPct"))
+    minimumBreadthSymbols: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumBreadthSymbols"))
+    minimumSectorMembers: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumSectorMembers"))
+    minimumSectorBullishPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumSectorBullishPct"))
+    relativeStrengthLookbackBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "relativeStrengthLookbackBars"))
+    qualityRvolThreshold: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "qualityRvolThreshold"))
+    enforceMinimumQualityScore: bool = False
+    minimumQualityScore: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumQualityScore"))
+    oiMode: Literal["OFF", "ADVISORY"] = "OFF"
+    oiStaleDataSeconds: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "oiStaleDataSeconds"))
+    positionSizing: Literal["FIXED_QUANTITY", "RISK_BUDGET"] = "FIXED_QUANTITY"
+    quantityPerTrade: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "quantityPerTrade"))
+    rupeeRiskBudget: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rupeeRiskBudget"))
+    maximumQuantity: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumQuantity"))
+    configuredCapital: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "configuredCapital"))
+    maximumCapitalPerPosition: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumCapitalPerPosition"))
+    maximumTradesPerDay: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumTradesPerDay"))
+    maximumConcurrentTrades: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumConcurrentTrades"))
+    stopAfterDailyLosses: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "stopAfterDailyLosses"))
+    maximumDailyLossPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumDailyLossPct"))
+    buyCostBps: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "buyCostBps"))
+    sellCostBps: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "sellCostBps"))
+    slippageBps: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "slippageBps"))
 
     @model_validator(mode="after")
-    def validate_configuration(self) -> "MarketAlignedConfigurationRequest":
-        if not self.rsiArmLow < self.rsiArmHigh < self.rsiRecovery <= self.signalRsiMaximum:
-            raise ValueError(
-                "Market-Aligned RSI levels must satisfy arm low < arm high < recovery <= signal maximum"
-            )
-        try:
-            entry_start = datetime_time.fromisoformat(self.entryStartTime)
-            last_entry = datetime_time.fromisoformat(self.lastEntryTime)
-            square_off = datetime_time.fromisoformat(self.squareOffTime)
-        except ValueError as error:
-            raise ValueError("Market-Aligned session times must use HH:MM") from error
-        if not entry_start < last_entry < square_off:
-            raise ValueError("Market-Aligned session times must satisfy entry start < last entry < square-off")
+    def validate_configuration(self) -> "VwapPullbackConfigurationRequest":
         self.strategy_config().validate()
-        self.oi_config()
         return self
 
-    def recovery_config(self) -> RecoveryConfig:
-        return RecoveryConfig(
+    def strategy_config(self) -> VwapPullbackConfig:
+        return VwapPullbackConfig(
+            execution_model=self.executionModel,
+            entry_start_time=self.entryStartTime,
+            last_entry_time=self.lastEntryTime,
+            square_off_time=self.squareOffTime,
             rsi_length=self.rsiLength,
-            rsi_arm_low=self.rsiArmLow,
-            rsi_arm_high=self.rsiArmHigh,
-            rsi_recovery=self.rsiRecovery,
-            ema_enabled=True,
+            rsi_pullback_minimum=self.rsiPullbackMinimum,
+            rsi_pullback_maximum=self.rsiPullbackMaximum,
+            rsi_trigger_level=self.rsiTriggerLevel,
+            maximum_trigger_rsi=self.maximumTriggerRsi,
+            setup_expiry_bars=self.setupExpiryBars,
             ema_fast=self.emaFast,
             ema_slow=self.emaSlow,
-            vwap_enabled=True,
-            volume_enabled=True,
-            volume_ema=self.rvolPeriod,
-            minimum_confirmations=3,
-            target_pct=self.targetPct,
-            setup_expiry_bars=self.setupExpiryBars,
-            execution_model=self.executionModel,
+            ema_slope_lookback_bars=self.emaSlopeLookbackBars,
+            atr_length=self.atrLength,
+            rvol_period=self.rvolPeriod,
+            minimum_trigger_rvol=self.minimumTriggerRvol,
+            pullback_approach_atr=self.pullbackApproachAtr,
+            material_below_ema_atr=self.materialBelowEmaAtr,
+            maximum_entry_gap_atr=self.maximumEntryGapAtr,
+            structural_stop_buffer_atr=self.structuralStopBufferAtr,
+            volatility_stop_atr=self.volatilityStopAtr,
+            minimum_stop_pct=self.minimumStopPct,
+            maximum_stop_pct=self.maximumStopPct,
+            reward_risk_ratio=self.rewardRiskRatio,
+            maximum_holding_bars=self.maximumHoldingBars,
+            minimum_average_traded_value=self.minimumAverageTradedValue,
+            maximum_candle_range_atr=self.maximumCandleRangeAtr,
+            historical_spread_mode=self.historicalSpreadMode,
+            live_maximum_spread_pct=self.liveMaximumSpreadPct,
+            market_context_fail_policy=self.marketContextFailPolicy,
+            market_context_stale_seconds=self.marketContextStaleSeconds,
+            minimum_breadth_pct=self.minimumBreadthPct,
+            minimum_breadth_symbols=self.minimumBreadthSymbols,
+            minimum_sector_members=self.minimumSectorMembers,
+            minimum_sector_bullish_pct=self.minimumSectorBullishPct,
+            relative_strength_lookback_bars=self.relativeStrengthLookbackBars,
+            quality_rvol_threshold=self.qualityRvolThreshold,
+            enforce_minimum_quality_score=self.enforceMinimumQualityScore,
+            minimum_quality_score=self.minimumQualityScore,
+            oi_mode=self.oiMode,
+            oi_stale_data_seconds=self.oiStaleDataSeconds,
+            position_sizing=self.positionSizing,
+            quantity_per_trade=self.quantityPerTrade,
+            rupee_risk_budget=self.rupeeRiskBudget,
+            maximum_quantity=self.maximumQuantity,
+            configured_capital=self.configuredCapital,
+            maximum_capital_per_position=self.maximumCapitalPerPosition,
+            maximum_trades_per_day=self.maximumTradesPerDay,
+            maximum_concurrent_trades=self.maximumConcurrentTrades,
+            stop_after_daily_losses=self.stopAfterDailyLosses,
+            maximum_daily_loss_pct=self.maximumDailyLossPct,
             buy_cost_bps=self.buyCostBps,
             sell_cost_bps=self.sellCostBps,
             slippage_bps=self.slippageBps,
         )
-
-    def strategy_config(
-        self, operations_sector_map: Mapping[str, str] | None = None
-    ) -> MarketAlignedConfig:
-        sector_map = dict(operations_sector_map or {})
-        sector_map.update(self.sectorBySymbol)
-        return MarketAlignedConfig(
-            rsi_length=self.rsiLength,
-            signal_rsi_maximum=self.signalRsiMaximum,
-            ema_fast=self.emaFast,
-            ema_slow=self.emaSlow,
-            rvol_period=self.rvolPeriod,
-            minimum_rvol=self.minimumRvol,
-            relative_strength_lookback_bars=self.relativeStrengthLookbackBars,
-            room_lookback_bars=self.roomLookbackBars,
-            target_pct=self.targetPct,
-            minimum_nifty_trend_score=self.minimumNiftyTrendScore,
-            minimum_sector_bullish_pct=self.minimumSectorBullishPct,
-            minimum_breadth_pct=self.minimumBreadthPct,
-            minimum_breadth_symbols=self.minimumBreadthSymbols,
-            minimum_sector_members=self.minimumSectorMembers,
-            minimum_average_traded_value=self.minimumAverageTradedValue,
-            maximum_intrabar_range_pct=self.maximumIntrabarRangePct,
-            minimum_alignment_score=self.minimumAlignmentScore,
-            stale_data_seconds=self.marketDataStaleSeconds,
-            entry_start_time=self.entryStartTime,
-            last_entry_time=self.lastEntryTime,
-            sector_by_symbol=sector_map,
-        ).validate()
-
-    def oi_config(self) -> NiftyOiConfig:
-        return NiftyOiConfig(
-            lookback_bars=self.oiLookbackBars,
-            strikes_each_side=self.oiStrikesEachSide,
-            minimum_price_change_pct=self.oiMinimumPriceChangePct,
-            minimum_oi_change_pct=self.oiMinimumChangePct,
-            maximum_spread_pct=self.oiMaximumSpreadPct,
-            stale_data_seconds=self.oiStaleDataSeconds,
-            minimum_valid_contract_fraction=self.oiMinimumValidContractFraction,
-            minimum_futures_volume=self.oiMinimumFuturesVolume,
-            minimum_component_coverage=self.oiMinimumCoverage,
-            minimum_confidence=self.oiMinimumConfidence,
-            options_weight=self.oiOptionsWeight,
-            futures_weight=self.oiFuturesWeight,
-            spot_weight=self.oiSpotWeight,
-            strongly_bearish_threshold=self.oiStronglyBearishThreshold,
-            bearish_threshold=self.oiBearishThreshold,
-            bullish_threshold=self.oiBullishThreshold,
-            strongly_bullish_threshold=self.oiStronglyBullishThreshold,
-            elevated_quality_threshold=self.oiElevatedQualityThreshold,
-            volatility_price_rise_pct=self.oiVolatilityPriceRisePct,
-            volatility_iv_rise=self.oiVolatilityIvRise,
-            fail_policy=self.oiFailPolicy,
-        ).validate()
 
     def public(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
@@ -387,7 +333,12 @@ ANNUALIZATION = {
 class BacktestHistorySaveRequest(BaseModel):
     id: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9._-]+$")
     completedAt: datetime
-    strategyMode: Literal["rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"]
+    strategyMode: Literal[
+        "rsi_range",
+        "rsi_recovery",
+        "market_aligned_vwap_pullback_scalper",
+        "market_aligned_rsi_scalper",
+    ]
     strategyName: str = Field(min_length=1, max_length=120)
     timeframe: str = Field(min_length=1, max_length=20)
     durationYears: int = Field(ge=1, le=10)
@@ -401,7 +352,7 @@ class BacktestHistorySaveRequest(BaseModel):
 class BacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=MAX_SYMBOLS_PER_RUN)
     strategyMode: Literal[
-        "rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"
+        "rsi_range", "rsi_recovery", "market_aligned_vwap_pullback_scalper"
     ] = "rsi_range"
     universeMode: Literal["selected", "all"] = "selected"
     runId: str | None = Field(default=None, min_length=1, max_length=80)
@@ -476,8 +427,8 @@ class BacktestRequest(BaseModel):
     oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
     oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
     oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
-    marketAlignedConfiguration: MarketAlignedConfigurationRequest = Field(
-        default_factory=MarketAlignedConfigurationRequest
+    vwapPullbackConfiguration: VwapPullbackConfigurationRequest = Field(
+        default_factory=VwapPullbackConfigurationRequest
     )
 
     @field_validator("symbols")
@@ -513,10 +464,10 @@ class BacktestRequest(BaseModel):
                 raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
             return self
 
-        if self.strategyMode == MARKET_ALIGNED_STRATEGY_KEY:
+        if self.strategyMode == VWAP_PULLBACK_STRATEGY_KEY:
             if self.timeframe != "5m":
-                raise ValueError("Market-Aligned RSI Scalper currently requires completed 5-minute candles")
-            self.marketAlignedConfiguration.validate_configuration()
+                raise ValueError("Market-Aligned VWAP Pullback Scalper requires completed 5-minute candles")
+            self.vwapPullbackConfiguration.validate_configuration()
             return self
 
         if (
@@ -644,11 +595,6 @@ class BacktestRequest(BaseModel):
             volatility_iv_rise=self.oiVolatilityIvRise,
             fail_policy=self.oiFailPolicy,
         ).validate()
-
-
-class OiFilterComparisonRequest(BacktestRequest):
-    symbols: list[str] = Field(min_length=1, max_length=750)
-    strategyMode: Literal["market_aligned_rsi_scalper"] = MARKET_ALIGNED_STRATEGY_KEY
 
 
 class AtrOptimizationRequest(BacktestRequest):
@@ -1865,150 +1811,9 @@ def _evenly_spaced_symbols(symbols: list[str], limit: int) -> list[str]:
     return [ordered[int(index)] for index in indices]
 
 
-def _market_support_plan(
-    *,
-    universe: set[str],
-    requested_symbols: list[str],
-    config: MarketAlignedConfig,
-    breadth_file: Path | None,
-    breadth_sample_size: int,
-) -> dict[str, Any]:
-    configured_breadth = _support_symbols_from_file(breadth_file)
-    breadth_pool = [
-        symbol for symbol in (configured_breadth or sorted(universe))
-        if symbol in universe
-    ]
-    sample_size = max(config.minimum_breadth_symbols, breadth_sample_size)
-    breadth_symbols = _evenly_spaced_symbols(breadth_pool, sample_size)
-    requested_sectors = {
-        config.sector_by_symbol.get(symbol)
-        for symbol in requested_symbols
-        if config.sector_by_symbol.get(symbol)
-    }
-    sector_symbols = sorted({
-        symbol
-        for symbol, sector in config.sector_by_symbol.items()
-        if symbol in universe and sector in requested_sectors
-    })
-    return {
-        "breadthSymbols": breadth_symbols,
-        "sectorSymbols": sector_symbols,
-        "allSymbols": sorted(set(breadth_symbols) | set(sector_symbols)),
-        "breadthSource": (
-            str(breadth_file)
-            if configured_breadth and breadth_file is not None
-            else "DETERMINISTIC_DHAN_UNIVERSE_SAMPLE"
-        ),
-    }
-
-
-def _finalize_market_candidate_diagnostics(
-    results: list[dict[str, Any]],
-    *,
-    oi_mode: str,
-) -> None:
-    for result in results:
-        trades_by_id = {
-            str(trade.get("tradeId") or ""): trade
-            for trade in result.get("trades", [])
-        }
-        oi_skips_by_id = {
-            str(row.get("tradeId") or ""): row
-            for row in result.get("oiSkippedSignals", [])
-        }
-        for diagnostic in result.get("candidateDiagnostics", []):
-            trade_id = str(diagnostic.get("tradeId") or "")
-            diagnostic["oiMode"] = oi_mode
-            trade = trades_by_id.get(trade_id)
-            oi_skip = oi_skips_by_id.get(trade_id)
-            if trade is not None:
-                diagnostic["oiResult"] = (
-                    "NOT_EVALUATED"
-                    if oi_mode == "OFF"
-                    else trade.get("oiDecision") or "ADVISORY_RECORDED"
-                )
-                diagnostic["sourceTimestamps"]["oi"] = (
-                    None if oi_mode == "OFF" else trade.get("oiSourceTimestamp")
-                )
-                diagnostic["finalStatus"] = "ACCEPTED"
-                diagnostic["executed"] = True
-                diagnostic["rejectionReasons"] = ["ACCEPTED"]
-                diagnostic["rejectionReasonDetails"] = [{
-                    "code": "ACCEPTED",
-                    "message": MARKET_ALIGNMENT_REASON_MESSAGES["ACCEPTED"],
-                }]
-            elif oi_skip is not None:
-                regime = oi_skip.get("oiRegime") or {}
-                diagnostic["oiResult"] = oi_skip.get("status") or "OI_GATE_FAILED"
-                diagnostic["sourceTimestamps"]["oi"] = regime.get("sourceTimestamp")
-                diagnostic["finalStatus"] = (
-                    "SKIPPED_DATA_UNAVAILABLE"
-                    if regime.get("regime") == "INSUFFICIENT_OI_DATA"
-                    else "REJECTED_GATE"
-                )
-                diagnostic["executed"] = False
-                diagnostic["rejectionReasons"] = ["OI_GATE_FAILED"]
-                diagnostic["rejectionReasonDetails"] = [{
-                    "code": "OI_GATE_FAILED",
-                    "message": str(oi_skip.get("reason") or MARKET_ALIGNMENT_REASON_MESSAGES["OI_GATE_FAILED"]),
-                }]
-            elif diagnostic.get("finalStatus") != "ACCEPTED":
-                diagnostic["oiResult"] = "NOT_EVALUATED" if oi_mode == "OFF" else "NOT_REACHED"
-                diagnostic["executed"] = False
-        result["skippedCandidates"] = [
-            row for row in result.get("candidateDiagnostics", [])
-            if row.get("finalStatus") != "ACCEPTED"
-        ]
-
-
-def _market_candidate_funnel(results: list[dict[str, Any]]) -> dict[str, int]:
-    diagnostics = [
-        diagnostic
-        for result in results
-        for diagnostic in result.get("candidateDiagnostics", [])
-    ]
-    funnel = {
-        "rsiArmed": sum(int(result.get("rsiArmedCount", 0)) for result in results),
-        "rsiRecoveryCandidates": len(diagnostics),
-    }
-    remaining = diagnostics
-    stages = [
-        ("timeWindowPassed", "timeWindowPassed"),
-        ("niftyPassed", "niftyPass"),
-        ("sectorPassed", "sectorPass"),
-        ("breadthPassed", "breadthPass"),
-        ("relativeStrengthPassed", "relativeStrengthPass"),
-        ("vwapPassed", "vwapPass"),
-        ("emaPassed", "emaPass"),
-        ("rvolPassed", "rvolPass"),
-        ("liquidityPassed", "liquidityPass"),
-        ("roomPassed", "roomToTargetPass"),
-        ("scorePassed", "scorePass"),
-    ]
-    for output_key, diagnostic_key in stages:
-        remaining = [row for row in remaining if bool(row.get(diagnostic_key))]
-        funnel[output_key] = len(remaining)
-    funnel["executedTrades"] = sum(
-        1 for row in diagnostics if bool(row.get("executed"))
-    )
-    return funnel
-
-
 def _market_worker_default() -> int:
     available = os.cpu_count() or 2
     return max(1, min(available - 1, 8))
-
-
-def _market_result_cache_root(store: "HistoricalDataStore") -> Path:
-    configured = os.environ.get("BACKTEST_RESULT_CACHE_DIRECTORY")
-    root = (
-        Path(configured).expanduser()
-        if configured
-        else store.cache_directory / "result-cache"
-    )
-    if not root.is_absolute():
-        raise ValueError("BACKTEST_RESULT_CACHE_DIRECTORY must be an absolute path")
-    return root
 
 
 def _market_task_batches(tasks: list[dict[str, Any]], workers: int) -> list[list[dict[str, Any]]]:
@@ -2098,803 +1903,6 @@ def _parent_peak_memory_bytes() -> int:
 
 class BacktestCancelledError(RuntimeError):
     pass
-
-
-MARKET_ALIGNED_OMITTED_PER_SYMBOL_FIELDS = (
-    "chart",
-    "configuration",
-    "events",
-    "marketAlignmentSkippedSignals",
-    "skippedCandidates",
-)
-
-
-def _compact_market_aligned_response(response: dict[str, Any]) -> dict[str, Any]:
-    """Remove duplicated transport fields after all result totals are finalized.
-
-    Complete candidate diagnostics and trades remain in the response. The
-    removed chart/events are not rendered by Market-Aligned results, the full
-    configuration already lives in metadata, and the two skipped collections
-    duplicate candidateDiagnostics.
-    """
-    for result in response.get("results", []):
-        if not isinstance(result, dict):
-            continue
-        for field in MARKET_ALIGNED_OMITTED_PER_SYMBOL_FIELDS:
-            result.pop(field, None)
-    metadata = response.get("metadata")
-    if isinstance(metadata, dict):
-        metadata["payloadProfile"] = "COMPACT_MARKET_ALIGNED_V1"
-        metadata["omittedPerSymbolFields"] = list(
-            MARKET_ALIGNED_OMITTED_PER_SYMBOL_FIELDS
-        )
-    return response
-
-
-def _market_run_fingerprint(
-    *,
-    request: BacktestRequest,
-    store: HistoricalDataStore,
-    support_plan: Mapping[str, Any],
-    sector_path: Path | None,
-    breadth_path: Path | None,
-) -> str:
-    source_interval = TIMEFRAMES[request.timeframe].source_interval or "daily"
-    symbols = sorted(set(request.symbols) | set(support_plan["allSymbols"]))
-    data_versions = {
-        symbol: file_stat_fingerprint(
-            store._cache_path(symbol, source_interval, request.durationYears)
-        )
-        for symbol in symbols
-    }
-    data_versions["NIFTY 50"] = file_stat_fingerprint(
-        store._cache_path("NIFTY50", source_interval, request.durationYears)
-    )
-    resolved = request.model_dump(mode="json")
-    resolved.pop("runId", None)
-    resolved.pop("cachePolicy", None)
-    return stable_fingerprint({
-        "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
-        "strategyVersion": MARKET_ALIGNED_STRATEGY_VERSION,
-        "featureCodeVersion": MARKET_FEATURE_CODE_VERSION,
-        "sharedContextCodeVersion": SHARED_CONTEXT_CODE_VERSION,
-        "configuration": resolved,
-        "selectedUniverse": request.symbols,
-        "requestedDurationYears": request.durationYears,
-        "timeframe": request.timeframe,
-        "candleDataVersions": data_versions,
-        "sectorDataVersion": file_stat_fingerprint(sector_path),
-        "breadthDataVersion": file_stat_fingerprint(breadth_path),
-        "oiDataVersion": "OFF" if request.marketAlignedConfiguration.oiMode == "OFF" else "REPOSITORY_POINT_IN_TIME",
-    })
-
-
-def _optimized_market_alignment_pipeline(
-    *,
-    request: BacktestRequest,
-    store: HistoricalDataStore,
-    analysis_start: datetime,
-    now: datetime,
-    run_id: str,
-    recovery_config: RecoveryConfig,
-    alignment_config: MarketAlignedConfig,
-    support_plan: Mapping[str, Any],
-    nifty_frame: pd.DataFrame,
-    oi_mode: str,
-    warmup_bars: int,
-    progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    cancel_event: threading.Event | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[dict[str, str]], dict[str, Any]]:
-    requested_workers = int(os.environ.get("BACKTEST_WORKERS", str(_market_worker_default())))
-    worker_count = max(1, min(requested_workers, len(request.symbols), 8))
-    feature_root_value = os.environ.get("BACKTEST_FEATURE_CACHE_DIRECTORY")
-    feature_root = (
-        Path(feature_root_value).expanduser()
-        if feature_root_value
-        else store.cache_directory / "market-aligned-features"
-    )
-    if not feature_root.is_absolute():
-        raise ValueError("BACKTEST_FEATURE_CACHE_DIRECTORY must be an absolute path")
-    common = {
-        "cacheDirectory": str(store.cache_directory),
-        "featureCacheDirectory": str(feature_root),
-        "recoveryConfig": recovery_config,
-        "marketConfig": alignment_config,
-        "analysisStart": analysis_start,
-        "now": now,
-        "timeframe": request.timeframe,
-        "durationYears": request.durationYears,
-        "warmupBars": warmup_bars,
-        "runId": run_id,
-        "rawCacheTtlSeconds": CACHE_TTL_SECONDS,
-    }
-    trading_started = time.perf_counter()
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "STOCK_FEATURES_AND_CANDIDATES",
-            "symbolsCompleted": 0,
-            "symbolsTotal": len(request.symbols),
-            "workersActive": worker_count,
-        })
-    rows = _execute_market_batches(
-        [{**common, "symbol": symbol} for symbol in request.symbols],
-        worker_count,
-        prepare_market_symbol_batch,
-        cancel_event=cancel_event,
-        progress_callback=(
-            lambda completed: progress_callback({
-                "currentStage": "STOCK_FEATURES_AND_CANDIDATES",
-                "symbolsCompleted": completed,
-                "symbolsTotal": len(request.symbols),
-                "workersActive": worker_count,
-            })
-            if progress_callback is not None else None
-        ),
-    )
-    trading_seconds = time.perf_counter() - trading_started
-    prepared = [row["item"] for row in rows if row.get("item") is not None]
-    errors = [row["error"] for row in rows if row.get("error") is not None]
-    feature_paths = {
-        str(item["symbol"]): str(item["featurePath"])
-        for item in prepared
-    }
-    support_symbols = [
-        symbol for symbol in support_plan["allSymbols"] if symbol not in feature_paths
-    ]
-    support_workers = max(1, min(requested_workers, len(support_symbols) or 1, 8))
-    support_started = time.perf_counter()
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "SUPPORTING_MARKET_FEATURES",
-            "symbolsCompleted": len(request.symbols),
-            "symbolsTotal": len(request.symbols),
-            "supportSymbolsCompleted": 0,
-            "supportSymbolsTotal": len(support_symbols),
-            "workersActive": support_workers if support_symbols else 0,
-        })
-    support_rows = _execute_market_batches(
-        [{**common, "symbol": symbol} for symbol in support_symbols],
-        support_workers,
-        prepare_support_symbol_batch,
-        cancel_event=cancel_event,
-        progress_callback=(
-            lambda completed: progress_callback({
-                "currentStage": "SUPPORTING_MARKET_FEATURES",
-                "symbolsCompleted": len(request.symbols),
-                "symbolsTotal": len(request.symbols),
-                "supportSymbolsCompleted": completed,
-                "supportSymbolsTotal": len(support_symbols),
-                "workersActive": support_workers,
-            })
-            if progress_callback is not None else None
-        ),
-    )
-    support_seconds = time.perf_counter() - support_started
-    support_items = [row["item"] for row in support_rows if row.get("item") is not None]
-    support_errors = [row["error"] for row in support_rows if row.get("error") is not None]
-    feature_paths.update({
-        str(item["symbol"]): str(item["featurePath"])
-        for item in support_items
-    })
-    baseline = [item["observations"] for item in prepared]
-    candidate_timestamps = candidate_timestamp_index(baseline)
-    if cancel_event is not None and cancel_event.is_set():
-        raise BacktestCancelledError("Backtest cancellation requested")
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "SHARED_MARKET_CONTEXT",
-            "symbolsCompleted": len(request.symbols),
-            "symbolsTotal": len(request.symbols),
-            "candlesProcessed": sum(int(item.get("candles", 0)) for item in prepared),
-            "candidatesFound": sum(len(result.get("trades", [])) for result in baseline),
-            "workersActive": 1,
-        })
-    nifty_started = time.perf_counter()
-    nifty_context = build_nifty_context(
-        nifty_frame,
-        candidate_timestamps,
-        alignment_config.stale_data_seconds,
-        alignment_config.relative_strength_lookback_bars,
-    )
-    nifty_seconds = time.perf_counter() - nifty_started
-    support_context_started = time.perf_counter()
-    breadth_context, sector_context, context_io = build_support_context(
-        candidate_timestamps=candidate_timestamps,
-        feature_paths_by_symbol=feature_paths,
-        breadth_symbols=support_plan["breadthSymbols"],
-        sector_symbols=sorted(set(support_plan["sectorSymbols"]) | set(request.symbols)),
-        sector_by_symbol=alignment_config.sector_by_symbol,
-        config=alignment_config,
-    )
-    support_context_seconds = time.perf_counter() - support_context_started
-    stock_contexts = {
-        str(trade_id): context
-        for item in prepared
-        for trade_id, context in item["stockContexts"].items()
-    }
-    scoring_started = time.perf_counter()
-    evaluations: dict[str, dict[str, Any]] = {}
-    for result in baseline:
-        for trade in result.get("trades", []):
-            trade_id = str(trade.get("tradeId") or "")
-            timestamp = pd.Timestamp(trade.get("signalTimestamp") or trade["entryTimestamp"])
-            timestamp = timestamp.tz_localize(IST) if timestamp.tzinfo is None else timestamp.tz_convert(IST)
-            timestamp_key = timestamp.isoformat()
-            symbol = str(trade.get("symbol") or result.get("symbol") or "")
-            sector_name = alignment_config.sector_by_symbol.get(symbol)
-            sector = (
-                sector_context.get(candidate_sector_key(sector_name, timestamp), {"available": False, "mappingFound": True, "sector": sector_name, "observedMembers": 0})
-                if sector_name
-                else {"available": False, "mappingFound": False, "observedMembers": 0}
-            )
-            evaluations[trade_id] = evaluate_precomputed_market_alignment(
-                trade,
-                stock=stock_contexts.get(trade_id, {"available": False, "reasonCode": "MISSING_STOCK_DATA"}),
-                nifty=nifty_context.get(timestamp_key, {"available": False}),
-                breadth=breadth_context.get(timestamp_key, {"available": False, "observedSymbols": 0}),
-                sector=sector,
-                config=alignment_config,
-            )
-    scoring_seconds = time.perf_counter() - scoring_started
-    if cancel_event is not None and cancel_event.is_set():
-        raise BacktestCancelledError("Backtest cancellation requested")
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "PORTFOLIO_SELECTION",
-            "symbolsCompleted": len(request.symbols),
-            "symbolsTotal": len(request.symbols),
-            "candlesProcessed": sum(int(item.get("candles", 0)) for item in prepared),
-            "candidatesFound": total_candidates if "total_candidates" in locals() else sum(len(result.get("trades", [])) for result in baseline),
-            "acceptedSignals": sum(bool(item.get("allowed")) for item in evaluations.values()),
-            "workersActive": 1,
-        })
-    portfolio_started = time.perf_counter()
-    aligned = apply_market_alignment_chronologically(
-        baseline,
-        frames_by_symbol={},
-        nifty_frame=pd.DataFrame(),
-        config=alignment_config,
-        oi_mode=oi_mode,
-        precomputed_evaluations=evaluations,
-    )
-    portfolio_seconds = time.perf_counter() - portfolio_started
-    item_metrics = [item["metrics"] for item in [*prepared, *support_items]]
-    total_candidates = sum(len(result.get("trades", [])) for result in baseline)
-    performance = {
-        "optimized": True,
-        "featureCodeVersion": MARKET_FEATURE_CODE_VERSION,
-        "sharedContextCodeVersion": SHARED_CONTEXT_CODE_VERSION,
-        "workerCount": worker_count,
-        "supportWorkerCount": support_workers,
-        "totalCandles": sum(int(item.get("candles", 0)) for item in prepared),
-        "candidatesFound": total_candidates,
-        "databaseQueries": 0,
-        "databaseWrites": 0,
-        "candleFilesRead": sum(int(metric.get("candleReads", 0)) for metric in item_metrics),
-        "bytesRead": sum(int(metric.get("bytesRead", 0)) for metric in item_metrics) + int(context_io["featureBytesRead"]),
-        "peakMemoryBytes": max([_parent_peak_memory_bytes(), *(int(metric.get("peakMemoryBytes", 0)) for metric in item_metrics)], default=0),
-        "featureCacheHits": sum(bool(item.get("featureCacheHit")) for item in [*prepared, *support_items]),
-        "featureCacheMisses": sum(not bool(item.get("featureCacheHit")) for item in [*prepared, *support_items]),
-        "stagesSeconds": {
-            "requestValidation": 0.0,
-            "symbolResolution": 0.0,
-            "candleReads": round(sum(float(metric.get("candleReadSeconds", 0)) for metric in item_metrics), 6),
-            "candleConversionDeserialization": round(sum(float(metric.get("candleConversionSeconds", 0)) for metric in item_metrics), 6),
-            "indicatorCalculation": round(sum(float(metric.get("indicatorSeconds", 0)) for metric in item_metrics), 6),
-            "rsiCandidateDetection": round(sum(float(metric.get("candidateAndExitSeconds", 0)) for metric in item_metrics), 6),
-            "niftyContext": round(nifty_seconds, 6),
-            "sectorContext": round(support_context_seconds, 6),
-            "breadthContext": round(support_context_seconds, 6),
-            "relativeStrength": round(scoring_seconds, 6),
-            "liquidity": round(scoring_seconds, 6),
-            "oiContext": 0.0 if oi_mode == "OFF" else None,
-            "alignmentScoring": round(scoring_seconds, 6),
-            "exitSimulation": round(sum(float(metric.get("candidateAndExitSeconds", 0)) for metric in item_metrics), 6),
-            "portfolioSelection": round(portfolio_seconds, 6),
-            "resultSerialization": 0.0,
-            "databaseWrites": 0.0,
-            "tradingWorkerWall": round(trading_seconds, 6),
-            "supportWorkerWall": round(support_seconds, 6),
-            "featureCacheWrites": round(sum(float(metric.get("featureCacheWriteSeconds", 0)) for metric in item_metrics), 6),
-        },
-    }
-    return aligned, errors, support_errors, performance
-
-
-def run_market_aligned_backtest(
-    request: BacktestRequest,
-    store: HistoricalDataStore,
-    now_ist: datetime | None = None,
-    progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    cancel_event: threading.Event | None = None,
-) -> dict[str, Any]:
-    started_clock = time.perf_counter()
-    started_at = datetime.now(IST)
-    now = (now_ist or started_at).astimezone(IST)
-    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
-    run_id = request.runId or str(uuid.uuid4())
-    requested = request.marketAlignedConfiguration
-    sector_path_value = os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
-    sector_path = Path(sector_path_value).expanduser() if sector_path_value else None
-    if sector_path is not None and not sector_path.is_absolute():
-        raise ValueError("MARKET_ALIGNED_SECTOR_MAP_FILE must be an absolute path")
-    breadth_path_value = os.environ.get("MARKET_ALIGNED_BREADTH_UNIVERSE_FILE")
-    breadth_path = Path(breadth_path_value).expanduser() if breadth_path_value else None
-    if breadth_path is not None and not breadth_path.is_absolute():
-        raise ValueError("MARKET_ALIGNED_BREADTH_UNIVERSE_FILE must be an absolute path")
-    breadth_sample_size = max(
-        1, min(int(os.environ.get("MARKET_ALIGNED_BREADTH_SAMPLE_SIZE", "50")), 250)
-    )
-    operations_sector_map = load_sector_mapping(sector_path)
-    alignment_config = requested.strategy_config(operations_sector_map)
-    recovery_config = requested.recovery_config()
-    oi_config = requested.oi_config()
-    oi_mode = requested.oiMode
-    oi_repository_error: str | None = None
-    if oi_mode == "OFF":
-        oi_repository = None
-    else:
-        try:
-            oi_repository = get_oi_repository()
-        except (RuntimeError, OSError, ValueError) as error:
-            oi_repository_error = str(error)
-            oi_repository = OiRegimeRepository(
-                Path.cwd() / ".runtime" / "market-aligned-empty-oi"
-            )
-
-    symbol_resolution_started = time.perf_counter()
-    universe = set(store.universe())
-    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
-    if unavailable:
-        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
-    support_plan = _market_support_plan(
-        universe=universe,
-        requested_symbols=request.symbols,
-        config=alignment_config,
-        breadth_file=breadth_path,
-        breadth_sample_size=breadth_sample_size,
-    )
-    symbol_resolution_seconds = time.perf_counter() - symbol_resolution_started
-    fingerprint: str | None = None
-    result_cache: BacktestResultCache | None = None
-    if isinstance(store, HistoricalDataStore):
-        fingerprint = _market_run_fingerprint(
-            request=request,
-            store=store,
-            support_plan=support_plan,
-            sector_path=sector_path,
-            breadth_path=breadth_path,
-        )
-        result_cache = BacktestResultCache(_market_result_cache_root(store))
-        if request.cachePolicy == "USE_CACHE":
-            cached_response = result_cache.load(fingerprint)
-            if cached_response is not None:
-                already_compact = (
-                    cached_response.get("metadata", {}).get("payloadProfile")
-                    == "COMPACT_MARKET_ALIGNED_V1"
-                )
-                _compact_market_aligned_response(cached_response)
-                if not already_compact:
-                    result_cache.save(fingerprint, cached_response)
-                return cached_response
-
-    warnings = [
-        "Market-Aligned RSI Scalper is a separate research strategy; RSI Recovery Scalping is not modified by this run.",
-        "Every entry gate uses completed candles at or before the signal timestamp. Missing NIFTY, sector, breadth, or stock context rejects the candidate.",
-        "Historical equity candles do not include bid/ask quotes; the completed candle range is disclosed and used only as a conservative data-quality proxy.",
-        "Sector membership is loaded from MARKET_ALIGNED_SECTOR_MAP_FILE or the explicit request configuration; no symbol-to-sector mapping is hardcoded in strategy code.",
-        "Breadth uses an independently loaded, deterministic supporting universe and never only the selected trading symbols.",
-        "Research candidate — paper trading required. Past performance is not a guarantee of future returns.",
-    ]
-    if oi_repository_error:
-        warnings.append(
-            "Configured OI repository was unavailable; an empty repository is used so missing data is recorded causally: "
-            + oi_repository_error
-        )
-    if oi_mode == "ADVISORY":
-        warnings.append("OI mode ADVISORY records the causal regime but never changes execution.")
-    elif oi_mode == "RESEARCH_FILTER":
-        warnings.append("OI mode RESEARCH_FILTER rejects candidates only for chronological research comparison.")
-    elif oi_mode == "ENFORCED":
-        warnings.append("OI mode ENFORCED applies the configured long-trade OI policy after market-alignment gates.")
-
-    warmup_bars = max(
-        recovery_config.rsi_length + 2,
-        alignment_config.ema_slow,
-        alignment_config.rvol_period,
-        alignment_config.room_lookback_bars + 1,
-    ) + 5
-    nifty_read_started = time.perf_counter()
-    try:
-        nifty_frame = store.candles(
-            NIFTY_DISPLAY_NAME,
-            request.timeframe,
-            request.durationYears,
-            analysis_start,
-            now,
-            benchmark=True,
-            warmup_bars=warmup_bars,
-        )
-    except (DhanAPIError, ValueError, OSError, KeyError) as error:
-        nifty_frame = pd.DataFrame()
-        warnings.append(f"NIFTY completed-candle context unavailable: {error}")
-    nifty_read_seconds = time.perf_counter() - nifty_read_started
-
-    optimized = (
-        isinstance(store, HistoricalDataStore)
-        and os.environ.get("MARKET_ALIGNED_OPTIMIZED", "true").casefold() not in {"0", "false", "no"}
-    )
-    if optimized:
-        aligned, errors, support_errors, performance = _optimized_market_alignment_pipeline(
-            request=request,
-            store=store,
-            analysis_start=analysis_start,
-            now=now,
-            run_id=run_id,
-            recovery_config=recovery_config,
-            alignment_config=alignment_config,
-            support_plan=support_plan,
-            nifty_frame=nifty_frame,
-            oi_mode=oi_mode,
-            warmup_bars=warmup_bars,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-        )
-        worker_count = int(performance["workerCount"])
-        baseline_observations = aligned
-        breadth_frames = {
-            symbol: pd.DataFrame()
-            for symbol in support_plan["breadthSymbols"]
-            if symbol not in {row["symbol"] for row in support_errors}
-        }
-        sector_frames = {
-            symbol: pd.DataFrame()
-            for symbol in set(support_plan["sectorSymbols"]) | set(request.symbols)
-            if symbol not in {row["symbol"] for row in support_errors}
-        }
-    else:
-        requested_workers = int(os.environ.get("BACKTEST_WORKERS", "4"))
-        worker_count = max(1, min(requested_workers, len(request.symbols), MAX_BACKTEST_WORKERS))
-
-        def prepare(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
-            try:
-                candles = store.candles(
-                    symbol, request.timeframe, request.durationYears, analysis_start, now,
-                    warmup_bars=warmup_bars,
-                )
-                observations = simulate_recovery_symbol(
-                    symbol, candles, timeframe=request.timeframe, config=recovery_config,
-                    run_id=run_id, analysis_start=analysis_start,
-                )
-                return {"symbol": symbol, "candles": candles, "observations": observations}, None
-            except (DhanAPIError, ValueError, OSError, KeyError) as error:
-                return None, {"symbol": symbol, "message": str(error)}
-
-        if worker_count == 1:
-            prepared_rows = [prepare(symbol) for symbol in request.symbols]
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-                prepared_rows = list(executor.map(prepare, request.symbols))
-        prepared = [item for item, _ in prepared_rows if item is not None]
-        errors = [error for _, error in prepared_rows if error is not None]
-        trading_frames_by_symbol = {str(item["symbol"]): item["candles"] for item in prepared}
-        support_symbols = [symbol for symbol in support_plan["allSymbols"] if symbol not in trading_frames_by_symbol]
-
-        def prepare_support(symbol: str) -> tuple[str, pd.DataFrame | None, str | None]:
-            try:
-                return symbol, store.candles(
-                    symbol, request.timeframe, request.durationYears, analysis_start, now,
-                    warmup_bars=warmup_bars,
-                ), None
-            except (DhanAPIError, ValueError, OSError, KeyError) as error:
-                return symbol, None, str(error)
-
-        support_worker_count = max(1, min(requested_workers, len(support_symbols) or 1, MAX_BACKTEST_WORKERS))
-        if support_worker_count == 1:
-            support_rows = [prepare_support(symbol) for symbol in support_symbols]
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=support_worker_count) as executor:
-                support_rows = list(executor.map(prepare_support, support_symbols))
-        support_frames = {symbol: frame for symbol, frame, error in support_rows if frame is not None and error is None}
-        support_errors = [
-            {"symbol": symbol, "message": error}
-            for symbol, frame, error in support_rows if frame is None and error is not None
-        ]
-        frames_by_symbol = {**support_frames, **trading_frames_by_symbol}
-        breadth_frames = {
-            symbol: frames_by_symbol[symbol]
-            for symbol in support_plan["breadthSymbols"] if symbol in frames_by_symbol
-        }
-        sector_frames = {
-            symbol: frames_by_symbol[symbol]
-            for symbol in set(support_plan["sectorSymbols"]) | set(request.symbols)
-            if symbol in frames_by_symbol
-        }
-        baseline_observations = [item["observations"] for item in prepared]
-        aligned = apply_market_alignment_chronologically(
-            baseline_observations,
-            frames_by_symbol=frames_by_symbol,
-            nifty_frame=nifty_frame,
-            config=alignment_config,
-            breadth_frames=breadth_frames,
-            sector_frames=sector_frames,
-            oi_mode=oi_mode,
-        ) if prepared else []
-        performance = {
-            "optimized": False,
-            "workerCount": worker_count,
-            "databaseQueries": 0,
-            "databaseWrites": 0,
-        }
-    if support_errors:
-        warnings.append(
-            f"{len(support_errors)} supporting-market symbol(s) could not be loaded; "
-            "candidate diagnostics identify any resulting coverage failure."
-        )
-    quality_by_symbol = {
-        str(result.get("symbol") or ""): result.get("qualityScore")
-        for result in baseline_observations
-    }
-    if oi_repository is not None and aligned:
-        applied_mode = "ENFORCED" if oi_mode == "RESEARCH_FILTER" else oi_mode
-        aligned = apply_oi_filter_chronologically(
-            aligned,
-            repository=oi_repository,
-            mode=applied_mode,
-            config=oi_config,
-            quality_by_symbol=quality_by_symbol,
-        )
-        for result in aligned:
-            result["oiFilterMode"] = oi_mode
-            if oi_mode == "RESEARCH_FILTER":
-                for skipped in result.get("oiSkippedSignals", []):
-                    skipped["researchOnly"] = True
-                    skipped["status"] = "RESEARCH_" + str(skipped.get("status") or "FILTERED")
-    _finalize_market_candidate_diagnostics(aligned, oi_mode=oi_mode)
-
-    configuration = {
-        "strategy": requested.public(),
-        "resolvedMarketAlignment": alignment_config.public(),
-        "resolvedOi": oi_config.public(),
-    }
-    results: list[dict[str, Any]] = []
-    for result in aligned:
-        result.update(summarize_recovery_trades(str(result.get("symbol") or ""), result.get("trades", [])))
-        result["strategyKey"] = MARKET_ALIGNED_STRATEGY_KEY
-        result["strategyName"] = MARKET_ALIGNED_STRATEGY_NAME
-        result["strategyVersion"] = MARKET_ALIGNED_STRATEGY_VERSION
-        result["configuration"] = configuration
-        result["candidateBuySignals"] = (
-            len(result.get("trades", []))
-            + len(result.get("marketAlignmentSkippedSignals", []))
-            + len(result.get("oiSkippedSignals", []))
-        )
-        results.append(result)
-    summary = aggregate_recovery_results(results)
-    summary.update({
-        "candidateBuySignals": sum(int(result.get("candidateBuySignals", 0)) for result in results),
-        "marketAlignmentRejectedSignals": sum(
-            len(result.get("marketAlignmentSkippedSignals", [])) for result in results
-        ),
-        "oiRejectedSignals": sum(len(result.get("oiSkippedSignals", [])) for result in results),
-        "skippedOiSignals": sum(len(result.get("oiSkippedSignals", [])) for result in results),
-        "oiFilterMode": oi_mode,
-        "candidateFunnel": _market_candidate_funnel(results),
-    })
-    completed_at = datetime.now(IST)
-    runtime_seconds = time.perf_counter() - started_clock
-    performance.setdefault("stagesSeconds", {})
-    performance["stagesSeconds"]["symbolResolution"] = round(symbol_resolution_seconds, 6)
-    performance["stagesSeconds"]["niftyCandleRead"] = round(nifty_read_seconds, 6)
-    performance["totalRuntimeSeconds"] = _finite(runtime_seconds, 6)
-    performance["timePerSymbolSeconds"] = _finite(
-        runtime_seconds / max(len(results), 1), 6
-    )
-    performance["symbolsProcessed"] = len(results)
-    data_from = min((result["firstCandle"] for result in results), default=None)
-    data_to = max((result["lastCandle"] for result in results), default=None)
-    response = {
-        "metadata": {
-            "runId": run_id,
-            "strategyMode": MARKET_ALIGNED_STRATEGY_KEY,
-            "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
-            "strategyName": MARKET_ALIGNED_STRATEGY_NAME,
-            "strategyVersion": MARKET_ALIGNED_STRATEGY_VERSION,
-            "strategyDescription": MARKET_ALIGNED_DESCRIPTION,
-            "configuration": configuration,
-            "startedAt": started_at.isoformat(),
-            "completedAt": completed_at.isoformat(),
-            "generatedAt": completed_at.isoformat(),
-            "analysisStart": analysis_start.isoformat(),
-            "dataFrom": data_from,
-            "dataTo": data_to,
-            "durationYears": request.durationYears,
-            "timeframe": request.timeframe,
-            "universeMode": request.universeMode,
-            "symbolsRequested": len(request.symbols),
-            "symbolsProcessed": len(results),
-            "symbolsFailed": len(errors),
-            "workerCount": worker_count,
-            "runtimeSeconds": _finite(runtime_seconds, 4),
-            "performance": performance,
-            "cachedResult": False,
-            "originalRunTimestamp": None,
-            "fingerprint": fingerprint,
-            "timezone": "Asia/Kolkata",
-            "executionModel": recovery_config.execution_model,
-            "backtestSemantics": "SIGNAL_OBSERVATION",
-            "strategyParameters": requested.public(),
-            "costModel": {
-                "buyCostBps": recovery_config.buy_cost_bps,
-                "sellCostBps": recovery_config.sell_cost_bps,
-                "slippageBpsPerSide": recovery_config.slippage_bps,
-                "estimatedRoundTripCostPct": recovery_config.estimated_round_trip_cost_pct,
-            },
-            "qualityFormula": {
-                "weights": QUALITY_WEIGHTS,
-                "formula": "Existing outcome-quality report; it is not an entry gate.",
-                "speedScore": "Completed target speed buckets.",
-                "maeScore": "Completed-trade MAE quality.",
-                "openPenalty": "Open observations divided by accepted BUY observations.",
-            },
-            "researchLabel": "Research candidate — paper trading required",
-            "sectorMappingSource": str(sector_path) if sector_path else "REQUEST_OR_UNAVAILABLE",
-            "supportMarketData": {
-                "breadthSource": support_plan["breadthSource"],
-                "breadthSymbolsRequested": len(support_plan["breadthSymbols"]),
-                "breadthSymbolsLoaded": len(breadth_frames),
-                "sectorSymbolsRequested": len(support_plan["sectorSymbols"]),
-                "sectorSymbolsLoaded": len(sector_frames),
-                "supportLoadFailures": len(support_errors),
-                "selectedTradingSymbolsExcludedFromBreadthDependency": True,
-            },
-            "oiFilter": {
-                "mode": oi_mode,
-                "version": "nifty-oi-regime-filter-1.0.0",
-                "parameters": oi_config.public(),
-                "decisionOrder": "RSI candidate -> stock gates -> market alignment -> NIFTY OI -> risk controls",
-                "historyStatus": oi_repository.history_status() if oi_repository is not None else None,
-            },
-            "corporateActionAdjustment": "UNVERIFIED_SOURCE_AS_RECEIVED",
-            "gitCommitSha": os.environ.get("GIT_COMMIT_SHA") or None,
-        },
-        "summary": summary,
-        "results": results,
-        "errors": errors,
-        "warnings": warnings,
-    }
-    _compact_market_aligned_response(response)
-    serialization_started = time.perf_counter()
-    json.dumps(response, sort_keys=True, separators=(",", ":"), default=str)
-    performance["stagesSeconds"]["resultSerialization"] = round(
-        time.perf_counter() - serialization_started, 6
-    )
-    if result_cache is not None and fingerprint is not None:
-        cache_write_started = time.perf_counter()
-        cache_bytes = result_cache.save(fingerprint, response)
-        performance["resultCacheWriteBytes"] = cache_bytes
-        performance["stagesSeconds"]["resultCacheWrite"] = round(
-            time.perf_counter() - cache_write_started, 6
-        )
-    return response
-
-
-def _comparison_trade_pnl(trade: dict[str, Any]) -> float | None:
-    for key in ("netPnl", "realizedNetPnl", "realizedPnl", "pnl"):
-        value = trade.get(key)
-        if value is not None and math.isfinite(float(value)):
-            return float(value)
-    return None
-
-
-def _oi_walk_forward_report(
-    off: dict[str, Any],
-    enforced: dict[str, Any],
-    duration_years: int,
-) -> dict[str, Any]:
-    baseline = [trade for result in off.get("results", []) for trade in result.get("trades", [])]
-    accepted = [trade for result in enforced.get("results", []) for trade in result.get("trades", [])]
-    accepted_ids = {str(trade.get("tradeId") or "") for trade in accepted}
-    timestamps = [
-        trade.get("signalTimestamp") or trade.get("entryTimestamp")
-        for trade in baseline
-        if trade.get("signalTimestamp") or trade.get("entryTimestamp")
-    ]
-    folds = chronological_walk_forward_folds(timestamps, duration_years)
-    rows: list[dict[str, Any]] = []
-    for number, fold in enumerate(folds, start=1):
-        validation_from = datetime.fromisoformat(fold["validationFrom"])
-        validation_to = datetime.fromisoformat(fold["validationTo"])
-        validation = [
-            trade for trade in baseline
-            if validation_from
-            <= datetime.fromisoformat(str(trade.get("signalTimestamp") or trade.get("entryTimestamp")))
-            <= validation_to
-        ]
-        validation_accepted = [
-            trade for trade in validation
-            if str(trade.get("tradeId") or "") in accepted_ids
-        ]
-        baseline_pnl = sum(value for trade in validation if (value := _comparison_trade_pnl(trade)) is not None)
-        enforced_pnl = sum(value for trade in validation_accepted if (value := _comparison_trade_pnl(trade)) is not None)
-        rows.append({
-            "fold": number,
-            **fold,
-            "configurationScope": "COMMON_UNIVERSE_CONFIGURATION",
-            "validationCandidateTrades": len(validation),
-            "validationAcceptedTrades": len(validation_accepted),
-            "validationBaselineNetPnl": _finite(baseline_pnl, 2),
-            "validationEnforcedNetPnl": _finite(enforced_pnl, 2),
-            "validationNetPnlChange": _finite(enforced_pnl - baseline_pnl, 2),
-        })
-    return {
-        "method": "9M_DEVELOPMENT_3M_UNTOUCHED_VALIDATION" if duration_years == 1 else "12M_DEVELOPMENT_3M_VALIDATION_ROLLING_3M",
-        "thresholdOptimization": "DEVELOPMENT_ONLY",
-        "stockSpecificOptimization": False,
-        "folds": rows,
-        "complete": bool(rows) and all(row["validationCandidateTrades"] > 0 for row in rows),
-    }
-
-
-def run_oi_filter_comparison(
-    request: OiFilterComparisonRequest,
-    store: HistoricalDataStore,
-    now_ist: datetime | None = None,
-) -> dict[str, Any]:
-    """Run one immutable Market-Aligned candidate specification through every OI mode."""
-    evaluation_time = (now_ist or datetime.now(IST)).astimezone(IST)
-    comparison_run_id = request.runId or str(uuid.uuid4())
-    runs: dict[str, dict[str, Any]] = {}
-    for mode in ("OFF", "ADVISORY", "RESEARCH_FILTER", "ENFORCED"):
-        mode_configuration = request.marketAlignedConfiguration.model_copy(
-            update={"oiMode": mode}
-        )
-        mode_request = request.model_copy(
-            update={
-                "strategyMode": MARKET_ALIGNED_STRATEGY_KEY,
-                "marketAlignedConfiguration": mode_configuration,
-                "runId": comparison_run_id,
-            }
-        )
-        runs[mode] = run_market_aligned_backtest(mode_request, store, evaluation_time)
-    comparison = compare_oi_modes(runs["OFF"], runs["ADVISORY"], runs["ENFORCED"])
-    comparison["rejectedTrades"] = [
-        item
-        for result in runs["ENFORCED"].get("results", [])
-        for item in result.get("oiSkippedSignals", [])
-    ]
-    walk_forward = _oi_walk_forward_report(
-        runs["OFF"], runs["ENFORCED"], request.durationYears
-    )
-    return {
-        "metadata": {
-            "runId": comparison_run_id,
-            "generatedAt": evaluation_time.isoformat(),
-            "researchLabel": "Research candidate — paper trading required",
-            "candidateSpecificationIdentical": True,
-            "defaultOiMode": "ADVISORY",
-            "strategyKey": MARKET_ALIGNED_STRATEGY_KEY,
-        },
-        "comparison": comparison,
-        "walkForwardValidation": walk_forward,
-        "acceptance": {
-            "passed": False,
-            "defaultMayBeEnabled": False,
-            "reason": (
-                "The filter remains OFF until complete chronological validation demonstrates all profitability, "
-                "drawdown, stop-rate, trade-count, fold-stability and symbol-concentration criteria."
-            ),
-        },
-        "runs": {
-            mode: {
-                "metadata": bundle.get("metadata"),
-                "summary": bundle.get("summary"),
-                "errors": bundle.get("errors"),
-                "warnings": bundle.get("warnings"),
-            }
-            for mode, bundle in runs.items()
-        },
-    }
 
 
 def run_atr_exit_optimization(
@@ -3068,11 +2076,425 @@ def run_rsi_exit_comparison(
     return payload
 
 
+def _vwap_support_plan(
+    *,
+    universe: set[str],
+    requested_symbols: list[str],
+    config: VwapPullbackConfig,
+    sector_by_symbol: Mapping[str, str],
+    breadth_file: Path | None,
+) -> dict[str, Any]:
+    configured_breadth = _support_symbols_from_file(breadth_file)
+    breadth_pool = [
+        symbol for symbol in (configured_breadth or sorted(universe))
+        if symbol in universe
+    ]
+    breadth_symbols = _evenly_spaced_symbols(
+        breadth_pool,
+        max(config.minimum_breadth_symbols, 50),
+    )
+    requested_sectors = {
+        sector_by_symbol.get(symbol)
+        for symbol in requested_symbols
+        if sector_by_symbol.get(symbol)
+    }
+    sector_symbols = sorted({
+        symbol
+        for symbol, sector in sector_by_symbol.items()
+        if symbol in universe and sector in requested_sectors
+    })
+    return {
+        "breadthSymbols": breadth_symbols,
+        "sectorSymbols": sector_symbols,
+        "allSymbols": sorted(set(breadth_symbols) | set(sector_symbols)),
+        "breadthSource": (
+            str(breadth_file)
+            if configured_breadth and breadth_file is not None
+            else "DETERMINISTIC_LOCAL_UNIVERSE_SAMPLE"
+        ),
+    }
+
+
+def _local_nifty_candles(
+    store: HistoricalDataStore,
+    duration_years: int,
+    analysis_start: datetime,
+    now: datetime,
+) -> pd.DataFrame:
+    path = store._cache_path("NIFTY50", "5", duration_years)
+    if not path.is_file():
+        return pd.DataFrame()
+    raw = pd.read_csv(path, index_col="Timestamp", parse_dates=["Timestamp"])
+    raw.index = pd.DatetimeIndex(raw.index)
+    raw.index = raw.index.tz_localize(IST) if raw.index.tz is None else raw.index.tz_convert(IST)
+    return prepare_candles(raw, "5m", analysis_start, now, warmup_bars=100)
+
+
+def _vwap_period_metrics(
+    trades: Sequence[Mapping[str, Any]],
+    start: datetime,
+    end: datetime,
+) -> dict[str, Any]:
+    selected = [
+        item for item in trades
+        if _as_ist_timestamp(item["entryTimestamp"]) >= start
+        and _as_ist_timestamp(item["entryTimestamp"]) < end
+    ]
+    net = [float(item["netPnl"]) for item in selected]
+    winners = [value for value in net if value > 0]
+    losers = [value for value in net if value < 0]
+    gross_loss = abs(sum(losers))
+    cumulative = np.cumsum(np.asarray(net, dtype=float)) if net else np.asarray([], dtype=float)
+    equity = np.concatenate(([0.0], cumulative))
+    peaks = np.maximum.accumulate(equity)
+    maximum_drawdown = float(np.max(peaks - equity)) if len(equity) else 0.0
+    consecutive = 0
+    maximum_consecutive = 0
+    for value in net:
+        consecutive = consecutive + 1 if value < 0 else 0
+        maximum_consecutive = max(maximum_consecutive, consecutive)
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "trades": len(selected),
+        "winRate": round(len(winners) / len(selected) * 100.0, 2) if selected else 0.0,
+        "averageWinner": round(float(np.mean(winners)), 2) if winners else None,
+        "averageLoser": round(float(np.mean(losers)), 2) if losers else None,
+        "netPnlAfterCosts": round(sum(net), 2),
+        "expectancy": round(float(np.mean(net)), 2) if net else None,
+        "profitFactor": round(sum(winners) / gross_loss, 4) if gross_loss else None,
+        "maximumDrawdown": round(maximum_drawdown, 2),
+        "averageR": round(float(np.mean([float(item["rMultiple"]) for item in selected])), 6) if selected else None,
+        "maximumConsecutiveLosses": maximum_consecutive,
+        "tradesPerDay": round(len(selected) / max((end.date() - start.date()).days, 1), 6),
+    }
+
+
+def _as_ist_timestamp(value: Any) -> datetime:
+    stamp = pd.Timestamp(value)
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize(IST)
+    else:
+        stamp = stamp.tz_convert(IST)
+    return stamp.to_pydatetime()
+
+
+def _vwap_walk_forward(
+    trades: Sequence[Mapping[str, Any]],
+    analysis_start: datetime,
+    analysis_end: datetime,
+    duration_years: int,
+) -> dict[str, Any]:
+    folds: list[dict[str, Any]] = []
+    if duration_years == 1:
+        validation_start = (pd.Timestamp(analysis_start) + pd.DateOffset(months=9)).to_pydatetime()
+        folds.append({
+            "development": _vwap_period_metrics(trades, analysis_start, validation_start),
+            "validation": _vwap_period_metrics(trades, validation_start, analysis_end),
+        })
+        method = "First 9 months development; final 3 months untouched validation"
+    else:
+        cursor = pd.Timestamp(analysis_start)
+        end = pd.Timestamp(analysis_end)
+        while cursor + pd.DateOffset(months=15) <= end:
+            validation_start = cursor + pd.DateOffset(months=12)
+            validation_end = validation_start + pd.DateOffset(months=3)
+            folds.append({
+                "development": _vwap_period_metrics(
+                    trades, cursor.to_pydatetime(), validation_start.to_pydatetime()
+                ),
+                "validation": _vwap_period_metrics(
+                    trades, validation_start.to_pydatetime(), validation_end.to_pydatetime()
+                ),
+            })
+            cursor += pd.DateOffset(months=3)
+        method = "12 months development; 3 months validation; roll forward by 3 months"
+    return {
+        "method": method,
+        "parametersOptimizedOnValidation": False,
+        "folds": folds,
+        "label": "Research candidate — paper trading required",
+    }
+
+
+def run_vwap_pullback_backtest(
+    request: BacktestRequest,
+    store: HistoricalDataStore,
+    now_ist: datetime | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    started_clock = time.perf_counter()
+    started_at = datetime.now(IST)
+    now = (now_ist or started_at).astimezone(IST)
+    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
+    run_id = request.runId or str(uuid.uuid4())
+    requested = request.vwapPullbackConfiguration
+    config = requested.strategy_config().validate()
+    universe = set(store.universe())
+    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
+    if unavailable:
+        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
+
+    sector_value = (
+        os.environ.get("MARKET_CONTEXT_SECTOR_MAP_FILE")
+        or os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
+    )
+    breadth_value = (
+        os.environ.get("MARKET_CONTEXT_BREADTH_UNIVERSE_FILE")
+        or os.environ.get("MARKET_ALIGNED_BREADTH_UNIVERSE_FILE")
+    )
+    sector_path = Path(sector_value).expanduser() if sector_value else None
+    breadth_path = Path(breadth_value).expanduser() if breadth_value else None
+    if sector_path is not None and not sector_path.is_absolute():
+        raise ValueError("MARKET_CONTEXT_SECTOR_MAP_FILE must be an absolute path")
+    if breadth_path is not None and not breadth_path.is_absolute():
+        raise ValueError("MARKET_CONTEXT_BREADTH_UNIVERSE_FILE must be an absolute path")
+    sector_by_symbol = load_vwap_sector_mapping(sector_path)
+    support_plan = _vwap_support_plan(
+        universe=universe,
+        requested_symbols=request.symbols,
+        config=config,
+        sector_by_symbol=sector_by_symbol,
+        breadth_file=breadth_path,
+    )
+
+    raw_paths = {
+        symbol: store._cache_path(symbol, "5", request.durationYears)
+        for symbol in sorted(set(request.symbols) | set(support_plan["allSymbols"]))
+    }
+    configuration_hash = vwap_fingerprint(requested.public())
+    fingerprint = vwap_fingerprint({
+        "strategyKey": VWAP_PULLBACK_STRATEGY_KEY,
+        "strategyVersion": VWAP_PULLBACK_STRATEGY_VERSION,
+        "featureVersion": VWAP_PULLBACK_FEATURE_VERSION,
+        "sessionVersion": VWAP_PULLBACK_SESSION_VERSION,
+        "portfolioVersion": VWAP_PULLBACK_PORTFOLIO_VERSION,
+        "configuration": requested.public(),
+        "symbols": request.symbols,
+        "universeMode": request.universeMode,
+        "durationYears": request.durationYears,
+        "analysisStartCompletedBucket": pd.Timestamp(analysis_start).floor("5min").isoformat(),
+        "analysisEndCompletedBucket": pd.Timestamp(now).floor("5min").isoformat(),
+        "timeframe": request.timeframe,
+        "executionModel": requested.executionModel,
+        "data": {symbol: vwap_file_stat_fingerprint(path) for symbol, path in raw_paths.items()},
+        "nifty": vwap_file_stat_fingerprint(store._cache_path("NIFTY50", "5", request.durationYears)),
+        "sector": vwap_file_stat_fingerprint(sector_path),
+        "breadth": vwap_file_stat_fingerprint(breadth_path),
+        "oi": "OFF" if config.oi_mode == "OFF" else "POINT_IN_TIME_REPOSITORY",
+    })
+    result_cache = VwapPullbackResultCache(
+        store.cache_directory / "vwap-pullback-results-v2"
+    )
+    if request.cachePolicy == "USE_CACHE":
+        cached = result_cache.load(fingerprint)
+        if cached is not None:
+            return cached
+
+    worker_limit = max(
+        1,
+        min(int(os.environ.get("BACKTEST_WORKERS", str(_market_worker_default()))), 8),
+    )
+    workers = min(worker_limit, len(request.symbols))
+    feature_root = store.cache_directory / "vwap-pullback-features-v2"
+    common = {
+        "cacheDirectory": str(store.cache_directory),
+        "featureCacheDirectory": str(feature_root),
+        "config": config,
+        "durationYears": request.durationYears,
+        "analysisStart": analysis_start,
+        "now": now,
+    }
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "STOCK_FEATURES_AND_PULLBACKS",
+            "symbolsCompleted": 0,
+            "symbolsTotal": len(request.symbols),
+            "workersActive": workers,
+        })
+    rows = _execute_market_batches(
+        [{**common, "symbol": symbol, "detectCandidates": True} for symbol in request.symbols],
+        workers,
+        prepare_vwap_symbol_batch,
+        cancel_event=cancel_event,
+        progress_callback=(
+            lambda completed: progress_callback({
+                "currentStage": "STOCK_FEATURES_AND_PULLBACKS",
+                "symbolsCompleted": completed,
+                "symbolsTotal": len(request.symbols),
+                "workersActive": workers,
+            }) if progress_callback is not None else None
+        ),
+    )
+    prepared = [row["item"] for row in rows if row.get("item") is not None]
+    errors = [row["error"] for row in rows if row.get("error") is not None]
+    feature_paths = {str(item["symbol"]): str(item["featurePath"]) for item in prepared}
+    symbol_results = [item["result"] for item in prepared if item.get("result") is not None]
+    candidates = [candidate for result in symbol_results for candidate in result.get("candidates", [])]
+    support_symbols = [symbol for symbol in support_plan["allSymbols"] if symbol not in feature_paths]
+    if support_symbols:
+        support_workers = max(1, min(worker_limit, len(support_symbols)))
+        if progress_callback is not None:
+            progress_callback({
+                "currentStage": "SUPPORTING_MARKET_FEATURES",
+                "symbolsCompleted": len(request.symbols),
+                "symbolsTotal": len(request.symbols),
+                "supportSymbolsCompleted": 0,
+                "supportSymbolsTotal": len(support_symbols),
+                "candidatesFound": len(candidates),
+                "workersActive": support_workers,
+            })
+        support_rows = _execute_market_batches(
+            [{**common, "symbol": symbol, "detectCandidates": False} for symbol in support_symbols],
+            support_workers,
+            prepare_vwap_symbol_batch,
+            cancel_event=cancel_event,
+        )
+        feature_paths.update({
+            str(row["item"]["symbol"]): str(row["item"]["featurePath"])
+            for row in support_rows if row.get("item") is not None
+        })
+        errors.extend(row["error"] for row in support_rows if row.get("error") is not None)
+    unique_errors: list[dict[str, str]] = []
+    seen_errors: set[tuple[str, str]] = set()
+    for error in errors:
+        key = (str(error.get("symbol") or ""), str(error.get("message") or ""))
+        if key not in seen_errors:
+            unique_errors.append(error)
+            seen_errors.add(key)
+    errors = unique_errors
+    if cancel_event is not None and cancel_event.is_set():
+        raise BacktestCancelledError("Backtest cancellation requested")
+
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "POINT_IN_TIME_MARKET_CONTEXT",
+            "symbolsCompleted": len(request.symbols),
+            "symbolsTotal": len(request.symbols),
+            "candlesProcessed": sum(int(item["metrics"].get("candles", 0)) for item in prepared),
+            "candidatesFound": len(candidates),
+            "workersActive": 1,
+        })
+    nifty = _local_nifty_candles(store, request.durationYears, analysis_start, now)
+    nifty_context = build_nifty_candidate_context(nifty, candidates, config)
+    support_context = build_vwap_supporting_context(
+        candidates,
+        feature_paths_by_symbol=feature_paths,
+        breadth_symbols=support_plan["breadthSymbols"],
+        sector_by_symbol=sector_by_symbol,
+        config=config,
+    )
+    oi_repository = None
+    if config.oi_mode == "ADVISORY":
+        try:
+            oi_repository = get_oi_repository()
+        except (OSError, RuntimeError, ValueError):
+            oi_repository = None
+    enriched = enrich_vwap_candidates(
+        candidates,
+        nifty_by_candidate=nifty_context,
+        support_by_candidate=support_context,
+        config=config,
+        oi_repository=oi_repository,
+    )
+    if progress_callback is not None:
+        progress_callback({
+            "currentStage": "CHRONOLOGICAL_PORTFOLIO",
+            "symbolsCompleted": len(request.symbols),
+            "symbolsTotal": len(request.symbols),
+            "candidatesFound": len(enriched),
+            "acceptedSignals": sum(not item.get("primaryReason") for item in enriched),
+            "workersActive": 1,
+        })
+    trades, rejected = execute_vwap_portfolio(enriched, config)
+    by_symbol_candidates: dict[str, list[dict[str, Any]]] = {}
+    by_symbol_trades: dict[str, list[dict[str, Any]]] = {}
+    by_symbol_rejected: dict[str, list[dict[str, Any]]] = {}
+    for candidate in enriched:
+        by_symbol_candidates.setdefault(str(candidate["symbol"]), []).append(candidate)
+    for trade in trades:
+        by_symbol_trades.setdefault(str(trade["symbol"]), []).append(trade)
+    for candidate in rejected:
+        by_symbol_rejected.setdefault(str(candidate["symbol"]), []).append(candidate)
+    results = []
+    for result in symbol_results:
+        symbol = str(result["symbol"])
+        results.append({
+            **{key: value for key, value in result.items() if key not in {"candidates", "events"}},
+            "rawCandidates": len(by_symbol_candidates.get(symbol, [])),
+            "executedTrades": len(by_symbol_trades.get(symbol, [])),
+            "trades": by_symbol_trades.get(symbol, []),
+            "candidateDiagnostics": by_symbol_candidates.get(symbol, []),
+            "skippedCandidates": by_symbol_rejected.get(symbol, []),
+        })
+    summary = summarize_vwap_results(symbol_results, enriched, trades, rejected, config)
+    completed_at = datetime.now(IST)
+    response = {
+        "metadata": {
+            "runId": run_id,
+            "strategyMode": VWAP_PULLBACK_STRATEGY_KEY,
+            "strategyKey": VWAP_PULLBACK_STRATEGY_KEY,
+            "strategyName": VWAP_PULLBACK_STRATEGY_NAME,
+            "strategyDescription": VWAP_PULLBACK_DESCRIPTION,
+            "strategyVersion": VWAP_PULLBACK_STRATEGY_VERSION,
+            "featureCodeVersion": VWAP_PULLBACK_FEATURE_VERSION,
+            "sessionRuleVersion": VWAP_PULLBACK_SESSION_VERSION,
+            "portfolioRuleVersion": VWAP_PULLBACK_PORTFOLIO_VERSION,
+            "startedAt": started_at.isoformat(),
+            "completedAt": completed_at.isoformat(),
+            "generatedAt": completed_at.isoformat(),
+            "analysisStart": analysis_start.isoformat(),
+            "analysisEnd": now.isoformat(),
+            "durationYears": request.durationYears,
+            "timeframe": request.timeframe,
+            "universeMode": request.universeMode,
+            "symbolsRequested": len(request.symbols),
+            "symbolsProcessed": len(results),
+            "symbolsFailed": len(errors),
+            "workerCount": workers,
+            "runtimeSeconds": round(time.perf_counter() - started_clock, 4),
+            "configuration": requested.public(),
+            "effectiveConfiguration": requested.public(),
+            "configurationHash": configuration_hash,
+            "fingerprint": fingerprint,
+            "dataSnapshot": fingerprint,
+            "cachedResult": False,
+            "resultSource": "FRESH_CALCULATION",
+            "researchLabel": "Research candidate — paper trading required",
+            "historicalSpread": "UNAVAILABLE_ADVISORY",
+            "supportingData": {
+                "sectorMappingFile": str(sector_path) if sector_path else None,
+                "breadthSource": support_plan["breadthSource"],
+                "breadthSymbols": len(support_plan["breadthSymbols"]),
+                "sectorSymbols": len(support_plan["sectorSymbols"]),
+            },
+        },
+        "summary": summary,
+        "results": results,
+        "trades": trades,
+        "rejectedCandidates": rejected,
+        "walkForwardValidation": _vwap_walk_forward(
+            trades, analysis_start, now, request.durationYears
+        ),
+        "errors": errors,
+        "warnings": [
+            "Signals and indicators use completed candles; NEXT_BAR_OPEN entries do not use the entry candle for signal decisions.",
+            "Historical bid/ask spread is unavailable and is not fabricated.",
+            "Sector, breadth, relative strength, and optional OI affect quality diagnostics or ranking; they are not mandatory gates by default.",
+            "The current symbol universe introduces survivorship bias. Past performance does not guarantee future returns.",
+            "Research candidate — paper trading required.",
+        ],
+    }
+    response["metadata"]["resultCacheBytes"] = result_cache.save(fingerprint, response)
+    return response
+
+
 def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
     if request.strategyMode == "rsi_recovery":
         return run_recovery_backtest(request, store, now_ist)
-    if request.strategyMode == MARKET_ALIGNED_STRATEGY_KEY:
-        return run_market_aligned_backtest(request, store, now_ist)
+    if request.strategyMode == VWAP_PULLBACK_STRATEGY_KEY:
+        return run_vwap_pullback_backtest(request, store, now_ist)
 
     if not request.entryLow < request.entryHigh < request.exitLow < request.exitHigh:
         raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
@@ -3816,7 +3238,7 @@ def _completed_job_progress(
 ) -> dict[str, Any]:
     summary = result.get("summary", {})
     metadata = result.get("metadata", {})
-    funnel = summary.get("candidateFunnel", {})
+    funnel = summary.get("funnel") or summary.get("candidateFunnel", {})
     return {
         "currentStage": (
             "CACHED_RESULT" if bool(metadata.get("cachedResult")) else "FINALIZING"
@@ -3824,7 +3246,7 @@ def _completed_job_progress(
         "symbolsCompleted": int(metadata.get("symbolsProcessed", symbol_count)),
         "symbolsTotal": symbol_count,
         "candlesProcessed": int(summary.get("candleRowsProcessed", 0)),
-        "candidatesFound": int(summary.get("candidateBuySignals", 0)),
+        "candidatesFound": int(summary.get("rawCandidates", summary.get("candidateBuySignals", 0))),
         "acceptedSignals": int(funnel.get("executedTrades", 0)),
         "workersActive": 0,
     }
@@ -3838,8 +3260,8 @@ def _job_history_record(
     return BacktestHistorySaveRequest(
         id=str(metadata.get("runId") or request.runId or uuid.uuid4()),
         completedAt=metadata.get("completedAt") or datetime.now(IST),
-        strategyMode=MARKET_ALIGNED_STRATEGY_KEY,
-        strategyName=str(metadata.get("strategyName") or MARKET_ALIGNED_STRATEGY_NAME),
+        strategyMode=VWAP_PULLBACK_STRATEGY_KEY,
+        strategyName=str(metadata.get("strategyName") or VWAP_PULLBACK_STRATEGY_NAME),
         timeframe=str(metadata.get("timeframe") or request.timeframe),
         durationYears=int(metadata.get("durationYears") or request.durationYears),
         symbolCount=int(metadata.get("symbolsProcessed") or len(request.symbols)),
@@ -3855,10 +3277,10 @@ def start_backtest_job(
         alias="x-opendelta-history-owner",
     ),
 ) -> dict[str, Any]:
-    if request.strategyMode != MARKET_ALIGNED_STRATEGY_KEY:
+    if request.strategyMode != VWAP_PULLBACK_STRATEGY_KEY:
         raise HTTPException(
             status_code=422,
-            detail="Asynchronous progress jobs currently apply to Market-Aligned RSI Scalper runs.",
+            detail="Asynchronous progress jobs currently apply to Market-Aligned VWAP Pullback Scalper runs.",
         )
     store = get_store()
 
@@ -3866,7 +3288,7 @@ def start_backtest_job(
         progress: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
     ) -> dict[str, Any]:
-        result = run_market_aligned_backtest(
+        result = run_vwap_pullback_backtest(
             request,
             store,
             progress_callback=progress,
@@ -3906,19 +3328,6 @@ def cancel_backtest_job(job_id: str) -> dict[str, Any]:
         return _backtest_job_service.cancel(job_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Backtest job was not found") from error
-
-
-@app.post("/backtest/compare-oi-filter")
-async def compare_oi_filter(request: OiFilterComparisonRequest) -> dict[str, Any]:
-    async with _run_lock:
-        try:
-            return await asyncio.to_thread(
-                run_oi_filter_comparison, request, get_store()
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except DhanAPIError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @app.post("/backtest/optimize-atr")

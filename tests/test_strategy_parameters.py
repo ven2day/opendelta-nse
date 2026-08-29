@@ -6,12 +6,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from backtest_api import BacktestRequest, MarketAlignedConfigurationRequest
+from backtest_api import BacktestRequest, VwapPullbackConfigurationRequest
 from strategy_parameters import parameter_definitions
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MARKET = "market_aligned_rsi_scalper"
+MARKET = "market_aligned_vwap_pullback_scalper"
 
 
 def _market_defaults() -> dict[str, object]:
@@ -24,18 +24,17 @@ def _market_defaults() -> dict[str, object]:
 @pytest.mark.parametrize(
     ("field", "value", "companions"),
     [
-        ("maximumIntrabarRangePct", 5, {}),
-        ("maximumIntrabarRangePct", 5.0, {}),
-        ("maximumIntrabarRangePct", 5.00, {}),
-        ("targetPct", 0.5, {}),
-        ("oiVolatilityPriceRisePct", 0.25, {}),
-        ("oiOptionsWeight", 0.35, {"oiFuturesWeight": 0.35, "oiSpotWeight": 0.30}),
-        ("oiMinimumCoverage", 0.65, {}),
-        ("minimumRvol", 1.5, {}),
-        ("oiBullishThreshold", 20, {}),
-        ("oiStronglyBullishThreshold", 60, {}),
-        ("minimumAlignmentScore", 90, {}),
-        ("oiElevatedQualityThreshold", 95, {}),
+        ("buyCostBps", 5, {}),
+        ("buyCostBps", 5.0, {}),
+        ("buyCostBps", 5.00, {}),
+        ("maximumEntryGapAtr", 0.5, {}),
+        ("pullbackApproachAtr", 0.25, {}),
+        ("minimumStopPct", 0.35, {}),
+        ("volatilityStopAtr", 0.65, {}),
+        ("rewardRiskRatio", 1.5, {}),
+        ("maximumHoldingBars", 20, {}),
+        ("minimumQualityScore", 60, {}),
+        ("maximumTriggerRsi", 90, {}),
         ("minimumAverageTradedValue", 10000, {}),
     ],
 )
@@ -47,7 +46,7 @@ def test_normal_numeric_values_are_accepted(
     payload = _market_defaults()
     payload.update(companions)
     payload[field] = value
-    request = MarketAlignedConfigurationRequest(**payload)
+    request = VwapPullbackConfigurationRequest(**payload)
     assert getattr(request, field) == value
 
 
@@ -57,19 +56,19 @@ def test_normal_numeric_values_are_accepted(
         "rsiLength",
         "maximumHoldingBars",
         "maximumTradesPerDay",
-        "maximumOpenPositions",
-        "oiLookbackBars",
+        "maximumConcurrentTrades",
+        "emaSlopeLookbackBars",
     ],
 )
 def test_integer_counts_reject_fractional_values(field: str) -> None:
     payload = _market_defaults()
     payload[field] = 2.5
     with pytest.raises(ValidationError):
-        MarketAlignedConfigurationRequest(**payload)
+        VwapPullbackConfigurationRequest(**payload)
 
 
 def test_frontend_definitions_are_the_backend_defaults_and_limits() -> None:
-    schema = MarketAlignedConfigurationRequest.model_json_schema()["properties"]
+    schema = VwapPullbackConfigurationRequest.model_json_schema()["properties"]
     for definition in parameter_definitions(MARKET):
         if definition["type"] not in {"number", "integer"}:
             continue
@@ -107,18 +106,18 @@ def test_percentage_and_weight_steps_have_no_offset_mismatch() -> None:
 
 def test_related_fields_are_rejected_by_authoritative_validation() -> None:
     payload = _market_defaults()
-    payload.update(rsiArmLow=35, rsiArmHigh=35)
-    with pytest.raises(ValidationError, match="arm low < arm high"):
-        MarketAlignedConfigurationRequest(**payload)
+    payload.update(rsiPullbackMinimum=50, rsiPullbackMaximum=50)
+    with pytest.raises(ValidationError, match="pullback minimum < pullback maximum"):
+        VwapPullbackConfigurationRequest(**payload)
 
     payload = _market_defaults()
-    payload.update(entryStartTime="14:45", lastEntryTime="09:20")
+    payload.update(entryStartTime="14:45", lastEntryTime="09:30")
     with pytest.raises(ValidationError, match="entry start < last entry"):
-        MarketAlignedConfigurationRequest(**payload)
+        VwapPullbackConfigurationRequest(**payload)
 
 
 def test_recommended_defaults_are_runnable() -> None:
-    request = MarketAlignedConfigurationRequest(**_market_defaults())
-    assert request.minimumAlignmentScore == 85
+    request = VwapPullbackConfigurationRequest(**_market_defaults())
+    assert request.maximumTriggerRsi == 65
     assert request.maximumTradesPerDay == 5
-    assert request.oiMode == "ADVISORY"
+    assert request.oiMode == "OFF"

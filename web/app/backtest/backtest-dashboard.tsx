@@ -39,13 +39,21 @@ import {
   type RsiExitComparisonResponse,
 } from "./rsi-exit-comparison-results";
 import {
-  NumericField,
   parameterDefinition,
   parameterDefinitions,
   strategyDefaults,
 } from "./strategy-parameters";
 import { JsonConfigurationEditor } from "./json-configuration-editor";
 import { createJsonConfiguration } from "./json-configuration.mjs";
+import {
+  VwapPullbackSettingsPanel,
+  VWAP_PULLBACK_STRATEGY_KEY,
+  type VwapPullbackSettings,
+} from "./vwap-pullback-settings";
+import {
+  VwapPullbackResults,
+  type VwapPullbackResponse,
+} from "./vwap-pullback-results";
 import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
 import {
   backtestHistorySummary,
@@ -169,7 +177,7 @@ type BacktestResponse = {
   warnings: string[];
 };
 
-type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse) & { detail?: string };
+type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse) & { detail?: string };
 type BacktestJobStatus = {
   jobId: string;
   status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETE" | "FAILED";
@@ -188,6 +196,22 @@ type BacktestJobStatus = {
   error: string | null;
   detail?: string;
 };
+
+type RetiredMarketAlignedResponse = {
+  metadata: {
+    runId: string;
+    strategyMode: "market_aligned_rsi_scalper";
+    strategyName?: string;
+    generatedAt?: string;
+    completedAt?: string;
+    durationYears?: number;
+    timeframe?: string;
+  };
+  results: Array<Record<string, unknown>>;
+  errors: Array<{ symbol: string; message: string }>;
+  warnings: string[];
+  summary?: Record<string, unknown>;
+};
 type RunProgress = {
   completed: number;
   total: number;
@@ -201,57 +225,18 @@ type RunProgress = {
   stage?: string;
   workers?: number;
 };
-type StrategyMode = "rsi_range" | "rsi_recovery" | "market_aligned_rsi_scalper";
-type OiFilterMode = "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
-type MarketAlignedPreset = "Recommended" | "Strict" | "Custom";
-type OiHistoryStatus = {
-  state: string;
-  request?: { fromDate?: string; toDate?: string; strikesEachSide?: number };
-  optionRowsImported?: number;
-  regimeSnapshotsCreated?: number;
-  enforceableSnapshots?: number;
-  historicalDepthAvailable?: boolean;
-  enforcementReady?: boolean;
-  reason?: string;
-};
-type OiFilterComparisonResponse = {
-  metadata: { runId: string; generatedAt: string; researchLabel: string; defaultOiMode: "ADVISORY" };
-  comparison: {
-    tradesAccepted: number;
-    tradesRejected: number;
-    tradesRejectedByStrongBearishOi: number;
-    tradesRejectedByBearishOi: number;
-    tradesRejectedByVolatilityExpansion: number;
-    tradesSkippedForMissingData: number;
-    rejectedTradesThatWouldHaveWon: number;
-    rejectedTradesThatWouldHaveLost: number;
-    falseRejectionRate: number;
-    stopExitsAvoided: number;
-    netPnlChange: number | null;
-    profitFactorChange: number | null;
-    expectancyChange: number | null;
-    drawdownChange: number | null;
-    winRateChange: number | null;
-    tradeCountChange: number | null;
-    advisoryExecutionIdentical: boolean;
-  };
-  walkForwardValidation: { method: string; complete: boolean; folds: Array<Record<string, string | number | boolean | null>> };
-  acceptance: { passed: boolean; defaultMayBeEnabled: boolean; reason: string };
-  runs: Record<OiFilterMode, { summary: Record<string, unknown>; errors: Array<{ symbol: string; message: string }> }>;
-  detail?: string;
-};
-
-type StoredBacktest = BacktestHistoryEntry<BacktestResponse | RecoveryBacktestResponse>;
+type StrategyMode = "rsi_range" | "rsi_recovery" | "market_aligned_vwap_pullback_scalper";
+type StoredBacktest = BacktestHistoryEntry<BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse>;
 type StoredBacktestSummary = BacktestHistorySummary;
 
 const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
-  market_aligned_rsi_scalper: "Market-Aligned RSI Scalper",
+  market_aligned_vwap_pullback_scalper: "Market-Aligned VWAP Pullback Scalper",
 };
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
-const marketRecommendedDefaults = strategyDefaults("market_aligned_rsi_scalper");
+const marketRecommendedDefaults = strategyDefaults(VWAP_PULLBACK_STRATEGY_KEY);
 const rangeRecommendedDefaults = strategyDefaults("rsi_range");
 const recoveryRecommendedDefaults = strategyDefaults("rsi_recovery");
 
@@ -269,11 +254,19 @@ function numericConstraints(strategy: "rsi_range" | "rsi_recovery", key: string)
   };
 }
 
-function isRecoveryResponse(value: BacktestResponse | RecoveryBacktestResponse | null): value is RecoveryBacktestResponse {
-  return value?.metadata.strategyMode === "rsi_recovery" || value?.metadata.strategyMode === "market_aligned_rsi_scalper";
+function isRecoveryResponse(value: BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse | null): value is RecoveryBacktestResponse {
+  return value?.metadata.strategyMode === "rsi_recovery";
 }
 
-function isRangeResponse(value: BacktestResponse | RecoveryBacktestResponse | null): value is BacktestResponse {
+function isVwapPullbackResponse(value: BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse | null): value is VwapPullbackResponse {
+  return value?.metadata.strategyMode === VWAP_PULLBACK_STRATEGY_KEY;
+}
+
+function isRetiredMarketAlignedResponse(value: BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse | null): value is RetiredMarketAlignedResponse {
+  return value?.metadata.strategyMode === "market_aligned_rsi_scalper";
+}
+
+function isRangeResponse(value: BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse | null): value is BacktestResponse {
   return value?.metadata.strategyMode === "rsi_range";
 }
 
@@ -660,6 +653,7 @@ function PerformanceChart({
 export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
+  const [vwapPullbackSettings, setVwapPullbackSettings] = useState<VwapPullbackSettings>({ ...marketRecommendedDefaults });
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const [symbolRegistryError, setSymbolRegistryError] = useState<string | null>(null);
@@ -709,56 +703,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const [upperRsiLevel, setUpperRsiLevel] = useState(defaultNumber("rsi_recovery", "upperRsiLevel"));
   const [hardStopLossPct, setHardStopLossPct] = useState(defaultNumber("rsi_recovery", "hardStopLossPct"));
   const [rsiExitExecutionModel, setRsiExitExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
-  const [oiFilterMode, setOiFilterMode] = useState<OiFilterMode>("ADVISORY");
-  const [signalRsiMaximum, setSignalRsiMaximum] = useState(50);
-  const [minimumRvol, setMinimumRvol] = useState(1.5);
-  const [minimumNiftyTrendScore, setMinimumNiftyTrendScore] = useState(25);
-  const [minimumBreadthPct, setMinimumBreadthPct] = useState(45);
-  const [minimumBreadthSymbols, setMinimumBreadthSymbols] = useState(10);
-  const [minimumSectorMembers, setMinimumSectorMembers] = useState(2);
-  const [relativeStrengthLookbackBars, setRelativeStrengthLookbackBars] = useState(3);
-  const [roomLookbackBars, setRoomLookbackBars] = useState(20);
-  const [minimumAverageTradedValue, setMinimumAverageTradedValue] = useState(100000);
-  const [maximumIntrabarRangePct, setMaximumIntrabarRangePct] = useState(5);
-  const [minimumAlignmentScore, setMinimumAlignmentScore] = useState(85);
-  const [minimumSectorBullishPct, setMinimumSectorBullishPct] = useState(50);
-  const [marketPreset, setMarketPreset] = useState<MarketAlignedPreset>("Recommended");
-  const [entryStartTime, setEntryStartTime] = useState("09:20");
-  const [lastEntryTime, setLastEntryTime] = useState("14:45");
-  const [squareOffTime, setSquareOffTime] = useState("15:15");
-  const [marketStopLossPct, setMarketStopLossPct] = useState(1);
-  const [maximumHoldingBars, setMaximumHoldingBars] = useState(12);
-  const [maximumTradesPerDay, setMaximumTradesPerDay] = useState(5);
-  const [maximumOpenPositions, setMaximumOpenPositions] = useState(3);
-  const [maximumDailyLossPct, setMaximumDailyLossPct] = useState(2);
-  const [stopAfterFirstLoss, setStopAfterFirstLoss] = useState(false);
-  const [cooldownBars, setCooldownBars] = useState(1);
-  const [maximumSpreadPct, setMaximumSpreadPct] = useState(0.5);
-  const [marketDataStaleSeconds, setMarketDataStaleSeconds] = useState(360);
-  const [oiMinimumConfidence, setOiMinimumConfidence] = useState(0.5);
   const [numericErrors, setNumericErrors] = useState<Record<string, string>>({});
-  const [marketFormRevision, setMarketFormRevision] = useState(0);
-  const [oiHistoryStatus, setOiHistoryStatus] = useState<OiHistoryStatus | null>(null);
-  const [oiLookbackBars, setOiLookbackBars] = useState(3);
-  const [oiStrikesEachSide, setOiStrikesEachSide] = useState(5);
-  const [oiMinimumPriceChangePct, setOiMinimumPriceChangePct] = useState(0.05);
-  const [oiMinimumChangePct, setOiMinimumChangePct] = useState(0.5);
-  const [oiMaximumSpreadPct, setOiMaximumSpreadPct] = useState(20);
-  const [oiStaleDataSeconds, setOiStaleDataSeconds] = useState(360);
-  const [oiMinimumValidContractFraction, setOiMinimumValidContractFraction] = useState(0.5);
-  const [oiMinimumFuturesVolume, setOiMinimumFuturesVolume] = useState(1);
-  const [oiVolatilityPriceRisePct, setOiVolatilityPriceRisePct] = useState(0.25);
-  const [oiVolatilityIvRise, setOiVolatilityIvRise] = useState(0.5);
-  const [oiMinimumCoverage, setOiMinimumCoverage] = useState(0.65);
-  const [oiOptionsWeight, setOiOptionsWeight] = useState(0.35);
-  const [oiFuturesWeight, setOiFuturesWeight] = useState(0.35);
-  const [oiSpotWeight, setOiSpotWeight] = useState(0.30);
-  const [oiStronglyBearishThreshold, setOiStronglyBearishThreshold] = useState(-60);
-  const [oiBearishThreshold, setOiBearishThreshold] = useState(-20);
-  const [oiBullishThreshold, setOiBullishThreshold] = useState(20);
-  const [oiStronglyBullishThreshold, setOiStronglyBullishThreshold] = useState(60);
-  const [oiElevatedQualityThreshold, setOiElevatedQualityThreshold] = useState(95);
-  const [oiFailPolicy, setOiFailPolicy] = useState<"SKIP" | "ALLOW">("SKIP");
 
   const setNumericValidity = (key: string, value: string | null) => {
     setNumericErrors((current) => {
@@ -771,8 +716,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       return current[key] === value ? current : { ...current, [key]: value };
     });
   };
-
-  const markMarketPresetCustom = () => setMarketPreset("Custom");
 
   const applyRangeValues = (values: Record<string, unknown>) => {
     setEntryLow(Number(values.entryLow ?? rangeRecommendedDefaults.entryLow));
@@ -821,110 +764,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     setRsiExitExecutionModel(String(values.rsiExitExecutionModel ?? recoveryRecommendedDefaults.rsiExitExecutionModel) as typeof rsiExitExecutionModel);
     setOptimization(null);
     setRsiComparison(null);
-    setOiComparison(null);
     setNumericErrors({});
   };
 
   const applyMarketValues = (values: Record<string, number | string | boolean>) => {
-    const numeric = (key: string) => Number(values[key] ?? marketRecommendedDefaults[key]);
-    setRsiLength(numeric("rsiLength"));
-    setRsiArmLow(numeric("rsiArmLow"));
-    setRsiArmHigh(numeric("rsiArmHigh"));
-    setRsiRecovery(numeric("rsiRecovery"));
-    setSignalRsiMaximum(numeric("signalRsiMaximum"));
-    setSetupExpiryBars(numeric("setupExpiryBars"));
-    setEmaFast(numeric("emaFast"));
-    setEmaSlow(numeric("emaSlow"));
-    setVolumeEma(numeric("rvolPeriod"));
-    setMinimumRvol(numeric("minimumRvol"));
-    setMinimumNiftyTrendScore(numeric("minimumNiftyTrendScore"));
-    setMinimumSectorBullishPct(numeric("minimumSectorBullishPct"));
-    setMinimumBreadthPct(numeric("minimumBreadthPct"));
-    setTargetPct(numeric("targetPct"));
-    setMarketStopLossPct(numeric("stopLossPct"));
-    setQuantityPerTrade(numeric("quantityPerTrade"));
-    setMaximumHoldingBars(numeric("maximumHoldingBars"));
-    setMaximumTradesPerDay(numeric("maximumTradesPerDay"));
-    setMaximumOpenPositions(numeric("maximumOpenPositions"));
-    setMinimumAlignmentScore(numeric("minimumAlignmentScore"));
-    setBuyCostBps(numeric("buyCostBps"));
-    setSellCostBps(numeric("sellCostBps"));
-    setSlippageBps(numeric("slippageBps"));
-    setMaximumCapitalPerPosition(numeric("maximumCapitalPerPosition"));
-    setMaximumDailyLossPct(numeric("maximumDailyLossPct"));
-    setCooldownBars(numeric("cooldownBars"));
-    setMaximumSpreadPct(numeric("maximumSpreadPct"));
-    setMinimumAverageTradedValue(numeric("minimumAverageTradedValue"));
-    setRoomLookbackBars(numeric("roomLookbackBars"));
-    setOiMinimumConfidence(numeric("oiMinimumConfidence"));
-    setOiStronglyBearishThreshold(numeric("oiStronglyBearishThreshold"));
-    setOiStaleDataSeconds(numeric("oiStaleDataSeconds"));
-    setRelativeStrengthLookbackBars(numeric("relativeStrengthLookbackBars"));
-    setMinimumBreadthSymbols(numeric("minimumBreadthSymbols"));
-    setMinimumSectorMembers(numeric("minimumSectorMembers"));
-    setMaximumIntrabarRangePct(numeric("maximumIntrabarRangePct"));
-    setMarketDataStaleSeconds(numeric("marketDataStaleSeconds"));
-    setOiLookbackBars(numeric("oiLookbackBars"));
-    setOiStrikesEachSide(numeric("oiStrikesEachSide"));
-    setOiMinimumPriceChangePct(numeric("oiMinimumPriceChangePct"));
-    setOiMinimumChangePct(numeric("oiMinimumChangePct"));
-    setOiMaximumSpreadPct(numeric("oiMaximumSpreadPct"));
-    setOiMinimumValidContractFraction(numeric("oiMinimumValidContractFraction"));
-    setOiMinimumFuturesVolume(numeric("oiMinimumFuturesVolume"));
-    setOiVolatilityPriceRisePct(numeric("oiVolatilityPriceRisePct"));
-    setOiVolatilityIvRise(numeric("oiVolatilityIvRise"));
-    setOiMinimumCoverage(numeric("oiMinimumCoverage"));
-    setOiOptionsWeight(numeric("oiOptionsWeight"));
-    setOiFuturesWeight(numeric("oiFuturesWeight"));
-    setOiSpotWeight(numeric("oiSpotWeight"));
-    setOiBearishThreshold(numeric("oiBearishThreshold"));
-    setOiBullishThreshold(numeric("oiBullishThreshold"));
-    setOiStronglyBullishThreshold(numeric("oiStronglyBullishThreshold"));
-    setOiElevatedQualityThreshold(numeric("oiElevatedQualityThreshold"));
-    setExecutionModel(String(values.executionModel ?? "SIGNAL_CLOSE") as typeof executionModel);
-    setPositionSizing(String(values.positionSizing ?? "FIXED_QUANTITY") as typeof positionSizing);
-    setEntryStartTime(String(values.entryStartTime ?? "09:20"));
-    setLastEntryTime(String(values.lastEntryTime ?? "14:45"));
-    setSquareOffTime(String(values.squareOffTime ?? "15:15"));
-    setStopAfterFirstLoss(Boolean(values.stopAfterFirstLoss));
-    setOiFilterMode(String(values.oiMode ?? "ADVISORY") as OiFilterMode);
-    setOiFailPolicy(String(values.oiFailPolicy ?? "SKIP") as typeof oiFailPolicy);
+    setVwapPullbackSettings({ ...marketRecommendedDefaults, ...values });
     setNumericErrors({});
-    setMarketFormRevision((current) => current + 1);
-  };
-
-  const applyMarketPreset = (preset: Exclude<MarketAlignedPreset, "Custom">) => {
-    const values = {
-      ...marketRecommendedDefaults,
-      ...(preset === "Strict" ? { minimumAlignmentScore: 90, maximumTradesPerDay: 2, oiMode: "ADVISORY" } : {}),
-    };
-    applyMarketValues(values);
-    setMarketPreset(preset);
-  };
-
-  const restoreExpertOiDefaults = () => {
-    const numeric = (key: string) => Number(marketRecommendedDefaults[key]);
-    setOiLookbackBars(numeric("oiLookbackBars"));
-    setOiStrikesEachSide(numeric("oiStrikesEachSide"));
-    setOiMinimumPriceChangePct(numeric("oiMinimumPriceChangePct"));
-    setOiMinimumChangePct(numeric("oiMinimumChangePct"));
-    setOiMaximumSpreadPct(numeric("oiMaximumSpreadPct"));
-    setOiMinimumValidContractFraction(numeric("oiMinimumValidContractFraction"));
-    setOiMinimumFuturesVolume(numeric("oiMinimumFuturesVolume"));
-    setOiVolatilityPriceRisePct(numeric("oiVolatilityPriceRisePct"));
-    setOiVolatilityIvRise(numeric("oiVolatilityIvRise"));
-    setOiMinimumCoverage(numeric("oiMinimumCoverage"));
-    setOiOptionsWeight(numeric("oiOptionsWeight"));
-    setOiFuturesWeight(numeric("oiFuturesWeight"));
-    setOiSpotWeight(numeric("oiSpotWeight"));
-    setOiBearishThreshold(numeric("oiBearishThreshold"));
-    setOiBullishThreshold(numeric("oiBullishThreshold"));
-    setOiStronglyBullishThreshold(numeric("oiStronglyBullishThreshold"));
-    setOiElevatedQualityThreshold(numeric("oiElevatedQualityThreshold"));
-    setOiFailPolicy(String(marketRecommendedDefaults.oiFailPolicy ?? "SKIP") as typeof oiFailPolicy);
-    setNumericErrors({});
-    setMarketFormRevision((current) => current + 1);
-    markMarketPresetCustom();
   };
 
   const currentStrategyValues = (strategy: StrategyMode): Record<string, unknown> => {
@@ -940,61 +785,28 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       executionModel, exitModel, exitProtectionEnabled, positionSizing,
       rsiExitExecutionModel, timeExit: "NEXT_TRADING_SESSION_OPEN",
     };
-    return {
-      executionModel, positionSizing, entryStartTime, lastEntryTime, squareOffTime,
-      rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
-      setupExpiryBars, emaFast, emaSlow, rvolPeriod: volumeEma, minimumRvol,
-      minimumNiftyTrendScore, minimumSectorBullishPct, minimumBreadthPct,
-      targetPct, stopLossPct: marketStopLossPct, quantityPerTrade,
-      maximumHoldingBars, maximumTradesPerDay, maximumOpenPositions,
-      minimumAlignmentScore, oiMode: oiFilterMode, buyCostBps, sellCostBps,
-      slippageBps, maximumCapitalPerPosition, maximumDailyLossPct,
-      stopAfterFirstLoss, cooldownBars, maximumSpreadPct, minimumAverageTradedValue,
-      roomLookbackBars, oiMinimumConfidence, oiStronglyBearishThreshold,
-      oiStaleDataSeconds, relativeStrengthLookbackBars, minimumBreadthSymbols,
-      minimumSectorMembers, maximumIntrabarRangePct, marketDataStaleSeconds,
-      oiLookbackBars, oiStrikesEachSide, oiMinimumPriceChangePct,
-      oiMinimumChangePct, oiMaximumSpreadPct, oiMinimumValidContractFraction,
-      oiMinimumFuturesVolume, oiVolatilityPriceRisePct, oiVolatilityIvRise,
-      oiMinimumCoverage, oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
-      oiBearishThreshold, oiBullishThreshold, oiStronglyBullishThreshold,
-      oiElevatedQualityThreshold, oiFailPolicy,
-    };
+    return vwapPullbackSettings;
   };
 
   const marketRelationshipErrors = useMemo(() => {
     const errors: Record<string, string> = {};
-    if (!(rsiArmLow < rsiArmHigh)) errors.rsiArmHigh = "RSI arm minimum must be below RSI arm maximum.";
-    if (!(rsiArmHigh < rsiRecovery)) errors.rsiRecovery = "RSI arm maximum must be below the recovery level.";
-    if (!(rsiRecovery <= signalRsiMaximum)) errors.signalRsiMaximum = "Maximum signal RSI must be at least the recovery level.";
-    if (!(emaFast < emaSlow)) errors.emaSlow = "EMA fast length must be below EMA slow length.";
-    if (!(entryStartTime < lastEntryTime && lastEntryTime < squareOffTime)) errors.sessionTimes = "Use entry start < last entry < square-off.";
-    const weightTotal = oiOptionsWeight + oiFuturesWeight + oiSpotWeight;
-    if (Math.abs(weightTotal - 1) > 1e-9) errors.oiWeights = "Options, futures and spot weights must total 1.00.";
-    if (!(oiStronglyBearishThreshold < oiBearishThreshold && oiBearishThreshold < oiBullishThreshold && oiBullishThreshold < oiStronglyBullishThreshold)) errors.oiThresholds = "Use strongly bearish < bearish < bullish < strongly bullish.";
+    const setting = (key: string) => Number(vwapPullbackSettings[key]);
+    if (!(setting("rsiPullbackMinimum") < setting("rsiPullbackMaximum")
+      && setting("rsiPullbackMaximum") <= setting("rsiTriggerLevel")
+      && setting("rsiTriggerLevel") < setting("maximumTriggerRsi"))) {
+      errors.rsi = "Use pullback minimum < pullback maximum <= trigger < maximum trigger RSI.";
+    }
+    if (!(setting("emaFast") < setting("emaSlow"))) errors.ema = "EMA fast length must be below EMA slow length.";
+    if (!(String(vwapPullbackSettings.entryStartTime) < String(vwapPullbackSettings.lastEntryTime)
+      && String(vwapPullbackSettings.lastEntryTime) < String(vwapPullbackSettings.squareOffTime))) {
+      errors.sessionTimes = "Use entry start < last entry < square-off.";
+    }
+    if (!(setting("minimumStopPct") <= setting("maximumStopPct"))) errors.stop = "Minimum stop cannot exceed maximum stop.";
     return errors;
-  }, [emaFast, emaSlow, entryStartTime, lastEntryTime, oiBearishThreshold, oiBullishThreshold, oiFuturesWeight, oiOptionsWeight, oiSpotWeight, oiStronglyBearishThreshold, oiStronglyBullishThreshold, rsiArmHigh, rsiArmLow, rsiRecovery, signalRsiMaximum, squareOffTime]);
+  }, [vwapPullbackSettings]);
 
   const marketFormInvalid = Object.keys(numericErrors).length > 0 || Object.keys(marketRelationshipErrors).length > 0;
 
-  useEffect(() => {
-    let active = true;
-    void fetch("/api/backtest?action=oi-history-status", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-      cache: "no-store",
-    }).then(async (response) => {
-      const body = await response.text();
-      if (!response.ok) throw new Error("Historical OI status is unavailable");
-      return JSON.parse(body) as OiHistoryStatus;
-    }).then((status) => {
-      if (active) setOiHistoryStatus(status);
-    }).catch(() => {
-      if (active) setOiHistoryStatus(null);
-    });
-    return () => { active = false; };
-  }, []);
   const [optimizerGrid, setOptimizerGrid] = useState({
     stopAtrMultipliers: "0.75, 1.00, 1.25, 1.50, 2.00",
     rewardRiskRatios: "1.00, 1.25, 1.50, 2.00",
@@ -1014,11 +826,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   });
   const [comparingRsiExits, setComparingRsiExits] = useState(false);
   const [rsiComparison, setRsiComparison] = useState<RsiExitComparisonResponse | null>(null);
-  const [comparingOi, setComparingOi] = useState(false);
-  const [oiComparison, setOiComparison] = useState<OiFilterComparisonResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | null>(null);
+  const [response, setResponse] = useState<BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse | null>(null);
   const [backtestHistory, setBacktestHistory] = useState<StoredBacktestSummary[]>([]);
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
   const [loadingHistoryId, setLoadingHistoryId] = useState<string | null>(null);
@@ -1078,7 +888,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     void (async () => {
       let browserEntries: StoredBacktest[] = [];
       try {
-        browserEntries = await readBacktestHistory<BacktestResponse | RecoveryBacktestResponse>();
+        browserEntries = await readBacktestHistory<BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse>();
         if (active && browserEntries.length) {
           const latest = browserEntries[0];
           setBacktestHistory(browserEntries.map(backtestHistorySummary));
@@ -1100,7 +910,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         if (accountEntries.length) {
           const latestSummary = accountEntries[0];
           const cached = browserEntries.find((entry) => entry.id === latestSummary.id);
-          const latest = cached ?? await readAccountBacktestResult<BacktestResponse | RecoveryBacktestResponse>(latestSummary.id);
+          const latest = cached ?? await readAccountBacktestResult<BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse>(latestSummary.id);
           if (!active) return;
           setResponse(latest.response);
           setActiveHistoryId(latest.id);
@@ -1123,10 +933,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     try {
       let stored: StoredBacktest;
       try {
-        stored = await readAccountBacktestResult<BacktestResponse | RecoveryBacktestResponse>(item.id);
+        stored = await readAccountBacktestResult<BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse>(item.id);
         void saveBacktestHistory(stored).catch(() => undefined);
       } catch {
-        const browserEntries = await readBacktestHistory<BacktestResponse | RecoveryBacktestResponse>();
+        const browserEntries = await readBacktestHistory<BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | RetiredMarketAlignedResponse>();
         const cached = browserEntries.find((entry) => entry.id === item.id);
         if (!cached) throw new Error("Saved backtest result is unavailable");
         stored = cached;
@@ -1136,7 +946,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       setError(null);
       setOptimization(null);
       setRsiComparison(null);
-      setOiComparison(null);
       setDetailSymbol(isRangeResponse(stored.response) ? stored.response.results[0]?.symbol ?? null : null);
       setHistoryMessage(null);
     } catch (caught) {
@@ -1150,7 +959,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     window.localStorage.setItem(`vento-nse-backtest-preset:${strategyMode}`, JSON.stringify({
       ...currentStrategyValues(strategyMode),
       timeframe,
-      ...(strategyMode === "market_aligned_rsi_scalper" ? { marketPreset } : {}),
     }));
 
     let saved: Record<string, unknown> = {};
@@ -1159,10 +967,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     } catch {
       saved = {};
     }
-    if (next === "market_aligned_rsi_scalper") {
+    if (next === VWAP_PULLBACK_STRATEGY_KEY) {
       const values = { ...marketRecommendedDefaults, ...saved };
       applyMarketValues(values as Record<string, number | string | boolean>);
-      setMarketPreset((values.marketPreset as MarketAlignedPreset | undefined) ?? "Recommended");
       setExitModel("LEGACY_FIXED_TARGET");
     } else if (next === "rsi_recovery") {
       applyRecoveryValues({ ...recoveryRecommendedDefaults, ...saved });
@@ -1174,8 +981,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     const savedTimeframe = typeof saved.timeframe === "string" && timeframes.includes(saved.timeframe as typeof timeframes[number])
       ? saved.timeframe as typeof timeframes[number]
       : next === "rsi_range" ? "1d" : "5m";
-    setTimeframe(next === "market_aligned_rsi_scalper" ? "5m" : savedTimeframe);
-    setResponse(null); setActiveHistoryId(null); setError(null); setOiComparison(null);
+    setTimeframe(next === VWAP_PULLBACK_STRATEGY_KEY ? "5m" : savedTimeframe);
+    setResponse(null); setActiveHistoryId(null); setError(null);
   };
 
   const choices = useMemo(() => {
@@ -1218,9 +1025,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         setError("RSI ranges must be ordered from the low entry range to the high exit range.");
         return;
       }
-    } else if (strategyMode === "market_aligned_rsi_scalper") {
+    } else if (strategyMode === VWAP_PULLBACK_STRATEGY_KEY) {
       if (marketFormInvalid) {
-        setError(Object.values(numericErrors)[0] ?? Object.values(marketRelationshipErrors)[0] ?? "Review the highlighted Market-Aligned settings.");
+        setError(Object.values(numericErrors)[0] ?? Object.values(marketRelationshipErrors)[0] ?? "Review the highlighted VWAP pullback settings.");
         return;
       }
     } else {
@@ -1297,7 +1104,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     setActiveHistoryId(null);
     setOptimization(null);
     setRsiComparison(null);
-    setOiComparison(null);
     setDetailSymbol(null);
     setRunProgress({ completed: 0, total: symbolsToRun.length });
     const controller = new AbortController();
@@ -1305,10 +1111,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     let completedCount = 0;
     const runId = crypto.randomUUID();
     try {
-      let aggregate: BacktestResponse | RecoveryBacktestResponse | null = null;
+      let aggregate: BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | null = null;
       // Market breadth and OI portfolio capacity require one chronological cross-symbol stream.
       const batchSize = 10;
-      const effectiveBatchSize = strategyMode === "market_aligned_rsi_scalper" ? symbolsToRun.length : batchSize;
+      const effectiveBatchSize = strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? symbolsToRun.length : batchSize;
       for (let offset = 0; offset < symbolsToRun.length; offset += effectiveBatchSize) {
         const batch = symbolsToRun.slice(offset, offset + effectiveBatchSize);
         const strategyPayload = strategyMode === "rsi_range" ? {
@@ -1316,27 +1122,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           entryHigh,
           exitLow,
           exitHigh,
-        } : strategyMode === "market_aligned_rsi_scalper" ? {
-          marketAlignedConfiguration: {
-            rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
-            emaFast, emaSlow, rvolPeriod: volumeEma, minimumRvol,
-            relativeStrengthLookbackBars, roomLookbackBars, targetPct,
-            setupExpiryBars, executionModel, positionSizing,
-            entryStartTime, lastEntryTime, squareOffTime, stopLossPct: marketStopLossPct,
-            quantityPerTrade, maximumHoldingBars, maximumTradesPerDay, maximumOpenPositions,
-            buyCostBps, sellCostBps, slippageBps, maximumCapitalPerPosition,
-            maximumDailyLossPct, stopAfterFirstLoss, cooldownBars, maximumSpreadPct,
-            minimumNiftyTrendScore, minimumSectorBullishPct, minimumBreadthPct, minimumBreadthSymbols,
-            minimumSectorMembers, minimumAverageTradedValue, maximumIntrabarRangePct,
-            minimumAlignmentScore, marketDataStaleSeconds,
-            oiMode: oiFilterMode, oiLookbackBars, oiStrikesEachSide,
-            oiMinimumPriceChangePct, oiMinimumChangePct, oiMaximumSpreadPct,
-            oiStaleDataSeconds, oiMinimumConfidence, oiMinimumValidContractFraction, oiMinimumFuturesVolume,
-            oiVolatilityPriceRisePct, oiVolatilityIvRise, oiMinimumCoverage,
-            oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
-            oiStronglyBearishThreshold, oiBearishThreshold, oiBullishThreshold,
-            oiStronglyBullishThreshold, oiElevatedQualityThreshold, oiFailPolicy,
-          },
+        } : strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? {
+          vwapPullbackConfiguration: vwapPullbackSettings,
         } : {
           rsiLength,
           rsiArmLow,
@@ -1384,11 +1171,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           runId,
           durationYears,
           timeframe,
-          cachePolicy: strategyMode === "market_aligned_rsi_scalper" ? cachePolicy : "RUN_AGAIN",
+          cachePolicy: strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? cachePolicy : "RUN_AGAIN",
           ...strategyPayload,
         };
         let payload: BacktestPayload;
-        if (strategyMode === "market_aligned_rsi_scalper") {
+        if (strategyMode === VWAP_PULLBACK_STRATEGY_KEY) {
           const started = await fetch("/api/backtest?action=start-job", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -1446,7 +1233,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           throw new Error(`Backtest service returned incomplete data near ${batch[0]}. Please retry.`);
         }
 
-        if (strategyMode === "rsi_recovery" || strategyMode === "market_aligned_rsi_scalper") {
+        if (strategyMode === "rsi_recovery") {
           if (!isRecoveryResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           // This is a loop-local accumulator, not React state or a prop.
           // eslint-disable-next-line react-hooks/immutability
@@ -1454,7 +1241,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             isRecoveryResponse(aggregate) ? aggregate : null,
             payload,
           );
-        } else {
+        } else if (strategyMode === "rsi_range") {
           if (!isRangeResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           const previous = aggregate as BacktestResponse | null;
           aggregate = previous ? {
@@ -1463,6 +1250,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             errors: [...previous.errors, ...payload.errors],
             warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
           } : payload;
+        } else {
+          if (!isVwapPullbackResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
+          aggregate = payload;
         }
 
         const completed = Math.min(offset + batch.length, symbolsToRun.length);
@@ -1470,7 +1260,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         setResponse(aggregate);
         setRunProgress({ completed, total: symbolsToRun.length });
         if (strategyMode === "rsi_range") {
-          setDetailSymbol((current) => current ?? aggregate?.results[0]?.symbol ?? null);
+          setDetailSymbol((current) => current ?? (aggregate as BacktestResponse | null)?.results[0]?.symbol ?? null);
         }
       }
       if (aggregate) {
@@ -1679,70 +1469,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     }
   };
 
-  const compareOiFilter = async () => {
-    const symbolsToRun = useAllSymbols ? availableSymbols : selectedSymbols;
-    if (!symbolsToRun.length) {
-      setError("Select at least one symbol before comparing the OI filter.");
-      return;
-    }
-    const controller = new AbortController();
-    runAbortRef.current = controller;
-    setComparingOi(true);
-    setOiComparison(null);
-    setError(null);
-    try {
-      const result = await fetch("/api/backtest?action=compare-oi-filter", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          symbols: symbolsToRun,
-          strategyMode: "market_aligned_rsi_scalper",
-          universeMode: useAllSymbols ? "all" : "selected",
-          runId: crypto.randomUUID(),
-          durationYears,
-          timeframe,
-          marketAlignedConfiguration: {
-            rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, signalRsiMaximum,
-            emaFast, emaSlow, rvolPeriod: volumeEma, minimumRvol,
-            relativeStrengthLookbackBars, roomLookbackBars, targetPct,
-            setupExpiryBars, executionModel, positionSizing,
-            entryStartTime, lastEntryTime, squareOffTime, stopLossPct: marketStopLossPct,
-            quantityPerTrade, maximumHoldingBars, maximumTradesPerDay, maximumOpenPositions,
-            buyCostBps, sellCostBps, slippageBps, maximumCapitalPerPosition,
-            maximumDailyLossPct, stopAfterFirstLoss, cooldownBars, maximumSpreadPct,
-            minimumNiftyTrendScore, minimumSectorBullishPct, minimumBreadthPct, minimumBreadthSymbols,
-            minimumSectorMembers, minimumAverageTradedValue, maximumIntrabarRangePct,
-            minimumAlignmentScore, marketDataStaleSeconds,
-            oiMode: "ADVISORY", oiLookbackBars, oiStrikesEachSide,
-            oiMinimumPriceChangePct, oiMinimumChangePct, oiMaximumSpreadPct,
-            oiStaleDataSeconds, oiMinimumConfidence, oiMinimumValidContractFraction, oiMinimumFuturesVolume,
-            oiVolatilityPriceRisePct, oiVolatilityIvRise, oiMinimumCoverage,
-            oiOptionsWeight, oiFuturesWeight, oiSpotWeight,
-            oiStronglyBearishThreshold, oiBearishThreshold, oiBullishThreshold,
-            oiStronglyBullishThreshold, oiElevatedQualityThreshold, oiFailPolicy,
-          },
-        }),
-      });
-      const responseBody = await result.text();
-      const payload = JSON.parse(responseBody) as OiFilterComparisonResponse;
-      if (!result.ok) throw new Error(payload.detail ?? "OI filter comparison could not be completed.");
-      setOiComparison(payload);
-    } catch (caught) {
-      if (!(caught instanceof DOMException && caught.name === "AbortError")) {
-        setError(caught instanceof Error ? caught.message : "OI filter comparison could not be completed.");
-      }
-    } finally {
-      runAbortRef.current = null;
-      setComparingOi(false);
-    }
-  };
-
   const changeExitModel = (model: typeof exitModel) => {
     setExitModel(model);
     setOptimization(null);
     setRsiComparison(null);
-    setOiComparison(null);
     if (model === "RSI_PROFIT_RISK_CONTROL") {
       setRsiArmLow(20);
       setRsiArmHigh(35);
@@ -1759,23 +1489,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       setPositionSizing("FIXED_QUANTITY");
     }
   };
-
-  const marketNumber = (
-    parameterKey: string,
-    value: number,
-    setter: (value: number) => void,
-    options: { externalError?: string | null; presetControlled?: boolean; disabled?: boolean } = {},
-  ) => <NumericField
-    key={`${parameterKey}:${marketFormRevision}`}
-    strategy="market_aligned_rsi_scalper"
-    parameterKey={parameterKey}
-    value={value}
-    onValueChange={setter}
-    onValidityChange={setNumericValidity}
-    onManualChange={options.presetControlled ? markMarketPresetCustom : undefined}
-    externalError={options.externalError}
-    disabled={options.disabled}
-  />;
 
   const jsonConfiguration = createJsonConfiguration(strategyMode, {
     symbols: useAllSymbols ? [] : selectedSymbols,
@@ -1807,12 +1520,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       applyRecoveryValues(settings);
     } else {
       applyMarketValues(settings as Record<string, number | string | boolean>);
-      setMarketPreset("Custom");
     }
     setResponse(null);
     setActiveHistoryId(null);
     setError(null);
-    setOiComparison(null);
     return null;
   };
 
@@ -1825,14 +1536,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       setTimeframe("5m");
     } else {
       applyMarketValues(marketRecommendedDefaults);
-      setMarketPreset("Recommended");
       setTimeframe("5m");
     }
     setDurationYears(1);
     setResponse(null);
     setActiveHistoryId(null);
     setError(null);
-    setOiComparison(null);
   };
 
   return (
@@ -1864,13 +1573,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
           <button type="button" className={strategyMode === "rsi_range" ? "active" : ""} onClick={() => switchStrategy("rsi_range")}>RSI Range Strategy</button>
           <button type="button" className={strategyMode === "rsi_recovery" ? "active" : ""} onClick={() => switchStrategy("rsi_recovery")}>RSI Recovery Scalping</button>
-          <button type="button" className={strategyMode === "market_aligned_rsi_scalper" ? "active" : ""} onClick={() => switchStrategy("market_aligned_rsi_scalper")}>Market-Aligned RSI Scalper</button>
+          <button type="button" className={strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? "active" : ""} onClick={() => switchStrategy(VWAP_PULLBACK_STRATEGY_KEY)}>Market-Aligned VWAP Pullback Scalper</button>
         </div>
         <section className="backtest-intro">
-          <div><span className="section-kicker">RSI strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : "High-selectivity RSI scalping aligned with NIFTY, sector, breadth, relative strength, RVOL, liquidity and optional OI context."}</p></div>
+          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : "Controlled RSI pullbacks to VWAP or rising EMAs inside an established intraday uptrend."}</p></div>
           <button type="button" className="method-pill strategy-rule-trigger" aria-label="Hover or focus to view all backtest conditions">
             <Clock3 size={16} />
-            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : "Fourteen point-in-time alignment gates"}; hover for all conditions</span>
+            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : "Completed-candle VWAP pullback"}; hover for all conditions</span>
             <span className="strategy-rules-popover" role="tooltip">
               {strategyMode === "rsi_range" ? <>
                 <strong>Buy / hold / sell conditions</strong>
@@ -1878,13 +1587,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 <span><b>CHECK:</b> When RSI is {exitLow}-{exitHigh}, estimate the next-open sale after entry fee, exit fee, and slippage.</span>
                 <span><b>SELL:</b> Execute only when estimated net profit is at least 1% of the buy cost.</span>
                 <span><b>HOLD:</b> If net profit is below 1%, cancel that exit and wait for a later high-RSI opportunity.</span>
-              </> : strategyMode === "market_aligned_rsi_scalper" ? <>
-                <strong>Market-Aligned RSI BUY conditions</strong>
-                <span>NIFTY trend at least +{minimumNiftyTrendScore}; sector bullish; breadth not bearish; stock outperforms sector and NIFTY.</span>
-                <span>RSI arms at {rsiArmLow} to {rsiArmHigh}, crosses above {rsiRecovery}, and remains at or below {signalRsiMaximum}.</span>
-                <span>Price above session VWAP; EMA{emaFast} above EMA{emaSlow} and rising; RVOL at least {minimumRvol}.</span>
-                <span>Room-to-target, historical liquidity/range quality, and Market Alignment Score at least {minimumAlignmentScore} must pass.</span>
-                <span>OI mode {oiFilterMode} is optional context and never creates a BUY signal or increases size.</span>
+              </> : strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? <>
+                <strong>Market-Aligned VWAP Pullback BUY conditions</strong>
+                <span>EMA9 stays above EMA20 while EMA20 rises, then RSI pulls back between 38 and 50 near VWAP or an EMA.</span>
+                <span>A completed candle must close above the previous high, session VWAP and EMA9 with RSI above 50 and at most 65.</span>
+                <span>RVOL and historical liquidity must pass. NIFTY must not be strongly bearish when context is available.</span>
+                <span>Entry is the next candle open. ATR and pullback structure freeze the stop and 1.5R target.</span>
+                <span>Sector, breadth, relative strength and optional OI are ranking or advisory context, not repeated mandatory gates.</span>
               </> : <>
                 <strong>RSI Recovery BUY and hold conditions</strong>
                 <span><b>ARM:</b> RSI enters {rsiArmLow}–{rsiArmHigh}. Falling below the arm range does not cancel it.</span>
@@ -1942,121 +1651,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           {strategyMode === "rsi_range" ? <>
             <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "entryLow")} value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "entryHigh")} value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
             <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "exitLow")} value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "exitHigh")} value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
-          </> : strategyMode === "market_aligned_rsi_scalper" ? <div className="market-aligned-settings">
-            <section className="market-preset-bar" aria-label="Market-Aligned presets">
-              <div><span className="section-kicker">Preset</span><strong>{marketPreset}</strong><small>Presets are research starting points and do not guarantee profitability.</small></div>
-              <div className="market-preset-actions">
-                {(["Recommended", "Strict"] as const).map((preset) => <button key={preset} type="button" className={marketPreset === preset ? "active" : ""} onClick={() => applyMarketPreset(preset)}>{preset}</button>)}
-                <button type="button" className={marketPreset === "Custom" ? "active" : ""} onClick={markMarketPresetCustom}>Custom</button>
-              </div>
-            </section>
-
-            <details className="market-settings-card market-settings-section market-main-settings" open>
-              <summary><span><span className="section-kicker">Common controls</span><h2 id="market-main-settings-title">Main settings</h2><small>Execution, sizing, session times and primary limits</small></span><ChevronDown size={17} /></summary>
-              <div className="market-settings-grid">
-                <label className="parameter-field"><span className="parameter-label">Execution model</span><small className="parameter-description">Choose the price used after a completed signal bar.</small><select value={executionModel} onChange={(event) => setExecutionModel(event.target.value as typeof executionModel)}><option value="SIGNAL_CLOSE">Signal close</option><option value="NEXT_BAR_OPEN">Next bar open</option></select></label>
-                {marketNumber("quantityPerTrade", quantityPerTrade, setQuantityPerTrade)}
-                <label className="parameter-field"><span className="parameter-label">Position sizing</span><small className="parameter-description">The strategy never increases size because of a bullish OI reading.</small><select value={positionSizing} onChange={(event) => setPositionSizing(event.target.value as typeof positionSizing)}><option value="FIXED_QUANTITY">Fixed quantity</option><option value="RISK_BUDGET">Risk budget</option></select></label>
-                <label className="parameter-field"><span className="parameter-label">Entry start time</span><small className="parameter-description">First IST time at which a new entry may be considered.</small><input type="time" value={entryStartTime} onChange={(event) => setEntryStartTime(event.target.value)} />{marketRelationshipErrors.sessionTimes && <span className="parameter-error" role="alert">{marketRelationshipErrors.sessionTimes}</span>}</label>
-                <label className="parameter-field"><span className="parameter-label">Last entry time</span><small className="parameter-description">No new entries are accepted at or after this IST time.</small><input type="time" value={lastEntryTime} onChange={(event) => setLastEntryTime(event.target.value)} />{marketRelationshipErrors.sessionTimes && <span className="parameter-error" role="alert">{marketRelationshipErrors.sessionTimes}</span>}</label>
-                <label className="parameter-field"><span className="parameter-label">Square-off time</span><small className="parameter-description">Open positions are closed by this IST time.</small><input type="time" value={squareOffTime} onChange={(event) => setSquareOffTime(event.target.value)} />{marketRelationshipErrors.sessionTimes && <span className="parameter-error" role="alert">{marketRelationshipErrors.sessionTimes}</span>}</label>
-                {marketNumber("targetPct", targetPct, setTargetPct)}
-                {marketNumber("stopLossPct", marketStopLossPct, setMarketStopLossPct)}
-                {marketNumber("maximumHoldingBars", maximumHoldingBars, setMaximumHoldingBars)}
-                {marketNumber("maximumTradesPerDay", maximumTradesPerDay, setMaximumTradesPerDay, { presetControlled: true })}
-                {marketNumber("maximumOpenPositions", maximumOpenPositions, setMaximumOpenPositions)}
-                {marketNumber("minimumAlignmentScore", minimumAlignmentScore, setMinimumAlignmentScore, { presetControlled: true })}
-                <label className="parameter-field"><span className="parameter-label">OI mode</span><small className="parameter-description">ADVISORY records point-in-time OI without blocking a trade.</small><select aria-label="NIFTY OI regime filter" value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); markMarketPresetCustom(); }}><option value="OFF">OFF — no OI context</option><option value="ADVISORY">ADVISORY — record only (default)</option><option value="RESEARCH_FILTER">RESEARCH FILTER — experimental</option><option value="ENFORCED">ENFORCED — validated data only</option></select></label>
-                <label className="parameter-field"><span className="parameter-label">Identical completed run</span><small className="parameter-description">Reuse only when the full configuration, universe, code and source-data fingerprints match.</small><select value={cachePolicy} onChange={(event) => setCachePolicy(event.target.value as typeof cachePolicy)}><option value="USE_CACHE">Use cached result</option><option value="RUN_AGAIN">Run again</option></select></label>
-              </div>
-              <small className="market-main-settings-note">Strategy, universe, duration and timeframe are selected above.</small>
-            </details>
-
-            <details className="advanced-settings market-advanced-settings">
-              <summary>Advanced settings</summary>
-              <div className="market-advanced-content">
-            <details className="market-settings-card market-settings-section">
-              <summary><span><strong>Entry filters</strong><small>RSI, EMA and market-alignment gates</small></span><ChevronDown size={17} /></summary>
-              <div className="market-settings-grid">
-                {marketNumber("rsiLength", rsiLength, setRsiLength)}
-                {marketNumber("rsiArmLow", rsiArmLow, setRsiArmLow)}
-                {marketNumber("rsiArmHigh", rsiArmHigh, setRsiArmHigh, { externalError: marketRelationshipErrors.rsiArmHigh })}
-                {marketNumber("rsiRecovery", rsiRecovery, setRsiRecovery, { externalError: marketRelationshipErrors.rsiRecovery })}
-                {marketNumber("signalRsiMaximum", signalRsiMaximum, setSignalRsiMaximum, { externalError: marketRelationshipErrors.signalRsiMaximum })}
-                {marketNumber("setupExpiryBars", setupExpiryBars, setSetupExpiryBars)}
-                {marketNumber("emaFast", emaFast, setEmaFast)}
-                {marketNumber("emaSlow", emaSlow, setEmaSlow, { externalError: marketRelationshipErrors.emaSlow })}
-                {marketNumber("minimumRvol", minimumRvol, setMinimumRvol)}
-                {marketNumber("minimumNiftyTrendScore", minimumNiftyTrendScore, setMinimumNiftyTrendScore)}
-                {marketNumber("minimumSectorBullishPct", minimumSectorBullishPct, setMinimumSectorBullishPct)}
-                {marketNumber("minimumBreadthPct", minimumBreadthPct, setMinimumBreadthPct)}
-              </div>
-            </details>
-
-            <details className="market-settings-card market-settings-section">
-              <summary><span><strong>Risk and execution</strong><small>Costs, capacity, loss and liquidity limits</small></span><ChevronDown size={17} /></summary>
-              <div className="market-settings-grid">
-                {marketNumber("buyCostBps", buyCostBps, setBuyCostBps)}
-                {marketNumber("sellCostBps", sellCostBps, setSellCostBps)}
-                {marketNumber("slippageBps", slippageBps, setSlippageBps)}
-                {marketNumber("maximumCapitalPerPosition", maximumCapitalPerPosition, setMaximumCapitalPerPosition)}
-                {marketNumber("maximumDailyLossPct", maximumDailyLossPct, setMaximumDailyLossPct)}
-                <label className="parameter-field parameter-checkbox"><span className="parameter-label">Stop after first loss</span><small className="parameter-description">Prevent another entry after the first realised loss of the session.</small><span><input type="checkbox" checked={stopAfterFirstLoss} onChange={(event) => setStopAfterFirstLoss(event.target.checked)} /> Enabled</span></label>
-                {marketNumber("cooldownBars", cooldownBars, setCooldownBars)}
-                {marketNumber("maximumSpreadPct", maximumSpreadPct, setMaximumSpreadPct)}
-                {marketNumber("minimumAverageTradedValue", minimumAverageTradedValue, setMinimumAverageTradedValue)}
-                {marketNumber("roomLookbackBars", roomLookbackBars, setRoomLookbackBars)}
-              </div>
-            </details>
-
-            <details className="market-settings-card market-settings-section open-interest-settings">
-              <summary><span><strong>Open Interest</strong><small>Normal OI controls and data status</small></span><ChevronDown size={17} /></summary>
-              <div className="market-settings-grid">
-                <label className="parameter-field"><span className="parameter-label">OI mode</span><small className="parameter-description">The default is ADVISORY.</small><select value={oiFilterMode} onChange={(event) => { setOiFilterMode(event.target.value as OiFilterMode); setOiComparison(null); markMarketPresetCustom(); }}><option value="OFF">OFF</option><option value="ADVISORY">ADVISORY</option><option value="RESEARCH_FILTER">RESEARCH FILTER</option><option value="ENFORCED">ENFORCED</option></select></label>
-                {marketNumber("oiMinimumConfidence", oiMinimumConfidence, setOiMinimumConfidence)}
-                {marketNumber("oiStronglyBearishThreshold", oiStronglyBearishThreshold, setOiStronglyBearishThreshold)}
-                {marketNumber("oiStaleDataSeconds", oiStaleDataSeconds, setOiStaleDataSeconds)}
-              </div>
-              <div className="oi-mode-explainer"><span><b>OFF</b> — OI is ignored</span><span><b>ADVISORY</b> — OI is displayed but cannot block trades</span><span><b>RESEARCH FILTER</b> — experimental backtest filter</span><span><b>ENFORCED</b> — can block trades only when validated data is available</span></div>
-              <div className={`oi-history-status ${oiHistoryStatus?.enforcementReady ? "ready" : "limited"}`}>
-                <strong>Historical OI: {oiHistoryStatus?.state ?? "CHECKING"}</strong>
-                {oiHistoryStatus?.request?.fromDate && <span>{oiHistoryStatus.request.fromDate} to {oiHistoryStatus.request.toDate} · {oiHistoryStatus.optionRowsImported ?? 0} option rows</span>}
-                <span>{oiHistoryStatus?.enforcementReady ? `${oiHistoryStatus.enforceableSnapshots ?? 0} enforceable regimes` : oiHistoryStatus?.reason ?? "Checking imported coverage…"}</span>
-              </div>
-
-              <details className="expert-oi-settings">
-                <summary><span><strong>Expert OI settings</strong><small>Research and engineering parameters</small></span><ChevronDown size={16} /></summary>
-                <div className="market-settings-grid expert-settings-grid">
-                  {marketNumber("oiLookbackBars", oiLookbackBars, setOiLookbackBars)}
-                  {marketNumber("oiStrikesEachSide", oiStrikesEachSide, setOiStrikesEachSide)}
-                  {marketNumber("oiMinimumPriceChangePct", oiMinimumPriceChangePct, setOiMinimumPriceChangePct)}
-                  {marketNumber("oiMinimumChangePct", oiMinimumChangePct, setOiMinimumChangePct)}
-                  {marketNumber("oiMaximumSpreadPct", oiMaximumSpreadPct, setOiMaximumSpreadPct)}
-                  {marketNumber("oiMinimumValidContractFraction", oiMinimumValidContractFraction, setOiMinimumValidContractFraction)}
-                  {marketNumber("oiMinimumFuturesVolume", oiMinimumFuturesVolume, setOiMinimumFuturesVolume)}
-                  {marketNumber("oiVolatilityPriceRisePct", oiVolatilityPriceRisePct, setOiVolatilityPriceRisePct)}
-                  {marketNumber("oiVolatilityIvRise", oiVolatilityIvRise, setOiVolatilityIvRise)}
-                  {marketNumber("oiMinimumCoverage", oiMinimumCoverage, setOiMinimumCoverage)}
-                  {marketNumber("oiOptionsWeight", oiOptionsWeight, setOiOptionsWeight, { externalError: marketRelationshipErrors.oiWeights })}
-                  {marketNumber("oiFuturesWeight", oiFuturesWeight, setOiFuturesWeight, { externalError: marketRelationshipErrors.oiWeights })}
-                  {marketNumber("oiSpotWeight", oiSpotWeight, setOiSpotWeight, { externalError: marketRelationshipErrors.oiWeights })}
-                  {marketNumber("oiBearishThreshold", oiBearishThreshold, setOiBearishThreshold, { externalError: marketRelationshipErrors.oiThresholds })}
-                  {marketNumber("oiBullishThreshold", oiBullishThreshold, setOiBullishThreshold, { externalError: marketRelationshipErrors.oiThresholds })}
-                  {marketNumber("oiStronglyBullishThreshold", oiStronglyBullishThreshold, setOiStronglyBullishThreshold, { externalError: marketRelationshipErrors.oiThresholds })}
-                  {marketNumber("oiElevatedQualityThreshold", oiElevatedQualityThreshold, setOiElevatedQualityThreshold)}
-                  <label className="parameter-field"><span className="parameter-label">Missing-data policy</span><small className="parameter-description">Research defaults skip decisions that do not meet data coverage.</small><select value={oiFailPolicy} onChange={(event) => setOiFailPolicy(event.target.value as typeof oiFailPolicy)}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow long (explicit override)</option></select></label>
-                  {marketNumber("relativeStrengthLookbackBars", relativeStrengthLookbackBars, setRelativeStrengthLookbackBars)}
-                  {marketNumber("minimumBreadthSymbols", minimumBreadthSymbols, setMinimumBreadthSymbols)}
-                  {marketNumber("minimumSectorMembers", minimumSectorMembers, setMinimumSectorMembers)}
-                  {marketNumber("maximumIntrabarRangePct", maximumIntrabarRangePct, setMaximumIntrabarRangePct)}
-                  {marketNumber("marketDataStaleSeconds", marketDataStaleSeconds, setMarketDataStaleSeconds)}
-                </div>
-                <div className="expert-actions"><button type="button" className="secondary-action" onClick={restoreExpertOiDefaults}>Restore recommended defaults</button><button type="button" className="secondary-action" disabled={comparingOi || loading || marketFormInvalid} onClick={compareOiFilter}>{comparingOi ? <><LoaderCircle className="spin" size={15} />Comparing…</> : "Compare OI filter"}</button></div>
-              </details>
-            </details>
-              </div>
-            </details>
-          </div> : <>
+          </> : strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? <VwapPullbackSettingsPanel
+            settings={vwapPullbackSettings}
+            onChange={(key, value) => setVwapPullbackSettings((current) => ({ ...current, [key]: value }))}
+            onValidityChange={setNumericValidity}
+            cachePolicy={cachePolicy}
+            onCachePolicyChange={setCachePolicy}
+          /> : <>
             <div className="recovery-config recovery-simple-config">
               <fieldset className="recovery-config-card target-card">
                 <legend>Execution &amp; target</legend>
@@ -2172,7 +1773,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           {loading ? (
             <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? (runProgress.stage === "SUPPORTING_MARKET_FEATURES" && runProgress.supportTotal ? `support ${runProgress.supportCompleted ?? 0}/${runProgress.supportTotal}` : `${runProgress.completed}/${runProgress.total}`) : "run"}</button>
           ) : (
-            <button className="run-backtest" type="submit" disabled={strategyMode === "market_aligned_rsi_scalper" && marketFormInvalid}><TrendingUp size={17} />Run backtest</button>
+            <button className="run-backtest" type="submit" disabled={strategyMode === VWAP_PULLBACK_STRATEGY_KEY && marketFormInvalid}><TrendingUp size={17} />Run backtest</button>
           )}
         </form>
 
@@ -2203,28 +1804,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         {optimization && <AtrOptimizationResults response={optimization} />}
         {comparingRsiExits && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing RSI exit settings chronologically</strong><span>Training and validation stay separate, costs are included, and one common configuration is applied to all selected symbols.</span></div></div>}
         {rsiComparison && <RsiExitComparisonResults response={rsiComparison} />}
-        {comparingOi && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing NIFTY OI modes chronologically</strong><span>OFF, ADVISORY, RESEARCH_FILTER and ENFORCED reuse one candidate specification and one market-regime configuration.</span></div></div>}
-        {oiComparison && <section className="backtest-panel oi-comparison-panel">
-          <div className="panel-title"><div><span className="section-kicker">{oiComparison.metadata.researchLabel}</span><h2>OI filter comparison</h2></div><span className="cost-note">Default remains {oiComparison.metadata.defaultOiMode}</span></div>
-          <div className="metric-grid">
-            <div><span>Accepted</span><strong>{number(oiComparison.comparison.tradesAccepted, 0)}</strong></div>
-            <div><span>Rejected</span><strong>{number(oiComparison.comparison.tradesRejected, 0)}</strong></div>
-            <div><span>Strong-bearish rejects</span><strong>{number(oiComparison.comparison.tradesRejectedByStrongBearishOi, 0)}</strong></div>
-            <div><span>Bearish rejects</span><strong>{number(oiComparison.comparison.tradesRejectedByBearishOi, 0)}</strong></div>
-            <div><span>Volatility rejects</span><strong>{number(oiComparison.comparison.tradesRejectedByVolatilityExpansion, 0)}</strong></div>
-            <div><span>Missing-data skips</span><strong>{number(oiComparison.comparison.tradesSkippedForMissingData, 0)}</strong></div>
-            <div><span>Rejected winners</span><strong>{number(oiComparison.comparison.rejectedTradesThatWouldHaveWon, 0)}</strong></div>
-            <div><span>Avoided losers</span><strong>{number(oiComparison.comparison.rejectedTradesThatWouldHaveLost, 0)}</strong></div>
-            <div><span>False-rejection rate</span><strong>{percent(oiComparison.comparison.falseRejectionRate)}</strong></div>
-            <div><span>Stop exits avoided</span><strong>{number(oiComparison.comparison.stopExitsAvoided, 0)}</strong></div>
-            <div><span>Net P&amp;L change</span><strong className={tone(oiComparison.comparison.netPnlChange)}>{money(oiComparison.comparison.netPnlChange)}</strong></div>
-            <div><span>Profit-factor change</span><strong className={tone(oiComparison.comparison.profitFactorChange)}>{number(oiComparison.comparison.profitFactorChange)}</strong></div>
-          </div>
-          <div className={`backtest-message ${oiComparison.acceptance.passed ? "open-position" : "error"}`}><Info size={17} /><span><strong>Acceptance: {oiComparison.acceptance.passed ? "passed" : "not proven"}.</strong> {oiComparison.acceptance.reason} Advisory parity: {oiComparison.comparison.advisoryExecutionIdentical ? "identical" : "mismatch detected"}. Walk-forward folds: {oiComparison.walkForwardValidation.folds.length}.</span></div>
-        </section>}
-
         {response && (
-          isRecoveryResponse(response) ? <RecoveryResults response={response} /> : <>
+          isRetiredMarketAlignedResponse(response) ? <section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned RSI Scalper result is preserved read-only.</span></div></section>
+            : isVwapPullbackResponse(response) ? <VwapPullbackResults response={response} />
+            : isRecoveryResponse(response) ? <RecoveryResults response={response} /> : <>
             <section className="backtest-overview">
               <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>
               <div><span>Profitable</span><strong className="positive-value">{profitableCount}</strong></div>

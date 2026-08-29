@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 
 from backtest_api import (
-    _compact_market_aligned_response,
     _completed_job_progress,
     _execute_market_batches,
     _job_history_record,
@@ -71,8 +70,8 @@ def test_cached_result_reports_terminal_progress_counts() -> None:
         },
         "summary": {
             "candleRowsProcessed": 185_000,
-            "candidateBuySignals": 37,
-            "candidateFunnel": {"executedTrades": 4},
+            "rawCandidates": 37,
+            "funnel": {"executedTrades": 4},
         },
     }
     assert _completed_job_progress(result, 10) == {
@@ -109,43 +108,10 @@ def test_market_batch_size_can_be_bounded_explicitly(monkeypatch) -> None:
     assert [len(batch) for batch in _market_task_batches(tasks, 4)] == [2, 2, 1]
 
 
-def test_market_response_compaction_preserves_candidate_audit_and_totals() -> None:
-    diagnostic = {"symbol": "AAA", "rejectionReasonCodes": ["RVOL_FAILED"]}
-    response = {
-        "metadata": {"configuration": {"strategy": {"oiMode": "ADVISORY"}}},
-        "summary": {"candidateBuySignals": 1, "marketAlignmentRejectedSignals": 1},
-        "results": [{
-            "symbol": "AAA",
-            "trades": [],
-            "candidateDiagnostics": [diagnostic],
-            "skippedCandidates": [diagnostic],
-            "marketAlignmentSkippedSignals": [{"reason": "RVOL_FAILED"}],
-            "configuration": {"duplicated": True},
-            "chart": [{"close": 100}],
-            "events": [{"kind": "RSI_RECOVERY"}],
-        }],
-    }
-
-    compacted = _compact_market_aligned_response(response)
-
-    assert compacted["summary"] == {
-        "candidateBuySignals": 1,
-        "marketAlignmentRejectedSignals": 1,
-    }
-    assert compacted["results"][0]["candidateDiagnostics"] == [diagnostic]
-    assert compacted["results"][0]["trades"] == []
-    for field in (
-        "chart", "configuration", "events", "marketAlignmentSkippedSignals", "skippedCandidates"
-    ):
-        assert field not in compacted["results"][0]
-    assert compacted["metadata"]["configuration"]["strategy"]["oiMode"] == "ADVISORY"
-    assert compacted["metadata"]["payloadProfile"] == "COMPACT_MARKET_ALIGNED_V1"
-
-
-def test_job_history_record_uses_completed_market_result_metadata() -> None:
+def test_job_history_record_uses_completed_vwap_pullback_metadata() -> None:
     request = BacktestRequest(
         symbols=["AAA", "BBB"],
-        strategyMode="market_aligned_rsi_scalper",
+        strategyMode="market_aligned_vwap_pullback_scalper",
         durationYears=1,
         timeframe="5m",
     )
@@ -153,7 +119,7 @@ def test_job_history_record_uses_completed_market_result_metadata() -> None:
         "metadata": {
             "runId": "full-universe-run",
             "completedAt": "2026-08-29T04:37:39+05:30",
-            "strategyName": "Market-Aligned RSI Scalper",
+            "strategyName": "Market-Aligned VWAP Pullback Scalper",
             "timeframe": "5m",
             "durationYears": 1,
             "symbolsProcessed": 2,
@@ -164,6 +130,6 @@ def test_job_history_record_uses_completed_market_result_metadata() -> None:
     record = _job_history_record(result, request)
 
     assert record["id"] == "full-universe-run"
-    assert record["strategyMode"] == "market_aligned_rsi_scalper"
+    assert record["strategyMode"] == "market_aligned_vwap_pullback_scalper"
     assert record["symbolCount"] == 2
     assert record["response"] == result

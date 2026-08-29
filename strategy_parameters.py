@@ -5,7 +5,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-StrategyKey = Literal["rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"]
+StrategyKey = Literal[
+    "rsi_range",
+    "rsi_recovery",
+    "market_aligned_vwap_pullback_scalper",
+]
 PARAMETER_FILE = Path(__file__).with_name("strategy-parameters.json")
 
 

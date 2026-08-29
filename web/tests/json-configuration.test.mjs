@@ -12,7 +12,7 @@ const definitions = JSON.parse(await readFile(new URL("../../strategy-parameters
 const strategyNames = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
-  market_aligned_rsi_scalper: "Market-Aligned RSI Scalper",
+  market_aligned_vwap_pullback_scalper: "Market-Aligned VWAP Pullback Scalper",
 };
 
 function currentSettings(strategyKey, overrides = {}) {
@@ -49,22 +49,21 @@ test("all registered strategies produce complete valid JSON configurations", () 
 });
 
 test("valid JSON is summarized and can update form-controlled values", () => {
-  const settings = currentSettings("market_aligned_rsi_scalper");
-  const configuration = createJsonConfiguration("market_aligned_rsi_scalper", {
+  const settings = currentSettings("market_aligned_vwap_pullback_scalper");
+  const configuration = createJsonConfiguration("market_aligned_vwap_pullback_scalper", {
     ...settings,
-    minimumAlignmentScore: 90,
+    minimumQualityScore: 60,
     maximumTradesPerDay: 2,
-    oiMode: "ADVISORY",
   }, definitions);
   const result = parseAndValidateJsonConfiguration(formatJsonConfiguration(configuration), {
-    strategyKey: "market_aligned_rsi_scalper",
+    strategyKey: "market_aligned_vwap_pullback_scalper",
     strategyNames,
     definitions,
     currentSettings: settings,
   });
   assert.equal(result.valid, true);
   assert.equal(result.summary.changed, 2);
-  assert.equal(result.configuration.settings.minimumAlignmentScore, 90);
+  assert.equal(result.configuration.settings.minimumQualityScore, 60);
   assert.equal(result.configuration.settings.maximumTradesPerDay, 2);
 });
 
@@ -97,19 +96,19 @@ test("unknown, missing, invalid and wrong-strategy settings are never partially 
 });
 
 test("schema, enum, type, range, step and related-field validation is strict", () => {
-  const settings = currentSettings("market_aligned_rsi_scalper");
-  const base = createJsonConfiguration("market_aligned_rsi_scalper", settings, definitions);
+  const settings = currentSettings("market_aligned_vwap_pullback_scalper");
+  const base = createJsonConfiguration("market_aligned_vwap_pullback_scalper", settings, definitions);
   for (const [key, value, expected] of [
     ["schemaVersion", 2, "Unsupported schemaVersion: 2"],
     ["oiMode", "UNKNOWN", "oiMode must be one of"],
     ["maximumTradesPerDay", 2.5, "maximumTradesPerDay must be a whole number"],
-    ["minimumAlignmentScore", 101, "minimumAlignmentScore must be at most 100"],
+    ["maximumTriggerRsi", 101, "maximumTriggerRsi must be at most 100"],
   ]) {
     const candidate = structuredClone(base);
     if (key === "schemaVersion") candidate.schemaVersion = value;
     else candidate.settings[key] = value;
     const result = parseAndValidateJsonConfiguration(JSON.stringify(candidate), {
-      strategyKey: "market_aligned_rsi_scalper",
+      strategyKey: "market_aligned_vwap_pullback_scalper",
       strategyNames,
       definitions,
       currentSettings: settings,
@@ -119,28 +118,26 @@ test("schema, enum, type, range, step and related-field validation is strict", (
   }
 
   const related = structuredClone(base);
-  related.settings.rsiArmHigh = related.settings.rsiRecovery;
+  related.settings.rsiPullbackMinimum = related.settings.rsiPullbackMaximum;
   const relatedResult = parseAndValidateJsonConfiguration(JSON.stringify(related), {
-    strategyKey: "market_aligned_rsi_scalper",
+    strategyKey: "market_aligned_vwap_pullback_scalper",
     strategyNames,
     definitions,
     currentSettings: settings,
   });
   assert.equal(relatedResult.valid, false);
-  assert.ok(relatedResult.errors.some((error) => error.includes("rsiArmLow < rsiArmHigh < rsiRecovery")));
+  assert.ok(relatedResult.errors.some((error) => error.includes("rsiPullbackMinimum < rsiPullbackMaximum")));
 });
 
 test("resolved output includes advanced values but excludes unregistered secrets", () => {
-  const configuration = createJsonConfiguration("market_aligned_rsi_scalper", {
-    ...currentSettings("market_aligned_rsi_scalper"),
-    oiOptionsWeight: 0.35,
-    oiFuturesWeight: 0.35,
-    oiSpotWeight: 0.3,
+  const configuration = createJsonConfiguration("market_aligned_vwap_pullback_scalper", {
+    ...currentSettings("market_aligned_vwap_pullback_scalper"),
+    pullbackApproachAtr: 0.25,
     dhanToken: "never-copy-this",
     databasePassword: "never-copy-this",
   }, definitions);
   const source = formatJsonConfiguration(configuration);
-  assert.match(source, /"oiOptionsWeight": 0.35/);
+  assert.match(source, /"pullbackApproachAtr": 0.25/);
   assert.doesNotMatch(source, /dhanToken|databasePassword|never-copy-this/);
 });
 
@@ -178,4 +175,3 @@ test("the inline editor is one collapsed generic component with every required a
   assert.equal((dashboard.match(/<JsonConfigurationEditor/g) ?? []).length, 1);
   assert.match(dashboard, /key=\{strategyMode\}/);
 });
-

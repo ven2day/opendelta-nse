@@ -74,59 +74,35 @@ secret are read only from server environment variables.
 
 ## Historical NIFTY OI import
 
-The shared collector and the Market-Aligned RSI Scalper backtest read historical
-OI coverage from the canonical repository at
-`/var/lib/vento-nse/backtest/nifty-oi`. RSI Recovery Scalping does not consume
-or gate on this data. Keep Market-Aligned OI in `ADVISORY` while importing.
-Create `/etc/vento-nse-nifty-expiry-schedule.json` from
-an audited exchange contract calendar; it is a JSON array of
-`{"effectiveFrom":"YYYY-MM-DD","weekday":0}` records, where Monday is `0` and
-Sunday is `6`. The importer deliberately does not guess or embed transition or
-holiday-adjusted expiry dates.
+The shared point-in-time OI repository remains available at
+`/var/lib/vento-nse/backtest/nifty-oi`. RSI Recovery Scalping and RSI Range
+Strategy do not consume it. Market-Aligned VWAP Pullback Scalper keeps OI
+`OFF` by default and may display it only as optional advisory context.
+Production collection continues to use the configured Dhan integration; no
+NSE website scraping or embedded contract identifiers are used.
 
-After building the backtest image, import an explicit half-open date range:
+## Backtest strategy separation
 
-```bash
-sudo web/deploy/import-nifty-oi-history.sh "$FROM_DATE" "$TO_DATE"
-```
+`RSI Range Strategy` and `RSI Recovery Scalping` retain their existing keys,
+configuration, evaluators, exits, results and URLs.
 
-The command uses only the configured Dhan integration, caches completed API
-responses, resumes safely, and does not restart services. Dhan expired-options
-history does not provide bid/ask or reliable expired-futures OI, so such periods
-remain `INSUFFICIENT_OI_DATA` for strict enforcement. The manifest and coverage
-still appears in Backtest for audit and advisory research.
+`Market-Aligned RSI Scalper` is retired. It is absent from new-backtest
+selection and cannot start a new API job. Existing saved results remain
+read-only and display `Retired strategy — cannot run again`.
 
-## Separate RSI scalping strategies
+`Market-Aligned VWAP Pullback Scalper` uses the distinct
+`market_aligned_vwap_pullback_scalper` key. It arms RSI pullbacks from 38–50
+near session VWAP, EMA9 or EMA20 only in a rising completed-candle trend, then
+requires a completed trigger candle and executes at the next bar open.
+Session state and VWAP reset every NSE trading day. Stops and 1.5R targets are
+frozen from entry-time ATR and pullback structure; the strategy never holds
+overnight.
 
-`RSI Recovery Scalping` retains its `rsi_recovery` key, configuration, signal
-evaluator, exit models and result behavior. OI mode fields accepted from older
-clients are ignored by that strategy and cannot change its signals or paper
-execution.
-
-`Market-Aligned RSI Scalper` uses the distinct
-`market_aligned_rsi_scalper` key and versioned configuration. It first creates
-RSI candidates, then requires completed-candle NIFTY, sector, breadth, relative
-strength, VWAP, EMA, RVOL, room-to-target and liquidity/range-quality gates.
-Its OI modes are `OFF`, `ADVISORY`, `RESEARCH_FILTER`, and `ENFORCED`, with
-`ADVISORY` as the default. OI never creates a BUY or increases position size.
-
-Sector membership is operations data, not application code. Set the absolute
-`MARKET_ALIGNED_SECTOR_MAP_FILE` path to either a JSON symbol-to-sector object
-or a CSV containing `symbol,sector` (official constituent files using
-`Symbol,Industry` are also accepted). Set
-`MARKET_ALIGNED_BREADTH_UNIVERSE_FILE` to an operations-managed CSV with a
-`Symbol` column. Backtests load a deterministic breadth sample and every mapped
-peer for the requested symbols independently from the trading selection, so a
-single-symbol run never treats that symbol as the market. Missing sector or
-breadth coverage rejects the candidate as insufficient rather than guessing a
-classification.
-
-Market-Aligned results retain one `candidateDiagnostics` record for every RSI
-recovery candidate. The record includes all causal source timestamps, raw gate
-values, explicit rejection codes, and either `REJECTED_GATE` or
-`SKIPPED_DATA_UNAVAILABLE`. Overview shows a cumulative candidate funnel and a
-Skipped Candidates audit table. With OI `OFF`, OI is marked `NOT_EVALUATED` and
-does not participate in the score or decision.
+NIFTY supplies one safety rule. Sector, breadth, relative strength and optional
+OI contribute to causal quality ranking instead of repeated mandatory gates.
+Historical bid/ask spread is reported unavailable rather than fabricated.
+Operations may provide absolute `MARKET_CONTEXT_SECTOR_MAP_FILE` and
+`MARKET_CONTEXT_BREADTH_UNIVERSE_FILE` paths for supporting context.
 
 This strategy is labelled `Research candidate — paper trading required` and
 must not be represented as profitable without untouched chronological

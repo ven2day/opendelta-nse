@@ -38,9 +38,9 @@ test("the last ten completed results sync to the signed-in account with browser 
   assert.match(route, /x-opendelta-history-owner/);
   assert.match(route, /export async function GET/);
   assert.match(route, /export async function POST/);
-  assert.match(dashboard, /readBacktestHistory<BacktestResponse \| RecoveryBacktestResponse>\(\)/);
+  assert.match(dashboard, /readBacktestHistory<BacktestResponse \| RecoveryBacktestResponse \| VwapPullbackResponse \| RetiredMarketAlignedResponse>\(\)/);
   assert.match(dashboard, /migrateBrowserBacktestHistory\(browserEntries\)/);
-  assert.match(dashboard, /readAccountBacktestResult<BacktestResponse \| RecoveryBacktestResponse>/);
+  assert.match(dashboard, /readAccountBacktestResult<BacktestResponse \| RecoveryBacktestResponse \| VwapPullbackResponse \| RetiredMarketAlignedResponse>/);
   assert.match(dashboard, /saveBacktestHistory\(stored\)/);
   assert.match(dashboard, /saveAccountBacktestHistory\(stored\)/);
   assert.match(dashboard, /Latest 10 completed results/);

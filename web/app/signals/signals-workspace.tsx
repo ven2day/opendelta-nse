@@ -313,7 +313,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
         <Metric label="15m momentum" value={percent(signal.momentum15m, 3)} />
         <Metric label="30m momentum" value={percent(signal.momentum30m, 3)} />
       </div><div className="confirmation-pills"><span className={signal.emaConfirmation ? "pass" : "fail"}>EMA</span><span className={signal.vwapConfirmation ? "pass" : "fail"}>VWAP</span><span className={signal.volumeConfirmation ? "pass" : "fail"}>VOLUME</span></div></section>
-      <section><h3>Strategy isolation</h3><div className="signal-detail-grid"><Metric label="Strategy" value="RSI Recovery Scalping" /><Metric label="OI execution gate" value="NOT APPLIED" /></div><small>The separate Market-Aligned RSI Scalper owns OI and market-alignment gates. This signal preserves RSI Recovery behavior.</small></section>
+      <section><h3>Strategy isolation</h3><div className="signal-detail-grid"><Metric label="Strategy" value="RSI Recovery Scalping" /><Metric label="OI execution gate" value="NOT APPLIED" /></div><small>Market-Aligned VWAP Pullback Scalper is a separate backtest strategy. This signal preserves RSI Recovery behavior.</small></section>
       <section><h3>Support and target room</h3><div className="signal-detail-grid">
         <Metric label="Recent support" value={money(levels.support)} />
         <Metric label="Distance to support" value={percent(levels.distanceToSupportPct)} />
@@ -474,7 +474,7 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
 
       <section className="backtest-panel oi-regime-card" aria-label="RSI Recovery strategy isolation">
         <div className="panel-title"><div><span className="section-kicker">RSI Recovery Scalping</span><h2>Existing live behavior preserved</h2></div><span className="date-window">OI gate: OFF</span></div>
-        <small>NIFTY OI and full market-alignment gates belong only to Market-Aligned RSI Scalper. They are available in Backtest research and do not block, create, or resize RSI Recovery Signals trades.</small>
+        <small>Optional market context belongs to the separate Market-Aligned VWAP Pullback Scalper backtest. It does not block, create, or resize RSI Recovery Signals trades.</small>
       </section>
 
       {notice && <div className="signal-notice"><BellRing size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={14} /></button></div>}

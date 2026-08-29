@@ -18,7 +18,13 @@ HISTORY_LIMIT = 10
 MAX_PAYLOAD_BYTES = 100 * 1024 * 1024
 _OWNER_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
-_STRATEGIES = {"rsi_range", "rsi_recovery", "market_aligned_rsi_scalper"}
+_STRATEGIES = {
+    "rsi_range",
+    "rsi_recovery",
+    "market_aligned_vwap_pullback_scalper",
+    # Historical records remain readable after this strategy was retired.
+    "market_aligned_rsi_scalper",
+}
 
 
 class BacktestHistoryRepository:

@@ -22,6 +22,23 @@ type ValidationResult = {
   belongsToStrategyName?: string;
 };
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+async function configurationHash(configuration: JsonEnvelope): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(canonicalJson(configuration)),
+  );
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
 export function JsonConfigurationEditor({
   configuration,
   definitions,
@@ -96,7 +113,12 @@ export function JsonConfigurationEditor({
       return;
     }
     setDraft(null);
-    setMessage(`${result.summary.changed} settings applied · ${result.summary.unchanged} settings unchanged · 0 errors`);
+    setMessage(`Configuration applied · ${result.summary.changed} settings changed · calculating configuration hash…`);
+    void configurationHash(result.configuration).then((hash) => {
+      setMessage(`Configuration applied · Configuration hash ${hash.slice(0, 16)} · Effective settings ${Object.keys(result.configuration!.settings).length}`);
+    }).catch(() => {
+      setMessage(`Configuration applied · ${result.summary!.changed} settings changed · ${result.summary!.unchanged} settings unchanged`);
+    });
   };
 
   return (

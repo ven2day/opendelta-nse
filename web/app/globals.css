@@ -4561,7 +4561,14 @@ footer {
 .oi-history-status.ready { border-color: #22c55e; background: rgb(34 197 94 / .08); }
 .oi-history-status.limited { border-color: #eab308; background: rgb(234 179 8 / .08); }
 
-/* Market-Aligned RSI Scalper settings repair. Keep the existing OpenDelta theme. */
+/* Compact strategy settings. Keep the existing OpenDelta theme. */
+.configuration-audit {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .backtest-shell,
 .backtest-main,
 .backtest-controls,

@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir \
     && groupadd --gid 10001 backtest \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin backtest
 
-COPY main.py backtest_api.py backtest_history.py backtest_jobs.py application_settings.py recovery_backtest.py recovery_position_backtest.py recovery_dynamic_exit.py recovery_rsi_profit_exit.py atr_exit_optimizer.py rsi_exit_optimizer.py recovery_feature_analysis.py universe_selection.py live_signals.py market_data_refresh.py market_symbol_registry.py market_aligned_rsi_scalper.py market_aligned_performance.py nifty_oi_regime.py dhan_oi.py dhan_oi_history.py import_nifty_oi_history.py strategy_parameters.py strategy-parameters.json symbols.csv ./
+COPY main.py backtest_api.py backtest_history.py backtest_jobs.py application_settings.py recovery_backtest.py recovery_position_backtest.py recovery_dynamic_exit.py recovery_rsi_profit_exit.py atr_exit_optimizer.py rsi_exit_optimizer.py recovery_feature_analysis.py universe_selection.py live_signals.py market_data_refresh.py market_symbol_registry.py market_aligned_vwap_pullback_scalper.py nifty_oi_regime.py dhan_oi.py dhan_oi_history.py import_nifty_oi_history.py strategy_parameters.py strategy-parameters.json symbols.csv ./
 
 EXPOSE 8000
 USER 10001:10001

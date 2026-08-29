@@ -130,22 +130,19 @@ function relationshipErrors(strategyKey, settings) {
     if (settings.hardStopLossPct >= 100) errors.push("hardStopLossPct must be below 100");
   }
 
-  if (strategyKey === "market_aligned_rsi_scalper") {
-    if (settings.timeframe !== "5m") errors.push("Market-Aligned RSI Scalper requires timeframe 5m");
-    if (!(settings.rsiArmLow < settings.rsiArmHigh && settings.rsiArmHigh < settings.rsiRecovery && settings.rsiRecovery <= settings.signalRsiMaximum)) {
-      errors.push("RSI levels must satisfy rsiArmLow < rsiArmHigh < rsiRecovery <= signalRsiMaximum");
+  if (strategyKey === "market_aligned_vwap_pullback_scalper") {
+    if (settings.timeframe !== "5m") errors.push("Market-Aligned VWAP Pullback Scalper requires timeframe 5m");
+    if (!(settings.rsiPullbackMinimum < settings.rsiPullbackMaximum
+      && settings.rsiPullbackMaximum <= settings.rsiTriggerLevel
+      && settings.rsiTriggerLevel < settings.maximumTriggerRsi)) {
+      errors.push("RSI levels must satisfy rsiPullbackMinimum < rsiPullbackMaximum <= rsiTriggerLevel < maximumTriggerRsi");
     }
     if (!(settings.emaFast < settings.emaSlow)) errors.push("emaFast must be below emaSlow");
     if (!(settings.entryStartTime < settings.lastEntryTime && settings.lastEntryTime < settings.squareOffTime)) {
       errors.push("Session times must satisfy entryStartTime < lastEntryTime < squareOffTime");
     }
-    const weightTotal = settings.oiOptionsWeight + settings.oiFuturesWeight + settings.oiSpotWeight;
-    if (Math.abs(weightTotal - 1) > 1e-9) errors.push("OI component weights must total 1");
-    if (!(settings.oiStronglyBearishThreshold < settings.oiBearishThreshold && settings.oiBearishThreshold < settings.oiBullishThreshold && settings.oiBullishThreshold < settings.oiStronglyBullishThreshold)) {
-      errors.push("OI thresholds must satisfy strongly bearish < bearish < bullish < strongly bullish");
-    }
-    if (!(settings.targetPct > 0)) errors.push("targetPct must be greater than 0");
-    if (!(settings.stopLossPct > 0)) errors.push("stopLossPct must be greater than 0");
+    if (!(settings.minimumStopPct <= settings.maximumStopPct)) errors.push("minimumStopPct cannot exceed maximumStopPct");
+    if (settings.executionModel !== "NEXT_BAR_OPEN") errors.push("executionModel must be NEXT_BAR_OPEN");
   }
   return errors;
 }

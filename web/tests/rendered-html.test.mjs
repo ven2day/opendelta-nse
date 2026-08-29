@@ -268,10 +268,10 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(backtestText, /RSI Range Strategy/);
   assert.match(backtestText, /RSI Recovery Scalping/);
   assert.match(backtestText, /switchStrategy\("rsi_recovery"\)/);
-  assert.match(backtestText, /Market-Aligned RSI Scalper/);
-  assert.match(backtestText, /switchStrategy\("market_aligned_rsi_scalper"\)/);
-  assert.match(backtestText, /RESEARCH_FILTER/);
-  assert.match(backtestText, /ADVISORY — record only \(default\)/);
+  assert.match(backtestText, /Market-Aligned VWAP Pullback Scalper/);
+  assert.match(backtestText, /switchStrategy\(VWAP_PULLBACK_STRATEGY_KEY\)/);
+  assert.match(backtestText, /vwapPullbackConfiguration/);
+  assert.match(backtestText, /Retired strategy — cannot run again/);
   assert.match(backtestText, /strategyMode === "rsi_range"/);
   assert.match(backtestText, /Minimum confirmations must be between 0 and/);
   assert.match(backtestText, /minimumConfirmations > enabledConfirmations/);

@@ -19,9 +19,8 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-backtest \
   --env LIVE_SIGNAL_DIR=/var/lib/vento-nse/backtest/live-signals \
   --env LIVE_MARKET_DATA_FILE=/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv \
   --env SYMBOLS_FILE=/var/lib/vento-nse/data/symbols.csv \
-  --env MARKET_ALIGNED_SECTOR_MAP_FILE=/var/lib/vento-nse/data/market-sector-map.csv \
-  --env MARKET_ALIGNED_BREADTH_UNIVERSE_FILE=/var/lib/vento-nse/data/market-sector-map.csv \
-  --env MARKET_ALIGNED_BREADTH_SAMPLE_SIZE=50 \
+  --env MARKET_CONTEXT_SECTOR_MAP_FILE=/var/lib/vento-nse/data/market-sector-map.csv \
+  --env MARKET_CONTEXT_BREADTH_UNIVERSE_FILE=/var/lib/vento-nse/data/market-sector-map.csv \
   --mount type=bind,source=/var/lib/vento-nse/backtest,target=/var/lib/vento-nse/backtest \
   --mount type=bind,source=/var/lib/vento-nse/dhan,target=/var/lib/vento-nse/dhan \
   --mount type=bind,source=/var/lib/vento-nse/data,target=/var/lib/vento-nse/data \

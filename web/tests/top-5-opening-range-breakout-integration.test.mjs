@@ -27,12 +27,21 @@ function backendResponse(request) {
       calculationHash: "calculation-hash",
       dataSnapshot: "data-snapshot",
       effectiveConfiguration: request.top5OpeningRangeBreakoutConfiguration,
+      submittedConfiguration: request.top5OpeningRangeBreakoutConfiguration,
+      submittedMaximumHoldingBars: request.top5OpeningRangeBreakoutConfiguration.maximumHoldingBars ?? 12,
+      effectiveMaximumHoldingBars: request.top5OpeningRangeBreakoutConfiguration.maximumHoldingBars ?? 12,
       watchlistMode: request.top5OpeningRangeBreakoutConfiguration.watchlistMode,
       universeEvaluated: 5,
       tradingDays: 1,
       liveOrdersEnabled: false,
+      universeEligibility: {
+        symbolsRequested: 5, symbolsWithCandleData: 5, symbolsEligibleAtLeastOnce: 5,
+        symbolsRejectedForEntirePeriod: 0, symbolsActuallyScored: 5,
+        rejectionReasonSymbolCounts: {}, rejectedSymbols: [],
+      },
     },
     watchlist: { mode: request.top5OpeningRangeBreakoutConfiguration.watchlistMode },
+    candidates: [{ marker: "RAW_CANDIDATE_MARKER" }],
     summary: {
       universeEvaluated: 5,
       tradingDays: 1,
@@ -60,6 +69,8 @@ function backendResponse(request) {
     middaySignals: [],
     trades: [{ symbol: "AAA", executedQuantity: 50 }],
     comparison: {},
+    warnings: ["Research only"],
+    validationDecision: { status: "REJECTED_RESEARCH_ONLY", reason: "Fixture rejection" },
   };
 }
 
@@ -92,6 +103,10 @@ test("frontend selection submits the Top-5 key and exports only the Top-5 contra
   for (const symbol of ["AAA", "BBB", "CCC", "DDD", "EEE"]) assert.match(markdown, new RegExp(symbol));
   assert.match(markdown, /## Effective settings/);
   assert.match(markdown, /"quantityPerTrade": 50/);
+  assert.match(markdown, /## Daily-selection summary/);
+  assert.match(markdown, /## Important warnings/);
+  assert.doesNotMatch(markdown, /RAW_CANDIDATE_MARKER/);
+  assert.ok(markdown.split("\n").length < 250, "Markdown must remain compact");
   assert.doesNotMatch(markdown, /VWAP pullback performance/i);
 });
 

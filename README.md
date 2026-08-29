@@ -126,6 +126,18 @@ research and paper signals only and has no broker-order path. It remains
 rejected unless every untouched validation fold has positive after-cost
 expectancy and net P&L and outperforms the comparison baselines.
 
+The recommended eligibility settings are a completed-candle price range of
+₹100-₹5,000, at least ₹100,000,000 median daily traded value from prior
+completed sessions, at least ₹2,500,000 causal opening traded value, prior-day
+ATR between 0.8% and 4.0%, and a maximum absolute opening gap of 3.0%. These
+values are part of the JSON/API configuration, configuration hash and result
+cache key. The recommended maximum holding period is 12 five-minute bars;
+an explicitly submitted JSON value remains authoritative. Results report
+calendar-session and active-day trade frequencies separately, audit the exact
+next-bar timestamps, and keep Markdown compact. Complete watchlists,
+candidates, signals, trades and benchmark records are downloaded separately as
+CSV or JSON.
+
 After deploying the dashboard and backtest images, run
 `web/deploy/smoke-top-5-opening-range-breakout.sh`. It authenticates through the
 normal web login, submits the unique Top-5 strategy key, requires an effective

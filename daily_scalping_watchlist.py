@@ -25,11 +25,11 @@ STRATEGY_DESCRIPTION = (
     "Research-only top-five Opening Range Breakout with optional causal intraday rescans "
     "and Rolling Momentum Breakout entries for newly promoted symbols."
 )
-STRATEGY_VERSION = "top-5-opening-range-breakout-1.0.0"
-FEATURE_CODE_VERSION = "top-5-opening-range-breakout-features-1"
+STRATEGY_VERSION = "top-5-opening-range-breakout-1.1.0"
+FEATURE_CODE_VERSION = "top-5-opening-range-breakout-features-2"
 SESSION_RULE_VERSION = "nse-completed-five-minute-session-1"
 PORTFOLIO_RULE_VERSION = "top-5-opening-range-breakout-portfolio-1"
-WATCHLIST_RULE_VERSION = "top-5-opening-range-breakout-selection-1"
+WATCHLIST_RULE_VERSION = "top-5-opening-range-breakout-selection-2"
 OPENING_RANGE_RULE_VERSION = "top-five-orb-0915-0930-1"
 MINIMUM_UNTOUCHED_VALIDATION_TRADES = 20
 WatchlistMode = Literal["FROZEN_OPEN", "ROLLING"]
@@ -73,8 +73,15 @@ class DailyWatchlistConfig:
     minimum_stop_pct: float = 0.35
     maximum_stop_pct: float = 1.00
     reward_risk_ratio: float = 1.50
-    maximum_holding_bars: int = 6
+    maximum_holding_bars: int = 12
     minimum_average_traded_value: float = 500_000.0
+    minimum_price: float = 100.0
+    maximum_price: float = 5_000.0
+    minimum_median_daily_traded_value: float = 100_000_000.0
+    minimum_opening_traded_value: float = 2_500_000.0
+    minimum_daily_atr_pct: float = 0.8
+    maximum_daily_atr_pct: float = 4.0
+    maximum_opening_gap_pct: float = 3.0
     maximum_candle_range_atr: float = 3.0
     live_maximum_spread_pct: float = 0.15
     quantity_per_trade: Literal[50] = 50
@@ -134,6 +141,8 @@ class DailyWatchlistConfig:
             self.maximum_stop_pct,
             self.reward_risk_ratio,
             self.minimum_average_traded_value,
+            self.maximum_price,
+            self.maximum_daily_atr_pct,
             self.maximum_candle_range_atr,
             self.configured_capital,
             self.maximum_capital_per_position,
@@ -144,6 +153,14 @@ class DailyWatchlistConfig:
             raise ValueError("EMA fast length must be below EMA slow length")
         if self.minimum_stop_pct > self.maximum_stop_pct:
             raise ValueError("Minimum stop distance cannot exceed maximum stop distance")
+        if self.minimum_price < 0 or self.minimum_price >= self.maximum_price:
+            raise ValueError("Minimum price must be non-negative and below maximum price")
+        if self.minimum_median_daily_traded_value < 0 or self.minimum_opening_traded_value < 0:
+            raise ValueError("Minimum traded-value eligibility settings cannot be negative")
+        if self.maximum_opening_gap_pct < 0:
+            raise ValueError("Maximum opening gap cannot be negative")
+        if self.minimum_daily_atr_pct < 0 or self.minimum_daily_atr_pct >= self.maximum_daily_atr_pct:
+            raise ValueError("Minimum daily ATR percentage must be non-negative and below maximum daily ATR percentage")
         if not 0 < self.minimum_close_location <= 1:
             raise ValueError("Minimum close location must be greater than zero and no more than one")
         if self.quantity_per_trade != 50:
@@ -395,6 +412,38 @@ def add_rolling_watchlist_features(
     data["BullishEmaTrend"] = (ema_fast > ema_slow) & (ema_fast > ema_fast.groupby(session, sort=False).shift(1))
     data["EmaFastRising"] = ema_fast > ema_fast.groupby(session, sort=False).shift(1)
     data["AtrPct"] = atr / close.replace(0, np.nan) * 100.0
+    valid_traded_value = traded_value.where(valid)
+    daily = pd.DataFrame({
+        "Open": open_price.groupby(session, sort=False).first(),
+        "High": high.groupby(session, sort=False).max(),
+        "Low": low.groupby(session, sort=False).min(),
+        "Close": close.groupby(session, sort=False).last(),
+        "TradedValue": valid_traded_value.groupby(session, sort=False).sum(min_count=1),
+    })
+    previous_daily_close = daily["Close"].shift(1)
+    daily_true_range = pd.concat(
+        [
+            daily["High"] - daily["Low"],
+            (daily["High"] - previous_daily_close).abs(),
+            (daily["Low"] - previous_daily_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    daily_atr = daily_true_range.ewm(
+        alpha=1.0 / config.atr_length,
+        adjust=False,
+        min_periods=config.atr_length,
+    ).mean()
+    prior_median_daily_value = daily["TradedValue"].shift(1).rolling(
+        config.historical_sessions,
+        min_periods=config.historical_sessions,
+    ).median()
+    prior_daily_atr_pct = daily_atr.shift(1) / previous_daily_close.replace(0, np.nan) * 100.0
+    opening_gap_pct = (daily["Open"] / previous_daily_close.replace(0, np.nan) - 1.0) * 100.0
+    data["MedianDailyTradedValue"] = session.map(prior_median_daily_value.to_dict())
+    data["DailyAtrPct"] = session.map(prior_daily_atr_pct.to_dict())
+    data["OpeningGapPct"] = session.map(opening_gap_pct.to_dict())
+    data["OpeningTradedValue"] = valid_traded_value.groupby(session, sort=False).cumsum()
     if "Bid" in data.columns and "Ask" in data.columns:
         bid = pd.to_numeric(data["Bid"], errors="coerce")
         ask = pd.to_numeric(data["Ask"], errors="coerce")
@@ -447,6 +496,13 @@ def score_rescan_rows(
     nifty_row: pd.Series | None,
     sector_by_symbol: Mapping[str, str],
     minimum_average_traded_value: float,
+    minimum_price: float,
+    maximum_price: float,
+    minimum_median_daily_traded_value: float,
+    minimum_opening_traded_value: float,
+    minimum_daily_atr_pct: float,
+    maximum_daily_atr_pct: float,
+    maximum_opening_gap_pct: float,
     maximum_candle_range_atr: float,
     maximum_spread_pct: float,
 ) -> list[dict[str, Any]]:
@@ -482,19 +538,58 @@ def score_rescan_rows(
         rvol = _finite(row.get("RollingWindowRvol"))
         traded_value = _finite(row.get("RollingTradedValue"), 2)
         average_value = _finite(row.get("AverageTradedValue"), 2)
+        median_daily_value = _finite(row.get("MedianDailyTradedValue"), 2)
+        opening_traded_value = _finite(row.get("OpeningTradedValue"), 2)
+        daily_atr_pct = _finite(row.get("DailyAtrPct"))
+        opening_gap_pct = _finite(row.get("OpeningGapPct"))
         range_atr = _finite(row.get("CandleRangeAtr"))
         spread = _finite(row.get("SpreadPct"))
-        mandatory = bool(
-            bool(row.get("ValidOHLCV", True))
-            and close is not None and close > 0
-            and volume is not None and volume > 0
-            and atr is not None and atr > 0
-            and rvol is not None and rvol > 0
-            and traded_value is not None and traded_value > 0
-            and average_value is not None and average_value >= minimum_average_traded_value
-            and range_atr is not None and range_atr <= maximum_candle_range_atr
-            and (spread is None or spread <= maximum_spread_pct)
-        )
+        eligibility_reasons: list[str] = []
+        if not bool(row.get("ValidOHLCV", True)):
+            eligibility_reasons.append("INVALID_OHLCV")
+        if close is None or close <= 0:
+            eligibility_reasons.append("PRICE_UNAVAILABLE")
+        elif close < minimum_price:
+            eligibility_reasons.append("PRICE_BELOW_MINIMUM")
+        elif close > maximum_price:
+            eligibility_reasons.append("PRICE_ABOVE_MAXIMUM")
+        if volume is None or volume <= 0:
+            eligibility_reasons.append("VOLUME_NOT_POSITIVE")
+        if atr is None or atr <= 0:
+            eligibility_reasons.append("ATR_UNAVAILABLE")
+        if rvol is None or rvol <= 0:
+            eligibility_reasons.append("ROLLING_RVOL_UNAVAILABLE")
+        if traded_value is None or traded_value <= 0:
+            eligibility_reasons.append("ROLLING_TRADED_VALUE_UNAVAILABLE")
+        if average_value is None:
+            eligibility_reasons.append("AVERAGE_TRADED_VALUE_UNAVAILABLE")
+        elif average_value < minimum_average_traded_value:
+            eligibility_reasons.append("AVERAGE_TRADED_VALUE_BELOW_MINIMUM")
+        if median_daily_value is None:
+            eligibility_reasons.append("MEDIAN_DAILY_TRADED_VALUE_UNAVAILABLE")
+        elif median_daily_value < minimum_median_daily_traded_value:
+            eligibility_reasons.append("MEDIAN_DAILY_TRADED_VALUE_BELOW_MINIMUM")
+        if opening_traded_value is None:
+            eligibility_reasons.append("OPENING_TRADED_VALUE_UNAVAILABLE")
+        elif opening_traded_value < minimum_opening_traded_value:
+            eligibility_reasons.append("OPENING_TRADED_VALUE_BELOW_MINIMUM")
+        if daily_atr_pct is None:
+            eligibility_reasons.append("DAILY_ATR_UNAVAILABLE")
+        elif daily_atr_pct < minimum_daily_atr_pct:
+            eligibility_reasons.append("DAILY_ATR_BELOW_MINIMUM")
+        elif daily_atr_pct > maximum_daily_atr_pct:
+            eligibility_reasons.append("DAILY_ATR_ABOVE_MAXIMUM")
+        if opening_gap_pct is None:
+            eligibility_reasons.append("OPENING_GAP_UNAVAILABLE")
+        elif abs(opening_gap_pct) > maximum_opening_gap_pct:
+            eligibility_reasons.append("OPENING_GAP_ABOVE_MAXIMUM")
+        if range_atr is None:
+            eligibility_reasons.append("CANDLE_RANGE_QUALITY_UNAVAILABLE")
+        elif range_atr > maximum_candle_range_atr:
+            eligibility_reasons.append("CANDLE_RANGE_QUALITY_FAILED")
+        if spread is not None and spread > maximum_spread_pct:
+            eligibility_reasons.append("EXCESSIVE_SPREAD")
+        mandatory = not eligibility_reasons
         above_vwap_trend = bool(
             close is not None
             and _finite(row.get("SessionVWAP")) is not None
@@ -537,12 +632,17 @@ def score_rescan_rows(
             "sector": sector_by_symbol.get(symbol),
             "sourceTimestamp": _iso(row.name),
             "eligible": mandatory,
+            "eligibilityReasons": eligibility_reasons,
+            "primaryEligibilityReason": eligibility_reasons[0] if eligibility_reasons else "ELIGIBLE",
+            "scoreCalculated": mandatory,
             "score": round(score, 4),
             "components": {key: round(value, 4) for key, value in components.items()},
             "penalties": penalties,
             "rollingRvol": rvol,
             "rollingVolume": _finite(row.get("RollingWindowVolume"), 2),
             "rollingTradedValue": traded_value,
+            "medianDailyTradedValue": median_daily_value,
+            "openingTradedValue": opening_traded_value,
             "rollingReturnPct": rolling_return,
             "relativeToNiftyPct": _finite(relative_nifty.get(symbol)),
             "relativeToSectorPct": _finite(relative_sector.get(symbol)),
@@ -553,6 +653,8 @@ def score_rescan_rows(
             "emaFastRising": bool(row.get("EmaFastRising")),
             "rsi": _finite(row.get("RSI")),
             "atrPct": _finite(row.get("AtrPct")),
+            "dailyAtrPct": daily_atr_pct,
+            "openingGapPct": opening_gap_pct,
             "spreadPct": spread,
             "spreadStatus": "AVAILABLE" if spread is not None else "UNAVAILABLE_ADVISORY",
             "priceAccelerationPct": acceleration,
@@ -574,6 +676,7 @@ def _candidate_base(
 ) -> dict[str, Any]:
     row = data.iloc[signal_index]
     signal = data.index[signal_index]
+    signal_start = signal - pd.Timedelta(minutes=5)
     candidate = {
         "candidateId": stable_fingerprint({
             "version": STRATEGY_VERSION,
@@ -584,6 +687,9 @@ def _candidate_base(
         "symbol": symbol,
         "signalType": signal_type,
         "signalTimestamp": _iso(signal),
+        "signalCandleStart": _iso(signal_start),
+        "signalCandleEnd": _iso(signal),
+        "decisionTimestamp": _iso(signal),
         "signalBarIndex": signal_index,
         "triggerClose": _finite(row["Close"], 4),
         "breakoutLevel": _finite(breakout_level, 4),
@@ -615,6 +721,11 @@ def _plan_trade(
     if signal_timestamp.time().replace(tzinfo=None) > datetime_time.fromisoformat(config.last_entry_time):
         return {"attemptStatus": "AFTER_LAST_ENTRY", "primaryReason": "AFTER_LAST_ENTRY"}
     entry_row = data.iloc[entry_index]
+    if entry_index != signal_index + 1:
+        raise AssertionError("NEXT_BAR_OPEN entry must use the bar immediately after the signal")
+    entry_candle_start = data.index[entry_index] - pd.Timedelta(minutes=5)
+    if entry_candle_start < signal_timestamp:
+        raise AssertionError("NEXT_BAR_OPEN entry cannot precede the signal decision")
     if not bool(entry_row.get("ValidOHLCV", True)):
         return {"attemptStatus": "INVALID_ENTRY_BAR", "primaryReason": "INVALID_ENTRY_BAR"}
     raw_entry = float(entry_row["Open"])
@@ -708,9 +819,12 @@ def _plan_trade(
     return {
         "attemptStatus": "READY",
         "primaryReason": None,
-        "entryTimestamp": _iso(signal_timestamp),
+        "entryTimestamp": _iso(entry_candle_start),
+        "entryCandleStart": _iso(entry_candle_start),
+        "entryPriceTimestamp": _iso(entry_candle_start),
         "entryDataTimestamp": _iso(data.index[entry_index]),
         "entryBarIndex": entry_index,
+        "nextBarInvariant": entry_index == signal_index + 1,
         "rawEntryPrice": _finite(raw_entry, 4),
         "entryPrice": _finite(entry_price, 4),
         "structuralStop": _finite(structural_stop, 4),
@@ -877,7 +991,8 @@ FEATURE_COLUMNS = [
     "RollingWindowVolume", "RollingTradedValue", "RollingReturnPct",
     "SameTimeHistoricalMedianVolume", "RollingWindowRvol", "PriceAccelerationPct",
     "CloseLocation", "UpperWickFraction", "DistanceFromVwapAtr", "CandleRangeAtr",
-    "BullishEmaTrend", "EmaFastRising", "AtrPct", "SpreadPct",
+    "BullishEmaTrend", "EmaFastRising", "AtrPct", "MedianDailyTradedValue",
+    "OpeningTradedValue", "DailyAtrPct", "OpeningGapPct", "SpreadPct",
 ]
 
 
@@ -1099,6 +1214,7 @@ def build_watchlist_history(
     maximum_spread_pct: float,
     selection_method: SelectionMethod = "SCORE",
     deterministic_seed: str = "opendelta-watchlist",
+    eligibility_audit: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     config.validate()
     if not candidate_frames:
@@ -1126,11 +1242,35 @@ def build_watchlist_history(
                 nifty_row=nifty_row,
                 sector_by_symbol=sector_by_symbol,
                 minimum_average_traded_value=minimum_average_traded_value,
+                minimum_price=config.minimum_price,
+                maximum_price=config.maximum_price,
+                minimum_median_daily_traded_value=config.minimum_median_daily_traded_value,
+                minimum_opening_traded_value=config.minimum_opening_traded_value,
+                minimum_daily_atr_pct=config.minimum_daily_atr_pct,
+                maximum_daily_atr_pct=config.maximum_daily_atr_pct,
+                maximum_opening_gap_pct=config.maximum_opening_gap_pct,
                 maximum_candle_range_atr=maximum_candle_range_atr,
                 maximum_spread_pct=maximum_spread_pct,
             )
             scores = {str(row["symbol"]): row for row in ranked_context if str(row["symbol"]) in rows}
             ranked = sorted(scores.values(), key=lambda row: (-float(row["score"]), str(row["symbol"])))
+            if eligibility_audit is not None:
+                eligibility_audit["evaluations"] = int(eligibility_audit.get("evaluations", 0)) + len(ranked)
+                eligible_symbols = eligibility_audit.setdefault("eligibleSymbols", set())
+                scored_symbols = eligibility_audit.setdefault("scoredSymbols", set())
+                reasons_by_symbol = eligibility_audit.setdefault("reasonsBySymbol", {})
+                evaluation_reason_counts = eligibility_audit.setdefault("evaluationReasonCounts", {})
+                for scored_row in ranked:
+                    symbol = str(scored_row["symbol"])
+                    reasons = [str(value) for value in scored_row.get("eligibilityReasons", [])]
+                    if bool(scored_row.get("eligible")):
+                        eligible_symbols.add(symbol)
+                        scored_symbols.add(symbol)
+                    else:
+                        symbol_reasons = reasons_by_symbol.setdefault(symbol, set())
+                        symbol_reasons.update(reasons)
+                        for reason in reasons:
+                            evaluation_reason_counts[reason] = int(evaluation_reason_counts.get(reason, 0)) + 1
             before_order = sorted(current, key=lambda symbol: (-float(scores.get(symbol, current[symbol]).get("score", 0)), symbol))
             rank_before = {symbol: index + 1 for index, symbol in enumerate(before_order)}
             removed: list[dict[str, Any]] = []
@@ -1354,7 +1494,11 @@ def summarize_watchlist_history(
     }
 
 
-def trade_performance(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def trade_performance(
+    trades: Sequence[Mapping[str, Any]],
+    *,
+    tested_sessions: int | None = None,
+) -> dict[str, Any]:
     ordered = sorted(trades, key=lambda row: (str(row.get("entryTimestamp")), str(row.get("symbol"))))
     pnl = [float(row.get("netPnl") or 0) for row in ordered]
     gross = sum(float(row.get("grossPnl") or 0) for row in ordered)
@@ -1365,24 +1509,125 @@ def trade_performance(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     peaks = np.maximum.accumulate(equity)
     drawdown = float(np.max(peaks - equity)) if len(equity) else 0.0
     days = {str(row.get("entryTimestamp", ""))[:10] for row in ordered}
+    calendar_sessions = max(int(tested_sessions or 0), len(days))
     gross_profit = sum(winners)
     gross_loss = abs(sum(losers))
+    gross_trade_values = [float(row.get("grossPnl") or 0) for row in ordered]
+    gross_winning_profit = sum(value for value in gross_trade_values if value > 0)
+    gross_losing_loss = abs(sum(value for value in gross_trade_values if value < 0))
+    exit_counts = {
+        "targetExits": sum(str(row.get("exitReason")) in {"TARGET_EXIT", "TARGET_GAP"} for row in ordered),
+        "stopExits": sum(str(row.get("exitReason")) in {"STOP_EXIT", "STOP_GAP"} for row in ordered),
+        "timeExits": sum(str(row.get("exitReason")) == "TIME_EXIT" for row in ordered),
+        "sessionExits": sum(str(row.get("exitReason")) == "SESSION_EXIT" for row in ordered),
+    }
+    trades_per_calendar_session = len(ordered) / calendar_sessions if calendar_sessions else 0.0
+    trades_per_active_day = len(ordered) / len(days) if days else 0.0
     return {
         "trades": len(ordered),
-        "tradesPerDay": round(len(ordered) / len(days), 4) if days else 0.0,
+        "testedSessions": calendar_sessions,
+        "activeTradingDays": len(days),
+        "tradesPerDay": round(trades_per_calendar_session, 6),
+        "tradesPerCalendarSession": round(trades_per_calendar_session, 6),
+        "tradesPerActiveDay": round(trades_per_active_day, 6),
         "winRate": round(len(winners) / len(ordered) * 100.0, 4) if ordered else 0.0,
         "averageWinner": round(float(np.mean(winners)), 4) if winners else None,
         "averageLoser": round(float(np.mean(losers)), 4) if losers else None,
         "grossPnl": round(gross, 2),
+        "grossWinningProfit": round(gross_winning_profit, 2),
+        "grossLosingLoss": round(gross_losing_loss, 2),
         "costs": round(costs, 2),
         "netPnlAfterCosts": round(sum(pnl), 2),
         "profitFactor": round(gross_profit / gross_loss, 6) if gross_loss else None,
         "expectancy": round(float(np.mean(pnl)), 4) if pnl else None,
         "maximumDrawdown": round(drawdown, 2),
+        **exit_counts,
         "executedQuantityInvariant": all(
             int(row.get("executedQuantity") or row.get("quantity") or 0) == 50
             for row in ordered
         ),
+    }
+
+
+def selector_value_diagnostics(
+    history: Sequence[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+    trades: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    sessions = {str(item.get("sessionDate")) for item in history}
+    episodes: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for snapshot in history:
+        session_day = str(snapshot.get("sessionDate"))
+        for entry in snapshot.get("entries", []):
+            selected_at = str(entry.get("selectedAt") or entry.get("selectionTimestamp") or "")
+            key = (session_day, str(entry.get("symbol")), selected_at)
+            episodes.setdefault(key, dict(entry))
+    accepted = [row for row in candidates if not row.get("primaryReason")]
+    signal_keys = {
+        (
+            str(row.get("signalTimestamp", ""))[:10],
+            str(row.get("symbol")),
+            str(row.get("selectionTimestamp") or ""),
+        )
+        for row in accepted
+    }
+
+    def observation_summary(rows: Sequence[tuple[tuple[str, str, str], Mapping[str, Any]]]) -> dict[str, Any]:
+        count = len(rows)
+        with_buy = sum(key in signal_keys for key, _ in rows)
+        return {
+            "selectionObservations": count,
+            "selectionsProducingBuy": with_buy,
+            "percentageProducingBuy": round(with_buy / count * 100.0, 6) if count else 0.0,
+        }
+
+    episode_rows = list(episodes.items())
+    primary_rows = [(key, row) for key, row in episode_rows if row.get("tier") == "PRIMARY"]
+    reserve_rows = [(key, row) for key, row in episode_rows if row.get("tier") == "RESERVE"]
+    primary_trades = [row for row in trades if row.get("watchlistTier") == "PRIMARY"]
+    reserve_trades = [row for row in trades if row.get("watchlistTier") == "RESERVE"]
+
+    rank_performance: dict[str, Any] = {}
+    for rank in sorted({int(row.get("rankAfter") or 0) for _, row in episode_rows if row.get("rankAfter")}):
+        selected_rows = [(key, row) for key, row in episode_rows if int(row.get("rankAfter") or 0) == rank]
+        rank_trades = [row for row in trades if int(row.get("rankAfterRescan") or 0) == rank]
+        rank_performance[str(rank)] = {
+            **observation_summary(selected_rows),
+            "performance": trade_performance(rank_trades, tested_sessions=len(sessions)),
+        }
+
+    score_deciles: dict[str, Any] = {}
+    for low in range(0, 100, 10):
+        high = 100 if low == 90 else low + 10
+        label = f"{low}-{high}"
+        selected_rows = [
+            (key, row) for key, row in episode_rows
+            if low <= float(row.get("score") or 0) <= high
+            and (low == 90 or float(row.get("score") or 0) < high)
+        ]
+        decile_trades = [
+            row for row in trades
+            if low <= float(row.get("rollingScore") or 0) <= high
+            and (low == 90 or float(row.get("rollingScore") or 0) < high)
+        ]
+        if selected_rows or decile_trades:
+            score_deciles[label] = {
+                **observation_summary(selected_rows),
+                "performance": trade_performance(decile_trades, tested_sessions=len(sessions)),
+            }
+
+    return {
+        **observation_summary(episode_rows),
+        "primary": {
+            **observation_summary(primary_rows),
+            "performance": trade_performance(primary_trades, tested_sessions=len(sessions)),
+        },
+        "reserve": {
+            **observation_summary(reserve_rows),
+            "performance": trade_performance(reserve_trades, tested_sessions=len(sessions)),
+        },
+        "selectionRankPerformance": rank_performance,
+        "scoreDecilePerformance": score_deciles,
     }
 
 
@@ -1404,11 +1649,11 @@ def compare_watchlist_variant(
 
     def period_performance(start: pd.Timestamp, end: pd.Timestamp) -> dict[str, Any]:
         rows = [row for row in trades if in_range(row, start, end)]
-        result = trade_performance(rows)
         period_sessions = {
             value for value in sessions
             if start.date() <= date.fromisoformat(value) < end.date()
         }
+        result = trade_performance(rows, tested_sessions=len(period_sessions))
         traded_sessions = {str(row.get("entryTimestamp", ""))[:10] for row in rows}
         result["noTradeDays"] = max(len(period_sessions - traded_sessions), 0)
         return result
@@ -1454,20 +1699,20 @@ def compare_watchlist_variant(
             row for row in trades
             if bucket_start <= _as_ist(row["entryTimestamp"]).time().replace(tzinfo=None) < bucket_end
         ]
-        midday[label] = trade_performance(rows)
-    overall = trade_performance(trades)
+        midday[label] = trade_performance(rows, tested_sessions=len(sessions))
+    overall = trade_performance(trades, tested_sessions=len(sessions))
     overall["noTradeDays"] = max(len(sessions) - len({str(row.get("entryTimestamp", ""))[:10] for row in trades}), 0)
     return {
         **watchlist,
         "overall": overall,
         "chronologicalFolds": periods,
         "midday": midday,
+        "selectorDiagnostics": selector_value_diagnostics(history, candidates, trades),
     }
 
 
 def validation_decision(comparisons: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     baseline_labels = (
-        "FROZEN_OPEN_TOP_TWO",
         "FULL_ELIGIBLE_UNIVERSE",
         "LIQUIDITY_ONLY_TOP_FIVE",
         "CAUSALLY_MATCHED_RANDOM_FIVE",
@@ -1498,6 +1743,7 @@ def validation_decision(comparisons: Mapping[str, Mapping[str, Any]]) -> dict[st
                 or int(candidate.get("trades") or 0) < MINIMUM_UNTOUCHED_VALIDATION_TRADES
                 or finite_metric(candidate, "netPnlAfterCosts", float("-inf")) <= 0
                 or finite_metric(candidate, "expectancy", float("-inf")) <= 0
+                or finite_metric(candidate, "profitFactor", float("-inf")) <= 1
                 or not all(
                     finite_metric(candidate, "netPnlAfterCosts", float("-inf"))
                     > finite_metric(row, "netPnlAfterCosts", float("-inf"))

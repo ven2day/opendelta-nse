@@ -38,13 +38,21 @@ test("recommended configuration keeps fixed quantity exactly 50", async () => {
   assert.equal(defaults.watchlistSelectedSymbols, 5);
   assert.equal(defaults.watchlistPrimarySymbols, 2);
   assert.equal(defaults.watchlistRescanIntervalMinutes, 30);
+  assert.equal(defaults.maximumHoldingBars, 12);
+  assert.equal(defaults.minimumPrice, 100);
+  assert.equal(defaults.maximumPrice, 5000);
+  assert.equal(defaults.minimumMedianDailyTradedValue, 100000000);
+  assert.equal(defaults.minimumOpeningTradedValue, 2500000);
+  assert.equal(defaults.minimumDailyAtrPct, 0.8);
+  assert.equal(defaults.maximumDailyAtrPct, 4.0);
+  assert.equal(defaults.maximumOpeningGapPct, 3.0);
   assert.match(panel, /disabled=\{definition.key === "quantityPerTrade"\}/);
   assert.match(dashboard, /quantityPerTrade: 50/);
 });
 
 test("settings remain compact and research-only", async () => {
   const { panel } = await sources();
-  for (const heading of ["Basic settings", "Watchlist selection", "Opening range breakout", "Midday breakout", "Exit and risk", "Advanced settings"]) {
+  for (const heading of ["Basic settings", "Watchlist selection", "Universe eligibility", "Opening range breakout", "Midday breakout", "Exit and risk", "Advanced settings"]) {
     assert.match(panel, new RegExp(heading));
   }
   assert.doesNotMatch(panel, /<details[^>]* open/);
@@ -59,12 +67,18 @@ test("results expose required audit and comparison fields", async () => {
     "Top-2", "Full-universe baseline", "Liquidity-only baseline",
     "Random-five baseline", "Development", "Untouched validation",
     "Costs", "50 shares", "Effective settings",
+    "Symbols requested", "Eligible at least once", "Actually scored", "Frozen replacements",
+    "Rolling rescans", "Selector-value diagnostics", "CSV / JSON downloads",
+    "Signal", "Decision", "Entry candle",
   ]) assert.match(results, new RegExp(label, "i"));
   assert.match(results, /Gross P&amp;L/i);
   assert.match(results, /Net P&amp;L/i);
   assert.match(results, /Export Markdown/);
   assert.match(results, /JSON.stringify\(response.metadata.effectiveConfiguration/);
   assert.match(results, /Live orders remain disabled/);
+  for (const dataset of ["daily-watchlists", "candidates", "signals", "trades", "benchmark-results"]) {
+    assert.match(results, new RegExp(dataset));
+  }
 });
 
 test("generic JSON configuration is used for the standalone strategy", async () => {

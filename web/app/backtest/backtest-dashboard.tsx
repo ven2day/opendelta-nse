@@ -806,6 +806,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     if (setting("quantityPerTrade") !== 50) errors.quantity = "Top-5 Opening Range Breakout quantity must remain exactly 50 shares.";
     if (setting("emaFast") >= setting("emaSlow")) errors.ema = "EMA fast length must be below EMA slow length.";
     if (setting("minimumStopPct") > setting("maximumStopPct")) errors.stop = "Minimum stop cannot exceed maximum stop.";
+    if (setting("minimumPrice") >= setting("maximumPrice")) errors.priceEligibility = "Minimum eligible price must be below maximum eligible price.";
+    if (setting("minimumDailyAtrPct") >= setting("maximumDailyAtrPct")) errors.dailyAtrEligibility = "Minimum daily ATR must be below maximum daily ATR.";
     if (setting("watchlistPrimarySymbols") > setting("watchlistSelectedSymbols")) errors.watchlistPrimary = "Primary symbols cannot exceed selected watchlist symbols.";
     if (setting("watchlistMaximumReplacementsPerRescan") > setting("watchlistSelectedSymbols")) errors.watchlistReplacements = "Maximum replacements cannot exceed selected watchlist symbols.";
     if (setting("watchlistRescanIntervalMinutes") % 5 !== 0 || setting("watchlistRollingWindowMinutes") % 5 !== 0) errors.watchlistBarAlignment = "Rescan interval and rolling window must be multiples of five minutes.";

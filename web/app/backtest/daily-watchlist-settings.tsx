@@ -80,6 +80,7 @@ const watchlistKeys = definitions.filter((item) => item.visibility === "watchlis
 const openingKeys = definitions.filter((item) => item.visibility === "opening").map((item) => item.key);
 const middayKeys = definitions.filter((item) => item.visibility === "midday").map((item) => item.key);
 const riskKeys = definitions.filter((item) => item.visibility === "risk").map((item) => item.key);
+const eligibilityKeys = definitions.filter((item) => item.visibility === "eligibility").map((item) => item.key);
 const advancedKeys = definitions.filter((item) => item.visibility === "advanced").map((item) => item.key);
 
 export function Top5OpeningRangeBreakoutSettingsPanel(props: Props) {
@@ -92,6 +93,10 @@ export function Top5OpeningRangeBreakoutSettingsPanel(props: Props) {
     <details className="market-settings-card market-settings-section">
       <summary><span><strong>Watchlist selection</strong><small>Opening selection, rolling rescans and replacement controls</small></span><ChevronDown size={17} /></summary>
       <Fields keys={watchlistKeys} {...props} />
+    </details>
+    <details className="market-settings-card market-settings-section">
+      <summary><span><strong>Universe eligibility</strong><small>Price, causal liquidity, daily ATR and opening-gap limits</small></span><ChevronDown size={17} /></summary>
+      <Fields keys={eligibilityKeys} {...props} />
     </details>
     <details className="market-settings-card market-settings-section">
       <summary><span><strong>Opening range breakout</strong><small>Completed 09:15–09:30 range and causal next-bar entry</small></span><ChevronDown size={17} /></summary>

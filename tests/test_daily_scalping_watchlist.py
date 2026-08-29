@@ -19,8 +19,10 @@ from daily_scalping_watchlist import (
     detect_opening_range_breakouts,
     detect_rolling_momentum_breakouts,
     execute_portfolio,
+    score_rescan_rows,
     select_candidates_for_history,
     stable_fingerprint,
+    trade_performance,
     validation_decision,
 )
 from main import IST
@@ -59,6 +61,9 @@ def _row(score_value: float, timestamp: pd.Timestamp) -> dict[str, object]:
         "PriceAccelerationPct": 0.2, "CloseLocation": 0.8, "UpperWickFraction": 0.1,
         "DistanceFromVwapAtr": 0.7, "CandleRangeAtr": 1.0,
         "BullishEmaTrend": True, "EmaFastRising": True, "AtrPct": 1.0,
+        "MedianDailyTradedValue": 200_000_000.0,
+        "OpeningTradedValue": 5_000_000.0,
+        "DailyAtrPct": 1.5, "OpeningGapPct": 0.5,
         "SpreadPct": None, "source": timestamp,
     }
 
@@ -197,8 +202,15 @@ def test_opening_range_breakout_uses_completed_range_and_next_open() -> None:
     assert result
     assert result[0]["breakoutLevel"] == 100.6
     assert result[0]["signalTimestamp"] == frame.index[signal_index].isoformat()
+    assert result[0]["signalCandleStart"] == (frame.index[signal_index] - pd.Timedelta(minutes=5)).isoformat()
+    assert result[0]["signalCandleEnd"] == frame.index[signal_index].isoformat()
+    assert result[0]["decisionTimestamp"] == frame.index[signal_index].isoformat()
     assert result[0]["entryTimestamp"] == frame.index[signal_index].isoformat()
+    assert result[0]["entryCandleStart"] == frame.index[signal_index].isoformat()
+    assert result[0]["entryPriceTimestamp"] == frame.index[signal_index].isoformat()
     assert result[0]["entryDataTimestamp"] == frame.index[signal_index + 1].isoformat()
+    assert result[0]["entryBarIndex"] == result[0]["signalBarIndex"] + 1
+    assert result[0]["nextBarInvariant"] is True
     assert result[0]["executedQuantity"] == 50
 
 
@@ -255,14 +267,61 @@ def test_fixed_quantity_is_authoritative_in_backend_schema() -> None:
     assert request.watchlistRescanEndTime == "14:00"
     assert request.watchlistSelectedSymbols == 5
     assert request.watchlistPrimarySymbols == 2
+    assert request.maximumHoldingBars == 12
+    assert request.minimumPrice == 100
+    assert request.maximumPrice == 5000
+    assert request.minimumMedianDailyTradedValue == 100_000_000
+    assert request.minimumOpeningTradedValue == 2_500_000
+    assert request.minimumDailyAtrPct == 0.8
+    assert request.maximumDailyAtrPct == 4.0
+    assert request.maximumOpeningGapPct == 3.0
+    submitted_override = Top5OpeningRangeBreakoutConfigurationRequest(maximumHoldingBars=6)
+    assert submitted_override.maximumHoldingBars == 6
+    assert submitted_override.strategy_config().maximum_holding_bars == 6
     with pytest.raises(ValueError, match="50"):
         Top5OpeningRangeBreakoutConfigurationRequest(quantityPerTrade=49)
     with pytest.raises(ValueError, match="Primary symbols"):
         Top5OpeningRangeBreakoutConfigurationRequest(watchlistSelectedSymbols=2, watchlistPrimarySymbols=3)
+    with pytest.raises(ValueError, match="Minimum price"):
+        Top5OpeningRangeBreakoutConfigurationRequest(minimumPrice=5000, maximumPrice=5000)
+    with pytest.raises(ValueError, match="daily ATR"):
+        Top5OpeningRangeBreakoutConfigurationRequest(minimumDailyAtrPct=4, maximumDailyAtrPct=4)
+
+
+def test_idea_below_one_hundred_rupees_is_ineligible() -> None:
+    timestamp = pd.Timestamp("2026-08-28T09:30:00+05:30")
+    idea = pd.Series(_row(2, timestamp), name=timestamp)
+    idea["Open"] = 14.0
+    idea["High"] = 14.2
+    idea["Low"] = 13.8
+    idea["Close"] = 14.0
+    scored = score_rescan_rows(
+        {"IDEA": idea}, nifty_row=None, sector_by_symbol={},
+        minimum_average_traded_value=500_000,
+        minimum_price=100, maximum_price=5000,
+        minimum_median_daily_traded_value=100_000_000,
+        minimum_opening_traded_value=2_500_000,
+        minimum_daily_atr_pct=0.8, maximum_daily_atr_pct=4.0,
+        maximum_opening_gap_pct=3.0, maximum_candle_range_atr=3.0,
+        maximum_spread_pct=0.15,
+    )
+    assert scored[0]["eligible"] is False
+    assert scored[0]["primaryEligibilityReason"] == "PRICE_BELOW_MINIMUM"
+    assert "PRICE_BELOW_MINIMUM" in scored[0]["eligibilityReasons"]
+
+
+def test_trades_per_session_and_active_day_are_distinct() -> None:
+    trades = [
+        _ready_candidate(str(index), f"2026-08-{20 + index:02d}T10:00:00+05:30", f"2026-08-{20 + index:02d}T10:30:00+05:30", symbol=chr(65 + index))
+        for index in range(4)
+    ]
+    result = trade_performance(trades, tested_sessions=247)
+    assert result["tradesPerCalendarSession"] == round(4 / 247, 6)
+    assert result["tradesPerActiveDay"] == 1.0
 
 
 def _metric(net: float, expectancy: float, trades: int = 20) -> dict[str, object]:
-    return {"trades": trades, "netPnlAfterCosts": net, "expectancy": expectancy}
+    return {"trades": trades, "netPnlAfterCosts": net, "expectancy": expectancy, "profitFactor": 1.2}
 
 
 def test_selector_is_not_approved_for_signals_or_negative_validation() -> None:
@@ -340,8 +399,15 @@ def test_standalone_backend_response_contains_all_comparisons_and_effective_sett
     )
     assert result["metadata"]["strategyKey"] == "top_5_opening_range_breakout"
     assert result["metadata"]["effectiveConfiguration"]["quantityPerTrade"] == 50
+    assert result["metadata"]["submittedMaximumHoldingBars"] == 12
+    assert result["metadata"]["effectiveMaximumHoldingBars"] == 12
     assert result["metadata"]["liveOrdersEnabled"] is False
     assert result["summary"]["executedQuantity"] == 50
+    assert result["summary"]["frozenReplacements"] == 0
+    assert result["summary"]["watchlistReplacements"] == 0
+    assert result["metadata"]["universeEligibility"]["symbolsRequested"] == 2
+    assert "symbolsActuallyScored" in result["metadata"]["universeEligibility"]
+    assert "candidates" in result
     assert set(result["comparison"]) == {
         "FROZEN_OPEN_TOP_FIVE", "ROLLING_TOP_FIVE", "FROZEN_OPEN_TOP_TWO",
         "FULL_ELIGIBLE_UNIVERSE", "LIQUIDITY_ONLY_TOP_FIVE",

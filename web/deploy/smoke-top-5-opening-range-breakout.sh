@@ -94,7 +94,7 @@ docker exec -i "${exporter_container}" node --input-type=module -e '
 grep -q '^# Top-5 Opening Range Breakout$' "${markdown}"
 grep -q '^- Strategy: Top-5 Opening Range Breakout$' "${markdown}"
 grep -q '^- Watchlist mode: FROZEN_OPEN$' "${markdown}"
-grep -q '^## Daily watchlists$' "${markdown}"
+grep -q '^## Daily-selection summary$' "${markdown}"
 grep -q '^## Effective settings$' "${markdown}"
 grep -q '09:30:00+05:30' "${markdown}"
 ! grep -qi 'VWAP pullback performance' "${markdown}"

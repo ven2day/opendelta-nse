@@ -381,6 +381,13 @@ class Top5OpeningRangeBreakoutConfigurationRequest(BaseModel):
     rewardRiskRatio: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rewardRiskRatio"))
     maximumHoldingBars: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumHoldingBars"))
     minimumAverageTradedValue: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumAverageTradedValue"))
+    minimumPrice: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumPrice"))
+    maximumPrice: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumPrice"))
+    minimumMedianDailyTradedValue: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumMedianDailyTradedValue"))
+    minimumOpeningTradedValue: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumOpeningTradedValue"))
+    minimumDailyAtrPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumDailyAtrPct"))
+    maximumDailyAtrPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumDailyAtrPct"))
+    maximumOpeningGapPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumOpeningGapPct"))
     maximumCandleRangeAtr: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumCandleRangeAtr"))
     liveMaximumSpreadPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "liveMaximumSpreadPct"))
     maximumTradesPerSymbolPerDay: Literal[1] = 1
@@ -439,6 +446,13 @@ class Top5OpeningRangeBreakoutConfigurationRequest(BaseModel):
             reward_risk_ratio=self.rewardRiskRatio,
             maximum_holding_bars=self.maximumHoldingBars,
             minimum_average_traded_value=self.minimumAverageTradedValue,
+            minimum_price=self.minimumPrice,
+            maximum_price=self.maximumPrice,
+            minimum_median_daily_traded_value=self.minimumMedianDailyTradedValue,
+            minimum_opening_traded_value=self.minimumOpeningTradedValue,
+            minimum_daily_atr_pct=self.minimumDailyAtrPct,
+            maximum_daily_atr_pct=self.maximumDailyAtrPct,
+            maximum_opening_gap_pct=self.maximumOpeningGapPct,
             maximum_candle_range_atr=self.maximumCandleRangeAtr,
             live_maximum_spread_pct=self.liveMaximumSpreadPct,
             quantity_per_trade=self.quantityPerTrade,
@@ -2823,7 +2837,8 @@ def run_top_5_opening_range_breakout_backtest(
         "ATR", "SessionVWAP", "AverageTradedValue", "ValidOHLCV", "RollingWindowVolume",
         "RollingTradedValue", "RollingReturnPct", "RollingWindowRvol", "PriceAccelerationPct",
         "CloseLocation", "UpperWickFraction", "DistanceFromVwapAtr", "CandleRangeAtr",
-        "BullishEmaTrend", "EmaFastRising", "AtrPct", "SpreadPct",
+        "BullishEmaTrend", "EmaFastRising", "AtrPct", "MedianDailyTradedValue",
+        "OpeningTradedValue", "DailyAtrPct", "OpeningGapPct", "SpreadPct",
     ]
 
     def read_rescan_rows(path_value: str) -> pd.DataFrame:
@@ -2896,11 +2911,15 @@ def run_top_5_opening_range_breakout_backtest(
         "maximum_spread_pct": config.live_maximum_spread_pct,
         "deterministic_seed": selection_seed,
     }
+    frozen_eligibility_audit: dict[str, Any] = {}
+    rolling_eligibility_audit: dict[str, Any] = {}
     frozen_history = build_watchlist_history(
-        **history_arguments, config=frozen_config, selection_method="SCORE"
+        **history_arguments, config=frozen_config, selection_method="SCORE",
+        eligibility_audit=frozen_eligibility_audit,
     )
     rolling_history = build_watchlist_history(
-        **history_arguments, config=rolling_config, selection_method="SCORE"
+        **history_arguments, config=rolling_config, selection_method="SCORE",
+        eligibility_audit=rolling_eligibility_audit,
     )
     top_two_history = build_watchlist_history(
         **history_arguments, config=top_two_config, selection_method="SCORE"
@@ -2968,6 +2987,11 @@ def run_top_5_opening_range_breakout_backtest(
         })
     if any(int(trade.get("executedQuantity") or 0) != 50 for trade in trades):
         raise AssertionError("Daily Scalping Watchlist fixed-quantity invariant failed")
+    if any(
+        int(trade.get("entryBarIndex") or -1) != int(trade.get("signalBarIndex") or -2) + 1
+        for trade in trades
+    ):
+        raise AssertionError("NEXT_BAR_OPEN must use entryBarIndex = signalBarIndex + 1")
     rejection_counts: dict[str, int] = {}
     for item in rejected:
         reason = str(item.get("primaryReason") or item.get("reason") or "UNEXPLAINED_REJECTION")
@@ -2989,11 +3013,12 @@ def run_top_5_opening_range_breakout_backtest(
         for snapshot in active_history
         if int(snapshot.get("rescanNumber", 0)) == 1
     ]
-    midday_replacement_rows = [
+    rolling_replacement_rows = [
         snapshot
         for snapshot in rolling_history
         if int(snapshot.get("replacements", 0)) > 0
     ]
+    midday_replacement_rows = rolling_replacement_rows if config.mode == "ROLLING" else []
     primary_selections = sum(
         item.get("tier") == "PRIMARY"
         for row in daily_selection_rows
@@ -3004,6 +3029,75 @@ def run_top_5_opening_range_breakout_backtest(
         for row in daily_selection_rows
         for item in row["symbols"]
     )
+    frozen_watchlist_summary = summarize_watchlist_history(
+        frozen_history, variant_payloads["FROZEN_OPEN_TOP_FIVE"][0]
+    )
+    rolling_watchlist_summary = summarize_watchlist_history(
+        rolling_history, variant_payloads["ROLLING_TOP_FIVE"][0]
+    )
+
+    def eligibility_report(audit: Mapping[str, Any]) -> dict[str, Any]:
+        processed_symbols = {str(item["symbol"]) for item in prepared}
+        eligible_symbols = {str(value) for value in audit.get("eligibleSymbols", set())}
+        scored_symbols = {str(value) for value in audit.get("scoredSymbols", set())}
+        reasons_by_symbol = {
+            str(symbol): {str(reason) for reason in reasons}
+            for symbol, reasons in audit.get("reasonsBySymbol", {}).items()
+        }
+        failed_symbols = {str(item.get("symbol")) for item in errors}
+        rejected_symbols = set(request.symbols) - eligible_symbols
+        reason_priority = (
+            "CANDLE_DATA_UNAVAILABLE", "INVALID_OHLCV", "PRICE_UNAVAILABLE",
+            "PRICE_BELOW_MINIMUM", "PRICE_ABOVE_MAXIMUM",
+            "MEDIAN_DAILY_TRADED_VALUE_UNAVAILABLE", "MEDIAN_DAILY_TRADED_VALUE_BELOW_MINIMUM",
+            "OPENING_TRADED_VALUE_UNAVAILABLE", "OPENING_TRADED_VALUE_BELOW_MINIMUM",
+            "DAILY_ATR_UNAVAILABLE", "DAILY_ATR_BELOW_MINIMUM", "DAILY_ATR_ABOVE_MAXIMUM",
+            "OPENING_GAP_UNAVAILABLE", "OPENING_GAP_ABOVE_MAXIMUM",
+            "AVERAGE_TRADED_VALUE_UNAVAILABLE", "AVERAGE_TRADED_VALUE_BELOW_MINIMUM",
+            "ROLLING_RVOL_UNAVAILABLE", "ROLLING_TRADED_VALUE_UNAVAILABLE",
+            "CANDLE_RANGE_QUALITY_UNAVAILABLE", "CANDLE_RANGE_QUALITY_FAILED",
+            "VOLUME_NOT_POSITIVE", "ATR_UNAVAILABLE", "EXCESSIVE_SPREAD",
+        )
+        rows: list[dict[str, Any]] = []
+        symbol_reason_counts: dict[str, int] = {}
+        for symbol in sorted(rejected_symbols):
+            reasons = set(reasons_by_symbol.get(symbol, set()))
+            if symbol in failed_symbols or symbol not in processed_symbols:
+                reasons.add("CANDLE_DATA_UNAVAILABLE")
+            ordered_reasons = [reason for reason in reason_priority if reason in reasons]
+            ordered_reasons.extend(sorted(reasons - set(ordered_reasons)))
+            if not ordered_reasons:
+                ordered_reasons = ["NO_ELIGIBLE_SELECTION_OBSERVATION"]
+            for reason in ordered_reasons:
+                symbol_reason_counts[reason] = symbol_reason_counts.get(reason, 0) + 1
+            rows.append({
+                "symbol": symbol,
+                "primaryReason": ordered_reasons[0],
+                "reasons": ordered_reasons,
+            })
+        return {
+            "symbolsRequested": len(request.symbols),
+            "symbolsWithCandleData": len(processed_symbols),
+            "symbolsEligibleAtLeastOnce": len(eligible_symbols),
+            "symbolsRejectedForEntirePeriod": len(rejected_symbols),
+            "symbolsActuallyScored": len(scored_symbols),
+            "eligibilityEvaluations": int(audit.get("evaluations", 0)),
+            "rejectionReasonEvaluationCounts": dict(sorted(
+                (
+                    (str(reason), int(count))
+                    for reason, count in audit.get("evaluationReasonCounts", {}).items()
+                ),
+                key=lambda pair: (-pair[1], pair[0]),
+            )),
+            "rejectionReasonSymbolCounts": dict(sorted(
+                symbol_reason_counts.items(), key=lambda pair: (-pair[1], pair[0])
+            )),
+            "rejectedSymbols": rows,
+        }
+
+    frozen_eligibility = eligibility_report(frozen_eligibility_audit)
+    rolling_eligibility = eligibility_report(rolling_eligibility_audit)
+    active_eligibility = rolling_eligibility if config.mode == "ROLLING" else frozen_eligibility
     summary = {
         **comparison[active_label]["overall"],
         **summarize_watchlist_history(active_history, active_candidates),
@@ -3017,9 +3111,13 @@ def run_top_5_opening_range_breakout_backtest(
         "dailyWatchlists": len(daily_selection_rows),
         "primarySelections": int(primary_selections),
         "reserveSelections": int(reserve_selections),
-        "watchlistReplacements": sum(
-            int(row.get("replacements", 0)) for row in midday_replacement_rows
-        ),
+        "watchlistReplacements": int(summarize_watchlist_history(active_history, active_candidates)["replacements"]),
+        "frozenWatchlists": sum(int(row.get("rescanNumber", 0)) == 1 for row in frozen_history),
+        "frozenReplacements": 0,
+        "rollingWatchlists": sum(int(row.get("rescanNumber", 0)) == 1 for row in rolling_history),
+        "rollingRescans": len(rolling_history),
+        "rollingPromotions": int(rolling_watchlist_summary["newlyPromotedSymbols"]),
+        "rollingRemovals": sum(len(row.get("removed", [])) for row in rolling_history),
         "openingBreakoutCandidates": len(opening_candidates),
         "rejectionCounts": dict(sorted(rejection_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
         "funnel": {
@@ -3058,13 +3156,19 @@ def run_top_5_opening_range_breakout_backtest(
             "universeMode": request.universeMode,
             "symbolsRequested": len(request.symbols),
             "symbolsProcessed": len(prepared),
+            "symbolsEligible": active_eligibility["symbolsEligibleAtLeastOnce"],
+            "symbolsRejected": active_eligibility["symbolsRejectedForEntirePeriod"],
+            "symbolsActuallyScored": active_eligibility["symbolsActuallyScored"],
             "universeEvaluated": len(prepared),
             "tradingDays": len(daily_selection_rows),
             "symbolsFailed": len(errors),
             "workerCount": workers,
             "runtimeSeconds": round(time.perf_counter() - started_clock, 4),
             "configuration": requested.public(),
+            "submittedConfiguration": requested.public(),
             "effectiveConfiguration": requested.public(),
+            "submittedMaximumHoldingBars": requested.maximumHoldingBars,
+            "effectiveMaximumHoldingBars": config.maximum_holding_bars,
             "configurationHash": configuration_hash,
             "fingerprint": fingerprint,
             "dataSnapshot": fingerprint,
@@ -3079,6 +3183,7 @@ def run_top_5_opening_range_breakout_backtest(
                 "sectorSupportSymbols": len(support_symbols),
                 "supportSymbolsUnavailable": len(support_errors),
             },
+            "universeEligibility": active_eligibility,
         },
         "summary": summary,
         "watchlist": {
@@ -3086,8 +3191,32 @@ def run_top_5_opening_range_breakout_backtest(
             "summary": summarize_watchlist_history(active_history, active_candidates),
             "history": active_history,
         },
+        "allWatchlistHistory": [
+            *({**row, "benchmarkVariant": "FROZEN_OPEN_TOP_FIVE"} for row in frozen_history),
+            *({**row, "benchmarkVariant": "ROLLING_TOP_FIVE"} for row in rolling_history),
+        ],
         "dailySelections": daily_selection_rows,
         "middayReplacements": midday_replacement_rows,
+        "watchlistModeSummaries": {
+            "FROZEN_OPEN": {
+                "watchlists": summary["frozenWatchlists"],
+                "replacements": 0,
+                **frozen_watchlist_summary,
+                "eligibility": frozen_eligibility,
+            },
+            "ROLLING": {
+                "watchlists": summary["rollingWatchlists"],
+                "rescans": summary["rollingRescans"],
+                "promotions": summary["rollingPromotions"],
+                "removals": summary["rollingRemovals"],
+                **rolling_watchlist_summary,
+                "eligibility": rolling_eligibility,
+            },
+        },
+        "candidates": sorted(
+            [*opening_candidates, *midday_candidates],
+            key=lambda row: (str(row.get("signalTimestamp")), str(row.get("symbol")), str(row.get("candidateId"))),
+        ),
         "signals": accepted_signals,
         "openingSignals": [
             item for item in accepted_signals if item.get("signalType") == "OPENING_RANGE_BREAKOUT"

@@ -19,6 +19,23 @@ diagnostics.
 
 No strategy in this repository is represented as guaranteed profitable.
 
+## Stock Scanner
+
+The authenticated `/scanner` page is a paper/research opportunity scanner built
+on the same causal ranking functions used by the Top-5 Opening Range Breakout
+backtest. It reads locally cached completed five-minute candles for the saved
+global price-filtered NSE universe and rescans every 15 minutes from 09:30
+through 14:30 IST. Ranks 1-2 are `PRIMARY`, ranks 3-5 are `RESERVE`, and the UI
+also displays the top 20 eligible opportunities plus the complete intraday
+promotion/removal history.
+
+The scanner applies the existing same-clock 30-minute RVOL, traded-value,
+NIFTY/sector relative-strength, session VWAP/EMA trend, acceleration and candle
+quality score. The 30-minute residence rule and 10-point promotion advantage
+remain active. It never fetches missing historical candles during an HTTP
+request, never creates a broker order, and never expands the separately frozen
+RSI Recovery signal universe.
+
 ## Repository security
 
 This is a public repository. Never commit `.env` files, Dhan credentials,

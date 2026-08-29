@@ -157,6 +157,7 @@ from rsi_exit_optimizer import (
     RsiExitOptimizationGrid,
     evaluate_rsi_exit_grid,
 )
+from stock_scanner import StockScannerService
 from universe_selection import (
     DEFAULT_MAXIMUM_PRICE,
     DEFAULT_MINIMUM_BUY_OBSERVATIONS,
@@ -1554,6 +1555,19 @@ class HistoricalDataStore:
         except (OSError, ValueError, KeyError, pd.errors.ParserError):
             return None
 
+    def _read_cache_without_ttl(self, path: Path) -> pd.DataFrame | None:
+        """Read a persisted cache regardless of age for explicitly read-only consumers."""
+        try:
+            frame = pd.read_csv(path, index_col="Timestamp", parse_dates=["Timestamp"])
+            frame.index = pd.DatetimeIndex(frame.index)
+            if frame.index.tz is None:
+                frame.index = frame.index.tz_localize(IST)
+            else:
+                frame.index = frame.index.tz_convert(IST)
+            return frame
+        except (OSError, ValueError, KeyError, pd.errors.ParserError):
+            return None
+
     def _write_cache(self, path: Path, frame: pd.DataFrame) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary: Path | None = None
@@ -1643,6 +1657,28 @@ class HistoricalDataStore:
                 raw = self._fetch_raw(self.security_id(symbol), spec, fetch_start, now_ist)
             if not raw.empty:
                 self._write_cache(cache_path, raw)
+        return prepare_candles(raw, timeframe, analysis_start, now_ist, warmup_bars=warmup_bars)
+
+    def cached_candles(
+        self,
+        symbol: str,
+        timeframe: str,
+        duration_years: int,
+        analysis_start: datetime,
+        now_ist: datetime,
+        *,
+        benchmark: bool = False,
+        warmup_bars: int = 0,
+    ) -> pd.DataFrame:
+        """Read a local candle cache without fetching from Dhan on a miss."""
+        spec = TIMEFRAMES[timeframe]
+        source_key = spec.source_interval or "daily"
+        cache_symbol = "NIFTY50" if benchmark else symbol
+        raw = self._read_cache_without_ttl(
+            self._cache_path(cache_symbol, source_key, duration_years)
+        )
+        if raw is None:
+            raw = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
         return prepare_candles(raw, timeframe, analysis_start, now_ist, warmup_bars=warmup_bars)
 
 
@@ -3350,6 +3386,7 @@ _market_data_refresh_service: MarketDataRefreshService | None = None
 _oi_repository: OiRegimeRepository | None = None
 _backtest_history_repository: BacktestHistoryRepository | None = None
 _application_settings_repository: ApplicationSettingsRepository | None = None
+_stock_scanner_service: StockScannerService | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -3357,6 +3394,13 @@ def get_store() -> HistoricalDataStore:
     if _store is None:
         _store = create_store()
     return _store
+
+
+def get_stock_scanner_service() -> StockScannerService:
+    global _stock_scanner_service
+    if _stock_scanner_service is None:
+        _stock_scanner_service = StockScannerService(get_store())
+    return _stock_scanner_service
 
 
 def get_report_directory() -> Path:
@@ -3809,6 +3853,53 @@ def list_market_symbols() -> dict[str, Any]:
             "priceFilterApplied": filter_applied,
             "missingPriceCount": missing_price_count,
         }
+    except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+def _stock_scanner_company_names(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    frame = pd.read_csv(path, dtype=str).fillna("")
+    normalized = {str(column).strip().casefold(): column for column in frame.columns}
+    symbol_column = normalized.get("symbol")
+    name_column = normalized.get("company_name") or normalized.get("company name")
+    if symbol_column is None or name_column is None:
+        return {}
+    return {
+        str(symbol).strip().upper().removesuffix(".NS"): str(name).strip()
+        for symbol, name in zip(frame[symbol_column], frame[name_column], strict=False)
+        if str(symbol).strip() and str(name).strip()
+    }
+
+
+@app.get("/stock-scanner")
+def stock_scanner(refresh: bool = Query(default=False)) -> dict[str, Any]:
+    """Return the causal, paper-only 15-minute Top-5 scanner snapshot."""
+    try:
+        market_symbols = list_market_symbols()
+        settings = get_application_settings_repository().get()
+        market_data_path = Path(
+            os.environ.get(
+                "LIVE_MARKET_DATA_FILE",
+                "/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv",
+            )
+        ).expanduser()
+        sector_value = (
+            os.environ.get("MARKET_CONTEXT_SECTOR_MAP_FILE")
+            or os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
+        )
+        sector_path = Path(sector_value).expanduser() if sector_value else None
+        return get_stock_scanner_service().snapshot(
+            market_symbols["symbols"],
+            minimum_price=settings.minimum_price,
+            maximum_price=settings.maximum_price,
+            sector_by_symbol=load_vwap_sector_mapping(sector_path),
+            company_names=_stock_scanner_company_names(market_data_path),
+            force=refresh,
+        )
+    except HTTPException:
+        raise
     except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 

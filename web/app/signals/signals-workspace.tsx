@@ -14,6 +14,7 @@ import {
   LogOut,
   Radio,
   RefreshCw,
+  ScanSearch,
   Settings2,
   TrendingUp,
   Wifi,
@@ -457,7 +458,7 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
   return <div className="site-shell backtest-shell signals-shell">
     <header className="global-header"><div className="header-inner">
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
-      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
+      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/scanner"><ScanSearch size={16} />Stock Scanner</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
       <div className="header-actions"><div className="user-chip"><div className="avatar">{initials}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
     </div></header>
 

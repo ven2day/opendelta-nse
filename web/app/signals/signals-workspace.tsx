@@ -463,6 +463,7 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
     </div></header>
 
     <main className="main-content signals-main">
+      <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/signals">NSE</a><a href="/signals/crypto">Crypto &amp; metals</a></nav>
       <section className="signals-healthbar">
         <div className="signals-health-title"><span className="section-kicker">Completed-candle research monitor</span><h1>Signals</h1></div>
         <div className={`health-item ${connected ? "healthy" : "warning"}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}<div><span>Dhan market data</span><strong>{status.connectionStatus}</strong></div></div>

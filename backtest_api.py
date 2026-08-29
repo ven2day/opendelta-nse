@@ -42,6 +42,8 @@ from application_settings import (
     filter_symbols_by_price,
     prices_by_symbol,
 )
+from crypto_api import create_crypto_router
+from crypto_engine import CryptoMarketService, service_from_environment as crypto_service_from_environment
 from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
 from backtest_jobs import BacktestJobService
 from live_signals import (
@@ -3403,6 +3405,7 @@ _oi_repository: OiRegimeRepository | None = None
 _backtest_history_repository: BacktestHistoryRepository | None = None
 _application_settings_repository: ApplicationSettingsRepository | None = None
 _stock_scanner_service: StockScannerService | None = None
+_crypto_market_service: CryptoMarketService | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -3518,6 +3521,16 @@ def get_market_data_refresh_service() -> MarketDataRefreshService:
         ).expanduser()
         _market_data_refresh_service = MarketDataRefreshService(output_file)
     return _market_data_refresh_service
+
+
+def get_crypto_market_service() -> CryptoMarketService:
+    global _crypto_market_service
+    if _crypto_market_service is None:
+        _crypto_market_service = crypto_service_from_environment()
+    return _crypto_market_service
+
+
+app.router.routes.extend(create_crypto_router(get_crypto_market_service).routes)
 
 
 def get_recovery_baseline_metadata() -> dict[str, Any]:
@@ -4231,6 +4244,8 @@ async def compare_rsi_exits(request: RsiExitComparisonRequest) -> dict[str, Any]
 def start_live_signal_runtime() -> None:
     if os.environ.get("LIVE_SIGNAL_ENGINE_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}:
         get_live_signal_engine().start()
+    if os.environ.get("CRYPTO_SIGNAL_ENGINE_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}:
+        get_crypto_market_service().start()
 
 
 @app.on_event("shutdown")
@@ -4239,4 +4254,6 @@ def stop_live_signal_runtime() -> None:
         _live_signal_engine.stop()
     if _market_data_refresh_service is not None:
         _market_data_refresh_service.shutdown()
+    if _crypto_market_service is not None:
+        _crypto_market_service.stop()
     _backtest_job_service.shutdown()

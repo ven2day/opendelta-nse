@@ -157,6 +157,31 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   const signalsHtml = await signalsResponse.text();
   assert.match(signalsHtml, /Completed-candle research monitor/);
   assert.match(signalsHtml, /Paper positions/);
+  assert.match(signalsHtml, /Crypto &amp; metals/);
+
+  const anonymousCryptoBacktest = await fetchFromWorker(worker, "/backtest/crypto", {
+    headers: { accept: "text/html" },
+    redirect: "manual",
+  });
+  assert.ok([302, 303, 307, 308].includes(anonymousCryptoBacktest.status));
+
+  const cryptoBacktestResponse = await fetchFromWorker(worker, "/backtest/crypto", {
+    headers: { accept: "text/html", cookie: sessionCookie },
+  });
+  assert.equal(cryptoBacktestResponse.status, 200);
+  const cryptoBacktestHtml = await cryptoBacktestResponse.text();
+  assert.match(cryptoBacktestHtml, /Crypto &amp; metals backtest/);
+  assert.match(cryptoBacktestHtml, /LIVE ORDERS DISABLED/);
+  assert.match(cryptoBacktestHtml, /Search catalog/);
+  assert.match(cryptoBacktestHtml, /Trend Pullback Recovery/);
+
+  const cryptoSignalsResponse = await fetchFromWorker(worker, "/signals/crypto", {
+    headers: { accept: "text/html", cookie: sessionCookie },
+  });
+  assert.equal(cryptoSignalsResponse.status, 200);
+  const cryptoSignalsHtml = await cryptoSignalsResponse.text();
+  assert.match(cryptoSignalsHtml, /Crypto &amp; metals signals/);
+  assert.match(cryptoSignalsHtml, /Completed-candle paper signals/);
 
   const universeResponse = await fetchFromWorker(worker, "/signals?view=universe", {
     headers: { accept: "text/html", cookie: sessionCookie },
@@ -170,6 +195,9 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
     body: JSON.stringify({ symbols: ["LUPIN"] }),
   });
   assert.equal(anonymousApi.status, 401);
+
+  const anonymousCryptoApi = await fetchFromWorker(worker, "/api/crypto?action=instruments");
+  assert.equal(anonymousCryptoApi.status, 401);
 });
 
 test("ships all synchronized NSE symbols without starter dependencies", async () => {

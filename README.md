@@ -1,4 +1,4 @@
-# OpenDelta NSE
+# OpenDelta Market Research
 
 Authenticated NSE market-research dashboard with RSI filters, signals,
 point-in-time backtesting, saved account history and auditable strategy
@@ -6,6 +6,8 @@ diagnostics.
 
 - Website: <https://nse.ventoday.com>
 - Backtest: <https://nse.ventoday.com/backtest>
+- Crypto/Metals backtest: `/backtest/crypto`
+- Crypto/Metals signals: `/signals/crypto`
 
 ## Strategy status
 
@@ -16,6 +18,7 @@ diagnostics.
 | Top-5 Opening Range Breakout | Research only | Supports `FROZEN_OPEN` and `ROLLING`; broker orders are disabled. |
 | Market-Aligned RSI Scalper | Retired | Historical results remain read-only; new runs are blocked. |
 | Market-Aligned VWAP Pullback Scalper | Retired | Historical results remain read-only; new runs are blocked. |
+| Crypto Trend Pullback Recovery | Research only | OKX/VALR public candles, completed-candle signals, next-bar backtest entry, no order path. |
 
 No strategy in this repository is represented as guaranteed profitable.
 
@@ -35,6 +38,45 @@ quality score. The 30-minute residence rule and 10-point promotion advantage
 remain active. It never fetches missing historical candles during an HTTP
 request, never creates a broker order, and never expands the separately frozen
 RSI Recovery signal universe.
+
+## Crypto and metals research
+
+OpenDelta now has separate NSE and Crypto/Metals workspaces. The main Dashboard
+remains NSE-only. `/backtest/crypto` and `/signals/crypto` share one
+provider-neutral strategy implementation so signal and backtest rules cannot
+drift apart.
+
+- `OKX` uses its public instruments and historical-candles APIs.
+- `VALR` uses its public pairs and candle-buckets APIs.
+- No API key is needed for the implemented public market-data endpoints.
+- The Add Instrument button accepts only exact active symbols returned by the
+  selected provider catalog.
+- `XAUUSD.p` and `XAGUSD.p` are broker-specific CFD names. They are not
+  hardcoded or silently mapped. Gold or silver can be added only when the
+  selected provider actually publishes an XAU/XAG instrument.
+- SQLite persists configured instruments, completed candles, deduplicated
+  paper signals, and backtest summaries below `CRYPTO_MARKET_DIR`.
+- Private account, balance, position, order, withdrawal, and live-execution
+  APIs are intentionally absent.
+
+The starter strategy is `crypto_trend_pullback_recovery` v1.0.0. It uses
+EMA20/EMA50 direction, UTC-day VWAP, RSI arm/recovery, relative volume, an ATR
+stop, a 1.5R target, and a six-bar time exit. It reads completed candles and
+enters backtests only on the next candle open. Perpetual results include a
+warning because funding is not yet modeled.
+
+Production variables for the backtest service:
+
+```dotenv
+CRYPTO_SIGNAL_ENGINE_ENABLED=true
+CRYPTO_SIGNAL_POLL_SECONDS=60
+CRYPTO_MARKET_DIR=/var/lib/vento-nse/backtest/crypto-market
+OKX_PUBLIC_API_URL=https://www.okx.com
+VALR_PUBLIC_API_URL=https://api.valr.com
+```
+
+See [`web/docs/crypto-market-engine.md`](web/docs/crypto-market-engine.md) for
+the component boundaries, current limitations, and safe removal candidates.
 
 ## Repository security
 

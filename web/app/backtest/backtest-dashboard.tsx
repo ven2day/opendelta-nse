@@ -1594,6 +1594,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       </header>
 
       <main className="backtest-main">
+        <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/backtest">NSE</a><a href="/backtest/crypto">Crypto &amp; metals</a></nav>
         <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
           <button type="button" className={strategyMode === "rsi_range" ? "active" : ""} onClick={() => switchStrategy("rsi_range")}>RSI Range Strategy</button>
           <button type="button" className={strategyMode === "rsi_recovery" ? "active" : ""} onClick={() => switchStrategy("rsi_recovery")}>RSI Recovery Scalping</button>

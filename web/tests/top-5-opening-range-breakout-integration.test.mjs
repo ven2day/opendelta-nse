@@ -54,6 +54,10 @@ function backendResponse(request) {
       executedTrades: 1,
     },
     dailySelections: [{
+      sessionDate: "2026-08-27",
+      selectionTimestamp: "2026-08-27T09:30:00+05:30",
+      symbols: [],
+    }, {
       sessionDate: "2026-08-28",
       selectionTimestamp: "2026-08-28T09:30:00+05:30",
       symbols: [
@@ -100,6 +104,8 @@ test("frontend selection submits the Top-5 key and exports only the Top-5 contra
   assert.match(markdown, /^# Top-5 Opening Range Breakout/m);
   assert.match(markdown, /Watchlist mode: FROZEN_OPEN/);
   assert.match(markdown, /09:30:00\+05:30/);
+  assert.doesNotMatch(markdown, /2026-08-27T09:30:00\+05:30/);
+  assert.match(markdown, /first ten populated sessions/);
   for (const symbol of ["AAA", "BBB", "CCC", "DDD", "EEE"]) assert.match(markdown, new RegExp(symbol));
   assert.match(markdown, /## Effective settings/);
   assert.match(markdown, /"quantityPerTrade": 50/);

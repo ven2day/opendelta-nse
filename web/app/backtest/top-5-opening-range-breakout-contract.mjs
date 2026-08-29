@@ -42,6 +42,9 @@ export function buildTop5OpeningRangeBreakoutMarkdown(response) {
   const comparisons = response.comparison ?? {};
   const eligibility = response.metadata.universeEligibility ?? {};
   const dailySelections = response.dailySelections ?? [];
+  const populatedSelectionSample = dailySelections
+    .filter((selection) => (selection.symbols ?? []).length > 0)
+    .slice(0, 10);
   const primarySelections = summary.primarySelections
     ?? dailySelections.flatMap((row) => row.symbols).filter((row) => row.tier === "PRIMARY").length;
   const reserveSelections = summary.reserveSelections
@@ -82,9 +85,9 @@ export function buildTop5OpeningRangeBreakoutMarkdown(response) {
     "",
     "## Daily-selection summary",
     "",
-    `The full ${dailySelections.length}-session selection history is available as CSV/JSON. The first ten sessions are sampled below.`,
+    `The full ${dailySelections.length}-session selection history is available as CSV/JSON. The first ten populated sessions are sampled below.`,
     "",
-    ...dailySelections.slice(0, 10).flatMap((selection) => [
+    ...populatedSelectionSample.flatMap((selection) => [
       `### ${selection.sessionDate} — ${selection.selectionTimestamp}`,
       ...selection.symbols.map((item) => `- #${item.rank ?? item.rankAfter ?? "—"} ${item.symbol} — ${item.tier ?? "—"} — score ${item.score ?? "—"}`),
       "",

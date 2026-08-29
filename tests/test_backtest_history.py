@@ -13,17 +13,23 @@ def owner(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def record(run_id: str, completed: datetime, *, value: int = 1) -> dict[str, object]:
+def record(
+    run_id: str,
+    completed: datetime,
+    *,
+    value: int = 1,
+    strategy_mode: str = "rsi_recovery",
+) -> dict[str, object]:
     return {
         "id": run_id,
         "completedAt": completed.isoformat(),
-        "strategyMode": "rsi_recovery",
-        "strategyName": "RSI Recovery Scalping",
+        "strategyMode": strategy_mode,
+        "strategyName": "Top-5 Opening Range Breakout" if strategy_mode == "top_5_opening_range_breakout" else "RSI Recovery Scalping",
         "timeframe": "5m",
         "durationYears": 1,
         "symbolCount": 1,
         "response": {
-            "metadata": {"runId": run_id, "strategyMode": "rsi_recovery"},
+            "metadata": {"runId": run_id, "strategyMode": strategy_mode},
             "results": [{"symbol": "TEST", "value": value}],
             "errors": [],
             "warnings": [],
@@ -32,6 +38,18 @@ def record(run_id: str, completed: datetime, *, value: int = 1) -> dict[str, obj
 
 
 class BacktestHistoryRepositoryTests(unittest.TestCase):
+    def test_top_5_result_is_saved_to_account_history(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = BacktestHistoryRepository(Path(directory))
+            saved = record(
+                "top-5-run",
+                datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc),
+                strategy_mode="top_5_opening_range_breakout",
+            )
+            summary = repository.save(owner("alice"), saved)
+            self.assertEqual(summary["strategyMode"], "top_5_opening_range_breakout")
+            self.assertEqual(repository.get(owner("alice"), "top-5-run"), saved)
+
     def test_save_list_and_get_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
             repository = BacktestHistoryRepository(Path(directory))

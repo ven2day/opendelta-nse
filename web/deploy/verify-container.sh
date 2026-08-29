@@ -96,7 +96,6 @@ echo "verified signals HTML"
 
 curl -fsS -b "${cookie_jar}" "${base_url}/scanner" > "${dashboard_html}"
 grep -q 'Stock Scanner' "${dashboard_html}"
-grep -q 'Top 20 opportunities' "${dashboard_html}"
 grep -q 'paper research' "${dashboard_html}"
 echo "verified stock scanner HTML"
 

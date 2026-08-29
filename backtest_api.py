@@ -1681,6 +1681,20 @@ class HistoricalDataStore:
             raw = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
         return prepare_candles(raw, timeframe, analysis_start, now_ist, warmup_bars=warmup_bars)
 
+    def cached_candle_path(
+        self,
+        symbol: str,
+        timeframe: str,
+        duration_years: int,
+        *,
+        benchmark: bool = False,
+    ) -> Path:
+        """Return the canonical local candle-cache path without reading or fetching it."""
+        spec = TIMEFRAMES[timeframe]
+        source_key = spec.source_interval or "daily"
+        cache_symbol = "NIFTY50" if benchmark else symbol
+        return self._cache_path(cache_symbol, source_key, duration_years)
+
 
 def run_recovery_backtest(
     request: BacktestRequest,

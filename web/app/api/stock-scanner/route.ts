@@ -26,7 +26,9 @@ export async function GET(request: Request): Promise<Response> {
     const upstream = await fetch(`${service}/stock-scanner?refresh=${refresh}`, {
       headers,
       cache: "no-store",
-      signal: AbortSignal.timeout(3 * 60 * 1_000),
+      // A source-candle revision can require one bounded full-universe feature rebuild.
+      // Subsequent rescans use source-fingerprinted feature snapshots.
+      signal: AbortSignal.timeout(5 * 60 * 1_000),
     });
     return new Response(await upstream.text(), {
       status: upstream.status,

@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, time as datetime_time, timedelta
+from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
 import pandas as pd
@@ -16,12 +17,15 @@ from daily_scalping_watchlist import (
     DailyWatchlistConfig,
     build_watchlist_history,
     calculate_watchlist_features,
+    file_stat_fingerprint,
     rescan_times_for_session,
     score_rescan_rows,
+    stable_fingerprint,
 )
 from main import IST
 
-SCANNER_VERSION = "stock-scanner-1.0.0"
+SCANNER_VERSION = "stock-scanner-1.1.0"
+SCANNER_FEATURE_CACHE_VERSION = "stock-scanner-features-1.0.0"
 SCANNER_TIMEFRAME = "5m"
 SCANNER_CONFIG = DailyWatchlistConfig(
     mode="ROLLING",
@@ -37,6 +41,8 @@ SCANNER_CONFIG = DailyWatchlistConfig(
 
 
 class CachedCandleStore(Protocol):
+    cache_directory: Path
+
     def cached_candles(
         self,
         symbol: str,
@@ -48,6 +54,15 @@ class CachedCandleStore(Protocol):
         benchmark: bool = False,
         warmup_bars: int = 0,
     ) -> pd.DataFrame: ...
+
+    def cached_candle_path(
+        self,
+        symbol: str,
+        timeframe: str,
+        duration_years: int,
+        *,
+        benchmark: bool = False,
+    ) -> Path: ...
 
 
 def _as_ist(value: datetime) -> datetime:
@@ -341,6 +356,86 @@ class StockScannerService:
         self._cache_expires = 0.0
         self._cache_value: dict[str, Any] | None = None
 
+    def _feature_cache_path(
+        self,
+        symbol: str,
+        *,
+        now: datetime,
+        benchmark: bool = False,
+    ) -> Path | None:
+        path_getter = getattr(self.store, "cached_candle_path", None)
+        cache_directory = getattr(self.store, "cache_directory", None)
+        if not callable(path_getter) or cache_directory is None:
+            return None
+        source = path_getter(
+            symbol,
+            SCANNER_TIMEFRAME,
+            1,
+            benchmark=benchmark,
+        )
+        if not source.is_file():
+            return None
+        feature_key = stable_fingerprint({
+            "version": SCANNER_FEATURE_CACHE_VERSION,
+            "rankingFeatureVersion": RANKING_FEATURE_VERSION,
+            "symbol": symbol,
+            "source": file_stat_fingerprint(source),
+            "asOfSession": now.date().isoformat(),
+            "timeframe": SCANNER_TIMEFRAME,
+            "featureParameters": {
+                "rsiLength": SCANNER_CONFIG.rsi_length,
+                "emaFast": SCANNER_CONFIG.ema_fast,
+                "emaSlow": SCANNER_CONFIG.ema_slow,
+                "atrLength": SCANNER_CONFIG.atr_length,
+                "rvolPeriod": SCANNER_CONFIG.rvol_period,
+                "historicalSessions": SCANNER_CONFIG.historical_sessions,
+                "rollingWindowMinutes": SCANNER_CONFIG.rolling_window_minutes,
+            },
+        })
+        safe_symbol = "".join(
+            character for character in symbol if character.isalnum() or character in "-&"
+        )
+        return Path(cache_directory) / "stock-scanner-features-v1" / safe_symbol / f"{feature_key}.parquet"
+
+    def _load_features(
+        self,
+        symbol: str,
+        *,
+        analysis_start: datetime,
+        now: datetime,
+        benchmark: bool = False,
+    ) -> tuple[pd.DataFrame | None, bool]:
+        feature_path = self._feature_cache_path(symbol, now=now, benchmark=benchmark)
+        if feature_path is not None and feature_path.is_file():
+            frame = pd.read_parquet(feature_path)
+            frame.index = pd.DatetimeIndex(frame.index)
+            frame.index = (
+                frame.index.tz_localize(IST)
+                if frame.index.tz is None
+                else frame.index.tz_convert(IST)
+            )
+            return frame, True
+
+        candles = self.store.cached_candles(
+            symbol,
+            SCANNER_TIMEFRAME,
+            1,
+            analysis_start,
+            now,
+            benchmark=benchmark,
+        )
+        if candles.empty:
+            return None, False
+        features = calculate_watchlist_features(candles, SCANNER_CONFIG)
+        latest_day = pd.Timestamp(features.index.max()).date()
+        latest_session = features[pd.DatetimeIndex(features.index).date == latest_day].copy()
+        if feature_path is not None:
+            feature_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = feature_path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp.parquet")
+            latest_session.to_parquet(temporary, index=True)
+            os.replace(temporary, feature_path)
+        return latest_session, False
+
     def snapshot(
         self,
         symbols: Sequence[str],
@@ -368,51 +463,39 @@ class StockScannerService:
                 cached["metadata"] = {**cached["metadata"], "resultSource": "SCANNER_CACHE"}
                 return cached
 
+            calculation_started = time.perf_counter()
             analysis_start = now - timedelta(days=120)
             workers = min(max((os.cpu_count() or 2) - 1, 1), 8)
 
-            def load(symbol: str) -> tuple[str, pd.DataFrame | None, str | None]:
+            def load(symbol: str) -> tuple[str, pd.DataFrame | None, str | None, bool]:
                 try:
-                    candles = self.store.cached_candles(
-                        symbol,
-                        SCANNER_TIMEFRAME,
-                        1,
-                        analysis_start,
-                        now,
+                    features, cache_hit = self._load_features(
+                        symbol, analysis_start=analysis_start, now=now
                     )
-                    if candles.empty:
-                        return symbol, None, "CACHED_CANDLE_DATA_UNAVAILABLE"
-                    features = calculate_watchlist_features(candles, SCANNER_CONFIG)
-                    latest_day = pd.Timestamp(features.index.max()).date()
-                    latest_session = features[pd.DatetimeIndex(features.index).date == latest_day].copy()
-                    return symbol, latest_session, None
+                    if features is None or features.empty:
+                        return symbol, None, "CACHED_CANDLE_DATA_UNAVAILABLE", cache_hit
+                    return symbol, features, None, cache_hit
                 except (OSError, RuntimeError, ValueError) as error:
-                    return symbol, None, f"{type(error).__name__}: {error}"
+                    return symbol, None, f"{type(error).__name__}: {error}", False
 
             frames: dict[str, pd.DataFrame] = {}
             errors: list[dict[str, str]] = []
+            feature_cache_hits = 0
+            feature_cache_misses = 0
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="stock-scanner") as executor:
-                for symbol, frame, error in executor.map(load, normalized_symbols):
+                for symbol, frame, error, cache_hit in executor.map(load, normalized_symbols):
+                    feature_cache_hits += int(cache_hit)
+                    feature_cache_misses += int(not cache_hit)
                     if frame is not None:
                         frames[symbol] = frame
                     else:
                         errors.append({"symbol": symbol, "reason": error or "CACHED_CANDLE_DATA_UNAVAILABLE"})
 
-            nifty = self.store.cached_candles(
-                "NIFTY50",
-                SCANNER_TIMEFRAME,
-                1,
-                analysis_start,
-                now,
-                benchmark=True,
+            nifty_features, nifty_cache_hit = self._load_features(
+                "NIFTY50", analysis_start=analysis_start, now=now, benchmark=True
             )
-            nifty_features = None
-            if not nifty.empty:
-                all_nifty_features = calculate_watchlist_features(nifty, SCANNER_CONFIG)
-                nifty_day = pd.Timestamp(all_nifty_features.index.max()).date()
-                nifty_features = all_nifty_features[
-                    pd.DatetimeIndex(all_nifty_features.index).date == nifty_day
-                ].copy()
+            feature_cache_hits += int(nifty_cache_hit)
+            feature_cache_misses += int(not nifty_cache_hit)
             result = build_stock_scanner_snapshot(
                 frames,
                 nifty_frame=nifty_features,
@@ -427,6 +510,9 @@ class StockScannerService:
             result["metadata"] = {
                 **result["metadata"],
                 "workerCount": workers,
+                "featureCacheHits": feature_cache_hits,
+                "featureCacheMisses": feature_cache_misses,
+                "runtimeSeconds": round(time.perf_counter() - calculation_started, 3),
                 "resultSource": "FRESH_CALCULATION",
             }
             self._cache_key = cache_key

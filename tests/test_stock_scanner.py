@@ -133,6 +133,18 @@ class _CachedStore:
         raise AssertionError("Stock Scanner must not fetch Dhan data")
 
 
+class _PersistentCachedStore(_CachedStore):
+    def __init__(self, cache_directory: Path) -> None:
+        super().__init__()
+        self.cache_directory = cache_directory
+        for symbol in [*(f"S{number}" for number in range(1, 7)), "NIFTY50"]:
+            self.cached_candle_path(symbol, "5m", 1).touch()
+
+    def cached_candle_path(self, symbol, timeframe, duration_years, *, benchmark=False):
+        cache_symbol = "NIFTY50" if benchmark else symbol
+        return self.cache_directory / f"{cache_symbol}-5-{duration_years}y.csv.gz"
+
+
 def test_service_reads_local_cache_only_and_caches_repeated_snapshot() -> None:
     store = _CachedStore()
     service = StockScannerService(store, cache_seconds=60)
@@ -158,6 +170,33 @@ def test_service_reads_local_cache_only_and_caches_repeated_snapshot() -> None:
     assert first["metadata"]["resultSource"] == "FRESH_CALCULATION"
     assert second["metadata"]["resultSource"] == "SCANNER_CACHE"
     assert store.cached_calls == calls_after_first
+
+
+def test_service_reuses_source_fingerprinted_feature_cache_across_instances(tmp_path: Path) -> None:
+    store = _PersistentCachedStore(tmp_path)
+    now = datetime(2026, 8, 28, 9, 47, tzinfo=IST)
+    arguments = {
+        "minimum_price": 100,
+        "maximum_price": 3_000,
+        "sector_by_symbol": {f"S{number}": f"SECTOR-{number}" for number in range(1, 7)},
+        "company_names": {},
+        "now_ist": now,
+    }
+    with patch("stock_scanner.calculate_watchlist_features", side_effect=lambda frame, config: frame) as calculate:
+        first = StockScannerService(store).snapshot(
+            [f"S{number}" for number in range(1, 7)], **arguments
+        )
+        first_calculations = calculate.call_count
+        second = StockScannerService(store).snapshot(
+            [f"S{number}" for number in range(1, 7)], **arguments
+        )
+
+    assert first_calculations == 7
+    assert calculate.call_count == first_calculations
+    assert first["metadata"]["featureCacheMisses"] == 7
+    assert second["metadata"]["featureCacheHits"] == 7
+    assert second["metadata"]["featureCacheMisses"] == 0
+    assert first["watchlist"] == second["watchlist"]
 
 
 def test_backend_registers_stock_scanner_route() -> None:

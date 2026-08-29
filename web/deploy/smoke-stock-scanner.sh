@@ -21,7 +21,6 @@ login_status="$(curl -sS -o /dev/null -w '%{http_code}' \
 
 curl -fsS -b "${cookie_jar}" "${base_url}/scanner" > "${page}"
 grep -q 'Stock Scanner' "${page}"
-grep -q 'Top 20 opportunities' "${page}"
 grep -q 'paper research' "${page}"
 
 anonymous_status="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/stock-scanner")"

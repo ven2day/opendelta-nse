@@ -344,7 +344,7 @@ class VwapPullbackConfigurationRequest(BaseModel):
         return self.model_dump(mode="json")
 
 
-class DailyWatchlistConfigurationRequest(BaseModel):
+class Top5OpeningRangeBreakoutConfigurationRequest(BaseModel):
     executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
     openingRangeStartTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "openingRangeStartTime")["default"])
     openingRangeEndTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "openingRangeEndTime")["default"])
@@ -396,7 +396,7 @@ class DailyWatchlistConfigurationRequest(BaseModel):
     slippageBps: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "slippageBps"))
 
     @model_validator(mode="after")
-    def validate_configuration(self) -> "DailyWatchlistConfigurationRequest":
+    def validate_configuration(self) -> "Top5OpeningRangeBreakoutConfigurationRequest":
         self.strategy_config().validate()
         return self
 
@@ -473,8 +473,9 @@ class BacktestHistorySaveRequest(BaseModel):
     strategyMode: Literal[
         "rsi_range",
         "rsi_recovery",
-        "market_aligned_vwap_pullback_scalper",
+        "top_5_opening_range_breakout",
         "daily_scalping_watchlist",
+        "market_aligned_vwap_pullback_scalper",
         "market_aligned_rsi_scalper",
     ]
     strategyName: str = Field(min_length=1, max_length=120)
@@ -490,9 +491,11 @@ class BacktestHistorySaveRequest(BaseModel):
 class BacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=MAX_SYMBOLS_PER_RUN)
     strategyMode: Literal[
-        "rsi_range", "rsi_recovery", "market_aligned_vwap_pullback_scalper",
-        "daily_scalping_watchlist",
+        "rsi_range", "rsi_recovery", "top_5_opening_range_breakout",
     ] = "rsi_range"
+    strategyKey: Literal[
+        "rsi_range", "rsi_recovery", "top_5_opening_range_breakout",
+    ] | None = None
     universeMode: Literal["selected", "all"] = "selected"
     runId: str | None = Field(default=None, min_length=1, max_length=80)
     cachePolicy: Literal["USE_CACHE", "RUN_AGAIN"] = "RUN_AGAIN"
@@ -566,11 +569,8 @@ class BacktestRequest(BaseModel):
     oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
     oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
     oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
-    vwapPullbackConfiguration: VwapPullbackConfigurationRequest = Field(
-        default_factory=VwapPullbackConfigurationRequest
-    )
-    dailyWatchlistConfiguration: DailyWatchlistConfigurationRequest = Field(
-        default_factory=DailyWatchlistConfigurationRequest
+    top5OpeningRangeBreakoutConfiguration: Top5OpeningRangeBreakoutConfigurationRequest = Field(
+        default_factory=Top5OpeningRangeBreakoutConfigurationRequest
     )
 
     @field_validator("symbols")
@@ -583,6 +583,10 @@ class BacktestRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_strategy_parameters(self) -> "BacktestRequest":
+        if self.strategyKey is None:
+            self.strategyKey = self.strategyMode
+        if self.strategyKey != self.strategyMode:
+            raise ValueError("strategyKey must match strategyMode")
         positive_recovery_values = (
             self.targetPct,
             self.fixedStopLossPct,
@@ -606,16 +610,10 @@ class BacktestRequest(BaseModel):
                 raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
             return self
 
-        if self.strategyMode == VWAP_PULLBACK_STRATEGY_KEY:
-            if self.timeframe != "5m":
-                raise ValueError("Market-Aligned VWAP Pullback Scalper requires completed 5-minute candles")
-            self.vwapPullbackConfiguration.validate_configuration()
-            return self
-
         if self.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
             if self.timeframe != "5m":
-                raise ValueError("Daily Scalping Watchlist requires completed 5-minute candles")
-            self.dailyWatchlistConfiguration.validate_configuration()
+                raise ValueError("Top-5 Opening Range Breakout requires completed 5-minute candles")
+            self.top5OpeningRangeBreakoutConfiguration.validate_configuration()
             return self
 
         if (
@@ -2372,6 +2370,10 @@ def run_vwap_pullback_backtest(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    raise ValueError("Retired strategy - Market-Aligned VWAP Pullback Scalper cannot run again")
+
+    # Retained temporarily below solely to preserve source-level recovery history.
+    # The active request schema and dispatcher cannot reach this retired code.
     started_clock = time.perf_counter()
     started_at = datetime.now(IST)
     now = (now_ist or started_at).astimezone(IST)
@@ -2648,7 +2650,7 @@ def run_vwap_pullback_backtest(
     return response
 
 
-def _local_daily_watchlist_nifty(
+def _local_top_5_opening_range_nifty(
     store: HistoricalDataStore,
     duration_years: int,
     analysis_start: datetime,
@@ -2663,7 +2665,7 @@ def _local_daily_watchlist_nifty(
     return prepare_candles(raw, "5m", analysis_start, now, warmup_bars=2_000)
 
 
-def run_daily_scalping_watchlist_backtest(
+def run_top_5_opening_range_breakout_backtest(
     request: BacktestRequest,
     store: HistoricalDataStore,
     now_ist: datetime | None = None,
@@ -2675,7 +2677,7 @@ def run_daily_scalping_watchlist_backtest(
     now = (now_ist or started_at).astimezone(IST)
     analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
     run_id = request.runId or str(uuid.uuid4())
-    requested = request.dailyWatchlistConfiguration
+    requested = request.top5OpeningRangeBreakoutConfiguration
     config = requested.strategy_config().validate()
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
@@ -2730,7 +2732,7 @@ def run_daily_scalping_watchlist_backtest(
         "sector": daily_watchlist_file_fingerprint(sector_path),
     })
     result_cache = DailyWatchlistResultCache(
-        store.cache_directory / "daily-scalping-watchlist-results-v1"
+        store.cache_directory / "top-5-opening-range-breakout-results-v1"
     )
     if request.cachePolicy == "USE_CACHE":
         cached = result_cache.load(fingerprint)
@@ -2741,7 +2743,7 @@ def run_daily_scalping_watchlist_backtest(
         1,
         min(int(os.environ.get("BACKTEST_WORKERS", str(_market_worker_default()))), 8),
     )
-    feature_root = store.cache_directory / "daily-scalping-watchlist-features-v1"
+    feature_root = store.cache_directory / "top-5-opening-range-breakout-features-v1"
     common = {
         "cacheDirectory": str(store.cache_directory),
         "featureCacheDirectory": str(feature_root),
@@ -2753,7 +2755,7 @@ def run_daily_scalping_watchlist_backtest(
     workers = max(1, min(worker_limit, len(request.symbols)))
     if progress_callback is not None:
         progress_callback({
-            "currentStage": "DAILY_WATCHLIST_STOCK_FEATURES",
+            "currentStage": "TOP_5_OPENING_RANGE_STOCK_FEATURES",
             "symbolsCompleted": 0,
             "symbolsTotal": len(request.symbols),
             "workersActive": workers,
@@ -2765,7 +2767,7 @@ def run_daily_scalping_watchlist_backtest(
         cancel_event=cancel_event,
         progress_callback=(
             lambda completed: progress_callback({
-                "currentStage": "DAILY_WATCHLIST_STOCK_FEATURES",
+                "currentStage": "TOP_5_OPENING_RANGE_STOCK_FEATURES",
                 "symbolsCompleted": completed,
                 "symbolsTotal": len(request.symbols),
                 "workersActive": workers,
@@ -2787,7 +2789,7 @@ def run_daily_scalping_watchlist_backtest(
         support_workers = max(1, min(worker_limit, len(missing_support)))
         if progress_callback is not None:
             progress_callback({
-                "currentStage": "DAILY_WATCHLIST_SECTOR_CONTEXT",
+                "currentStage": "TOP_5_OPENING_RANGE_SECTOR_CONTEXT",
                 "symbolsCompleted": len(request.symbols),
                 "symbolsTotal": len(request.symbols),
                 "supportSymbolsCompleted": 0,
@@ -2850,7 +2852,7 @@ def run_daily_scalping_watchlist_backtest(
         )
         for symbol, path in feature_paths.items()
     }
-    nifty_candles = _local_daily_watchlist_nifty(
+    nifty_candles = _local_top_5_opening_range_nifty(
         store, request.durationYears, analysis_start, now
     )
     nifty_features = (
@@ -2956,7 +2958,7 @@ def run_daily_scalping_watchlist_backtest(
     decision = daily_watchlist_validation_decision(comparison)
     if progress_callback is not None:
         progress_callback({
-            "currentStage": "DAILY_WATCHLIST_COMPARISON_COMPLETE",
+            "currentStage": "TOP_5_OPENING_RANGE_COMPARISON_COMPLETE",
             "symbolsCompleted": len(request.symbols),
             "symbolsTotal": len(request.symbols),
             "candlesProcessed": sum(int(item["metrics"].get("candles", 0)) for item in prepared),
@@ -2970,6 +2972,38 @@ def run_daily_scalping_watchlist_backtest(
     for item in rejected:
         reason = str(item.get("primaryReason") or item.get("reason") or "UNEXPLAINED_REJECTION")
         rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+    daily_selection_rows = [
+        {
+            "sessionDate": snapshot["sessionDate"],
+            "selectionTimestamp": snapshot["rescanTimestamp"],
+            "symbols": [
+                {
+                    "symbol": entry["symbol"],
+                    "rank": entry["rankAfter"],
+                    "tier": entry["tier"],
+                    "score": entry["score"],
+                }
+                for entry in snapshot.get("entries", [])
+            ],
+        }
+        for snapshot in active_history
+        if int(snapshot.get("rescanNumber", 0)) == 1
+    ]
+    midday_replacement_rows = [
+        snapshot
+        for snapshot in rolling_history
+        if int(snapshot.get("replacements", 0)) > 0
+    ]
+    primary_selections = sum(
+        item.get("tier") == "PRIMARY"
+        for row in daily_selection_rows
+        for item in row["symbols"]
+    )
+    reserve_selections = sum(
+        item.get("tier") == "RESERVE"
+        for row in daily_selection_rows
+        for item in row["symbols"]
+    )
     summary = {
         **comparison[active_label]["overall"],
         **summarize_watchlist_history(active_history, active_candidates),
@@ -2978,6 +3012,15 @@ def run_daily_scalping_watchlist_backtest(
         "acceptedBuySignals": len(accepted_signals),
         "executedTrades": len(trades),
         "executedQuantity": 50,
+        "universeEvaluated": len(prepared),
+        "tradingDays": len(daily_selection_rows),
+        "dailyWatchlists": len(daily_selection_rows),
+        "primarySelections": int(primary_selections),
+        "reserveSelections": int(reserve_selections),
+        "watchlistReplacements": sum(
+            int(row.get("replacements", 0)) for row in midday_replacement_rows
+        ),
+        "openingBreakoutCandidates": len(opening_candidates),
         "rejectionCounts": dict(sorted(rejection_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
         "funnel": {
             "rawOpeningObservations": len(opening_candidates),
@@ -2997,6 +3040,7 @@ def run_daily_scalping_watchlist_backtest(
             "strategyName": DAILY_WATCHLIST_STRATEGY_NAME,
             "strategyDescription": DAILY_WATCHLIST_DESCRIPTION,
             "strategyVersion": DAILY_WATCHLIST_STRATEGY_VERSION,
+            "watchlistMode": config.mode,
             "featureCodeVersion": DAILY_WATCHLIST_FEATURE_VERSION,
             "sessionRuleVersion": DAILY_WATCHLIST_SESSION_VERSION,
             "portfolioRuleVersion": DAILY_WATCHLIST_PORTFOLIO_VERSION,
@@ -3014,6 +3058,8 @@ def run_daily_scalping_watchlist_backtest(
             "universeMode": request.universeMode,
             "symbolsRequested": len(request.symbols),
             "symbolsProcessed": len(prepared),
+            "universeEvaluated": len(prepared),
+            "tradingDays": len(daily_selection_rows),
             "symbolsFailed": len(errors),
             "workerCount": workers,
             "runtimeSeconds": round(time.perf_counter() - started_clock, 4),
@@ -3040,25 +3086,8 @@ def run_daily_scalping_watchlist_backtest(
             "summary": summarize_watchlist_history(active_history, active_candidates),
             "history": active_history,
         },
-        "dailySelections": [
-            {
-                "sessionDate": snapshot["sessionDate"],
-                "selectionTimestamp": snapshot["rescanTimestamp"],
-                "symbols": [
-                    {
-                        "symbol": entry["symbol"],
-                        "rank": entry["rankAfter"],
-                        "tier": entry["tier"],
-                        "score": entry["score"],
-                    }
-                    for entry in snapshot.get("entries", [])
-                ],
-            }
-            for snapshot in active_history if int(snapshot.get("rescanNumber", 0)) == 1
-        ],
-        "middayReplacements": [
-            snapshot for snapshot in rolling_history if int(snapshot.get("replacements", 0)) > 0
-        ],
+        "dailySelections": daily_selection_rows,
+        "middayReplacements": midday_replacement_rows,
         "signals": accepted_signals,
         "openingSignals": [
             item for item in accepted_signals if item.get("signalType") == "OPENING_RANGE_BREAKOUT"
@@ -3091,10 +3120,8 @@ def run_daily_scalping_watchlist_backtest(
 def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
     if request.strategyMode == "rsi_recovery":
         return run_recovery_backtest(request, store, now_ist)
-    if request.strategyMode == VWAP_PULLBACK_STRATEGY_KEY:
-        return run_vwap_pullback_backtest(request, store, now_ist)
     if request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
-        return run_daily_scalping_watchlist_backtest(request, store, now_ist)
+        return run_top_5_opening_range_breakout_backtest(request, store, now_ist)
 
     if not request.entryLow < request.entryHigh < request.exitLow < request.exitHigh:
         raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
@@ -3885,10 +3912,10 @@ def start_backtest_job(
         alias="x-opendelta-history-owner",
     ),
 ) -> dict[str, Any]:
-    if request.strategyMode not in {VWAP_PULLBACK_STRATEGY_KEY, DAILY_WATCHLIST_STRATEGY_KEY}:
+    if request.strategyMode != DAILY_WATCHLIST_STRATEGY_KEY:
         raise HTTPException(
             status_code=422,
-            detail="Asynchronous progress jobs apply to the two research-only intraday strategies.",
+            detail="Asynchronous progress jobs apply to Top-5 Opening Range Breakout.",
         )
     store = get_store()
 
@@ -3896,20 +3923,11 @@ def start_backtest_job(
         progress: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
     ) -> dict[str, Any]:
-        result = (
-            run_daily_scalping_watchlist_backtest(
-                request,
-                store,
-                progress_callback=progress,
-                cancel_event=cancel_event,
-            )
-            if request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY
-            else run_vwap_pullback_backtest(
-                request,
-                store,
-                progress_callback=progress,
-                cancel_event=cancel_event,
-            )
+        result = run_top_5_opening_range_breakout_backtest(
+            request,
+            store,
+            progress_callback=progress,
+            cancel_event=cancel_event,
         )
         if history_owner:
             metadata = result.setdefault("metadata", {})

@@ -90,13 +90,9 @@ configuration, evaluators, exits, results and URLs.
 selection and cannot start a new API job. Existing saved results remain
 read-only and display `Retired strategy — cannot run again`.
 
-`Market-Aligned VWAP Pullback Scalper` uses the distinct
-`market_aligned_vwap_pullback_scalper` key. It arms RSI pullbacks from 38–50
-near session VWAP, EMA9 or EMA20 only in a rising completed-candle trend, then
-requires a completed trigger candle and executes at the next bar open.
-Session state and VWAP reset every NSE trading day. Stops and 1.5R targets are
-frozen from entry-time ATR and pullback structure; the strategy never holds
-overnight.
+`Market-Aligned VWAP Pullback Scalper` is retired from new backtests. Historical
+results remain readable under its original `market_aligned_vwap_pullback_scalper`
+key, but the frontend selector and active API dispatcher cannot start it again.
 
 NIFTY supplies one safety rule. Sector, breadth, relative strength and optional
 OI contribute to causal quality ranking instead of repeated mandatory gates.
@@ -108,10 +104,10 @@ This strategy is labelled `Research candidate — paper trading required` and
 must not be represented as profitable without untouched chronological
 validation.
 
-### Daily Scalping Watchlist research modes
+### Top-5 Opening Range Breakout research modes
 
-`Daily Scalping Watchlist` is a standalone backtest strategy with
-`daily_scalping_watchlist` as its internal key. It supports `FROZEN_OPEN` (the
+`Top-5 Opening Range Breakout` is a standalone backtest strategy with
+`top_5_opening_range_breakout` as its internal key. It supports `FROZEN_OPEN` (the
 default) and `ROLLING` selection. Frozen mode ranks at 09:30 and retains five
 symbols for the session. Rolling mode rescans completed candles every 30 minutes
 through 14:00, applies score-advantage, residence-time, replacement-count and
@@ -129,6 +125,13 @@ remains advisory when bid/ask data is unavailable. The strategy produces
 research and paper signals only and has no broker-order path. It remains
 rejected unless every untouched validation fold has positive after-cost
 expectancy and net P&L and outperforms the comparison baselines.
+
+After deploying the dashboard and backtest images, run
+`web/deploy/smoke-top-5-opening-range-breakout.sh`. It authenticates through the
+normal web login, submits the unique Top-5 strategy key, requires an effective
+FROZEN_OPEN configuration, and fails unless at least one historical daily
+watchlist contains five ranked PRIMARY/RESERVE selections. The retired
+`smoke-vwap-pullback.sh` fails closed and cannot create another VWAP run.
 
 ## Release rollback
 

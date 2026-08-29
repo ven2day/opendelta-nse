@@ -41,13 +41,14 @@ test("new strategy numeric constraints are aligned", async () => {
   assert.equal(valid(definition(definitions, "maximumTradesPerDay"), 2.5), false);
 });
 
-test("selector contains both legacy strategies and only the new market strategy", async () => {
+test("selector hides the rejected VWAP strategy and exposes Top-5 instead", async () => {
   const { dashboard } = await sources();
   assert.match(dashboard, />RSI Range Strategy<\/button>/);
   assert.match(dashboard, />RSI Recovery Scalping<\/button>/);
-  assert.match(dashboard, />Market-Aligned VWAP Pullback Scalper<\/button>/);
+  assert.match(dashboard, />Top-5 Opening Range Breakout<\/button>/);
+  assert.doesNotMatch(dashboard, />Market-Aligned VWAP Pullback Scalper<\/button>/);
   assert.doesNotMatch(dashboard, />Market-Aligned RSI Scalper<\/button>/);
-  assert.match(dashboard, /vwapPullbackConfiguration: vwapPullbackSettings/);
+  assert.doesNotMatch(dashboard, /vwapPullbackConfiguration:/);
   assert.doesNotMatch(dashboard, /marketAlignedConfiguration:/);
 });
 
@@ -97,5 +98,7 @@ test("retired results remain readable but cannot be submitted", async () => {
   const { dashboard } = await sources();
   assert.match(dashboard, /Retired strategy — cannot run again/);
   assert.match(dashboard, /strategyMode === "market_aligned_rsi_scalper"/);
+  assert.match(dashboard, /metadata\.strategyMode === "market_aligned_vwap_pullback_scalper"/);
   assert.doesNotMatch(dashboard, /switchStrategy\("market_aligned_rsi_scalper"\)/);
+  assert.doesNotMatch(dashboard, /switchStrategy\("market_aligned_vwap_pullback_scalper"\)/);
 });

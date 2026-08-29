@@ -6,12 +6,13 @@ import {
   parameterDefinitions,
   type ParameterDefinition,
 } from "./strategy-parameters";
+import { TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY } from "./top-5-opening-range-breakout-contract.mjs";
 
-export const DAILY_WATCHLIST_STRATEGY_KEY = "daily_scalping_watchlist";
-export type DailyWatchlistSettings = Record<string, number | string | boolean>;
+export { TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY };
+export type Top5OpeningRangeBreakoutSettings = Record<string, number | string | boolean>;
 
 type Props = {
-  settings: DailyWatchlistSettings;
+  settings: Top5OpeningRangeBreakoutSettings;
   onChange: (key: string, value: number | string | boolean) => void;
   onValidityChange: (key: string, error: string | null) => void;
   cachePolicy: "USE_CACHE" | "RUN_AGAIN";
@@ -19,7 +20,7 @@ type Props = {
 };
 
 const definitions = parameterDefinitions.filter(
-  (definition) => definition.strategy === DAILY_WATCHLIST_STRATEGY_KEY,
+  (definition) => definition.strategy === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY,
 );
 
 function SelectField({ definition, value, onChange }: {
@@ -40,7 +41,7 @@ function Field({ definition, settings, onChange, onValidityChange }: Props & { d
   const value = settings[definition.key] ?? definition.default;
   if (definition.type === "number" || definition.type === "integer") {
     return <NumericField
-      strategy={DAILY_WATCHLIST_STRATEGY_KEY}
+      strategy={TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY}
       parameterKey={definition.key}
       value={Number(value)}
       onValueChange={(next) => onChange(definition.key, next)}
@@ -81,12 +82,12 @@ const middayKeys = definitions.filter((item) => item.visibility === "midday").ma
 const riskKeys = definitions.filter((item) => item.visibility === "risk").map((item) => item.key);
 const advancedKeys = definitions.filter((item) => item.visibility === "advanced").map((item) => item.key);
 
-export function DailyWatchlistSettingsPanel(props: Props) {
+export function Top5OpeningRangeBreakoutSettingsPanel(props: Props) {
   return <div className="market-aligned-settings daily-watchlist-settings">
     <section className="market-settings-card market-main-settings" aria-labelledby="watchlist-basic-settings">
       <div className="panel-title"><div><span className="section-kicker">Always visible</span><h2 id="watchlist-basic-settings">Basic settings</h2></div></div>
       <Fields keys={basicKeys} {...props} />
-      <p className="market-main-settings-note">Research and paper signals only. Every executed backtest trade uses exactly 50 shares; live broker orders are disabled.</p>
+      <p className="market-main-settings-note">Top-5 Opening Range Breakout research and paper signals only. Every executed backtest trade uses exactly 50 shares; live broker orders are disabled.</p>
     </section>
     <details className="market-settings-card market-settings-section">
       <summary><span><strong>Watchlist selection</strong><small>Opening selection, rolling rescans and replacement controls</small></span><ChevronDown size={17} /></summary>

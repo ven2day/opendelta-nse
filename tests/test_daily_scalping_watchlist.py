@@ -8,20 +8,44 @@ import pytest
 
 from backtest_api import (
     BacktestRequest,
-    DailyWatchlistConfigurationRequest,
-    run_daily_scalping_watchlist_backtest,
+    Top5OpeningRangeBreakoutConfigurationRequest,
+    run_top_5_opening_range_breakout_backtest,
 )
 from daily_scalping_watchlist import (
     DailyWatchlistConfig,
+    DailyWatchlistResultCache,
     add_rolling_watchlist_features,
     build_watchlist_history,
     detect_opening_range_breakouts,
     detect_rolling_momentum_breakouts,
     execute_portfolio,
     select_candidates_for_history,
+    stable_fingerprint,
     validation_decision,
 )
 from main import IST
+
+
+def test_result_cache_fingerprint_isolated_by_strategy_key(tmp_path) -> None:
+    top_5_fingerprint = stable_fingerprint({
+        "strategyKey": "top_5_opening_range_breakout",
+        "configuration": {"watchlistMode": "FROZEN_OPEN"},
+    })
+    vwap_fingerprint = stable_fingerprint({
+        "strategyKey": "market_aligned_vwap_pullback_scalper",
+        "configuration": {"watchlistMode": "FROZEN_OPEN"},
+    })
+    assert top_5_fingerprint != vwap_fingerprint
+
+    cache = DailyWatchlistResultCache(tmp_path / "top-5-results")
+    cache.save(top_5_fingerprint, {
+        "metadata": {
+            "fingerprint": top_5_fingerprint,
+            "strategyKey": "top_5_opening_range_breakout",
+        }
+    })
+    assert cache.load(top_5_fingerprint)["metadata"]["strategyKey"] == "top_5_opening_range_breakout"
+    assert cache.load(vwap_fingerprint) is None
 
 
 def _row(score_value: float, timestamp: pd.Timestamp) -> dict[str, object]:
@@ -225,16 +249,16 @@ def test_frozen_and_rolling_use_identical_cost_and_risk_results() -> None:
 
 
 def test_fixed_quantity_is_authoritative_in_backend_schema() -> None:
-    request = DailyWatchlistConfigurationRequest(watchlistMode="ROLLING")
+    request = Top5OpeningRangeBreakoutConfigurationRequest(watchlistMode="ROLLING")
     assert request.quantityPerTrade == 50
     assert request.watchlistRescanIntervalMinutes == 30
     assert request.watchlistRescanEndTime == "14:00"
     assert request.watchlistSelectedSymbols == 5
     assert request.watchlistPrimarySymbols == 2
     with pytest.raises(ValueError, match="50"):
-        DailyWatchlistConfigurationRequest(quantityPerTrade=49)
+        Top5OpeningRangeBreakoutConfigurationRequest(quantityPerTrade=49)
     with pytest.raises(ValueError, match="Primary symbols"):
-        DailyWatchlistConfigurationRequest(watchlistSelectedSymbols=2, watchlistPrimarySymbols=3)
+        Top5OpeningRangeBreakoutConfigurationRequest(watchlistSelectedSymbols=2, watchlistPrimarySymbols=3)
 
 
 def _metric(net: float, expectancy: float, trades: int = 20) -> dict[str, object]:
@@ -305,16 +329,16 @@ def test_standalone_backend_response_contains_all_comparisons_and_effective_sett
     frame.to_csv(tmp_path / "NIFTY50-5-1y.csv.gz", index_label="Timestamp", compression="gzip")
 
     request = BacktestRequest(
-        symbols=["AAA", "BBB"], strategyMode="daily_scalping_watchlist",
+        symbols=["AAA", "BBB"], strategyMode="top_5_opening_range_breakout",
         timeframe="5m", durationYears=1, cachePolicy="RUN_AGAIN",
-        dailyWatchlistConfiguration=DailyWatchlistConfigurationRequest(
+        top5OpeningRangeBreakoutConfiguration=Top5OpeningRangeBreakoutConfigurationRequest(
             watchlistHistoricalSessions=20,
         ),
     )
-    result = run_daily_scalping_watchlist_backtest(
+    result = run_top_5_opening_range_breakout_backtest(
         request, Store(), datetime(2026, 8, 29, 12, 0, tzinfo=IST)
     )
-    assert result["metadata"]["strategyKey"] == "daily_scalping_watchlist"
+    assert result["metadata"]["strategyKey"] == "top_5_opening_range_breakout"
     assert result["metadata"]["effectiveConfiguration"]["quantityPerTrade"] == 50
     assert result["metadata"]["liveOrdersEnabled"] is False
     assert result["summary"]["executedQuantity"] == 50

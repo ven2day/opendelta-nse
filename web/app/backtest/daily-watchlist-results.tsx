@@ -1,6 +1,10 @@
 "use client";
 
 import { AlertTriangle, Download, Info } from "lucide-react";
+import {
+  buildTop5OpeningRangeBreakoutMarkdown,
+  TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY,
+} from "./top-5-opening-range-breakout-contract.mjs";
 
 type MetricSet = {
   trades: number;
@@ -40,18 +44,16 @@ type WatchlistEntry = {
   symbol: string;
   rank?: number | null;
   rankAfter?: number | null;
-  rankBefore?: number | null;
   tier?: "PRIMARY" | "RESERVE";
   score?: number;
-  promotionReason?: string;
 };
 
-export type DailyWatchlistResponse = {
+export type Top5OpeningRangeBreakoutResponse = {
   metadata: {
     runId: string;
-    strategyMode: "daily_scalping_watchlist";
-    strategyKey: "daily_scalping_watchlist";
-    strategyName: string;
+    strategyMode: "top_5_opening_range_breakout";
+    strategyKey: "top_5_opening_range_breakout";
+    strategyName: "Top-5 Opening Range Breakout";
     strategyVersion: string;
     completedAt: string;
     timeframe: "5m";
@@ -63,22 +65,32 @@ export type DailyWatchlistResponse = {
     openingRangeAssumption: string;
     researchLabel: string;
     liveOrdersEnabled: false;
+    watchlistMode: "FROZEN_OPEN" | "ROLLING";
+    universeEvaluated: number;
+    tradingDays: number;
   };
   summary: MetricSet & {
     rawOpeningCandidates: number;
     rawMiddayCandidates: number;
+    openingBreakoutCandidates: number;
     acceptedBuySignals: number;
     executedTrades: number;
     executedQuantity: 50;
+    universeEvaluated: number;
+    tradingDays: number;
+    dailyWatchlists: number;
+    primarySelections: number;
+    reserveSelections: number;
+    watchlistReplacements: number;
     rejectionCounts: Record<string, number>;
     funnel: Record<string, number>;
   };
   watchlist: { mode: "FROZEN_OPEN" | "ROLLING"; history: Array<Record<string, unknown>> };
   dailySelections: Array<{ sessionDate: string; selectionTimestamp: string; symbols: WatchlistEntry[] }>;
   middayReplacements: Array<Record<string, unknown>>;
-  signals: Array<Record<string, unknown>>;
   openingSignals: Array<Record<string, unknown>>;
   middaySignals: Array<Record<string, unknown>>;
+  signals: Array<Record<string, unknown>>;
   trades: Array<Record<string, unknown>>;
   rejectedCandidates: Array<Record<string, unknown>>;
   comparison: Record<string, Comparison>;
@@ -89,12 +101,12 @@ export type DailyWatchlistResponse = {
 };
 
 const comparisonNames: Record<string, string> = {
-  FROZEN_OPEN_TOP_FIVE: "FROZEN_OPEN top five",
-  ROLLING_TOP_FIVE: "ROLLING top five",
-  FROZEN_OPEN_TOP_TWO: "Top two",
-  FULL_ELIGIBLE_UNIVERSE: "Full eligible universe",
-  LIQUIDITY_ONLY_TOP_FIVE: "Liquidity-only top five",
-  CAUSALLY_MATCHED_RANDOM_FIVE: "Causally matched random five",
+  FROZEN_OPEN_TOP_FIVE: "Top-5 FROZEN_OPEN",
+  ROLLING_TOP_FIVE: "Top-5 ROLLING",
+  FROZEN_OPEN_TOP_TWO: "Top-2",
+  FULL_ELIGIBLE_UNIVERSE: "Full-universe baseline",
+  LIQUIDITY_ONLY_TOP_FIVE: "Liquidity-only baseline",
+  CAUSALLY_MATCHED_RANDOM_FIVE: "Random-five baseline",
 };
 
 function number(value: unknown, digits = 2) {
@@ -110,64 +122,13 @@ function timestamp(value: unknown) {
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value));
 }
 
-function metricMarkdown(label: string, row: MetricSet) {
-  return `| ${label} | ${row.trades} | ${row.winRate}% | ${row.grossPnl} | ${row.costs} | ${row.netPnlAfterCosts} | ${row.expectancy ?? "—"} | ${row.profitFactor ?? "—"} | ${row.maximumDrawdown} |`;
-}
-
-function exportMarkdown(response: DailyWatchlistResponse) {
-  const lines = [
-    `# ${response.metadata.strategyName}`,
-    "",
-    `- Strategy version: ${response.metadata.strategyVersion}`,
-    `- Configuration hash: ${response.metadata.configurationHash}`,
-    `- Result source: ${response.metadata.resultSource}`,
-    `- Research status: ${response.validationDecision.status}`,
-    `- Live orders enabled: ${response.metadata.liveOrdersEnabled}`,
-    `- Quantity invariant: exactly ${response.summary.executedQuantity} shares`,
-    `- Opening-range assumption: ${response.metadata.openingRangeAssumption}`,
-    "",
-    "## Effective settings",
-    "",
-    "```json",
-    JSON.stringify(response.metadata.effectiveConfiguration, null, 2),
-    "```",
-    "",
-    "## Comparison",
-    "",
-    "| Variant | Trades | Win rate | Gross P&L | Costs | Net P&L | Expectancy | Profit factor | Max drawdown |",
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ...Object.entries(response.comparison).map(([key, value]) => metricMarkdown(comparisonNames[key] ?? key, value.overall)),
-    "",
-    "## Daily selections",
-    "",
-    ...response.dailySelections.flatMap((selection) => [
-      `### ${selection.sessionDate} — ${selection.selectionTimestamp}`,
-      ...selection.symbols.map((item) => `- #${item.rank ?? item.rankAfter ?? "—"} ${item.symbol} — ${item.tier ?? "—"} — score ${item.score ?? "—"}`),
-      "",
-    ]),
-    "## Midday replacements",
-    "",
-    "```json",
-    JSON.stringify(response.middayReplacements, null, 2),
-    "```",
-    "",
-    "## Opening and midday BUY signals",
-    "",
-    "```json",
-    JSON.stringify({ opening: response.openingSignals, midday: response.middaySignals }, null, 2),
-    "```",
-    "",
-    "## Development and untouched validation",
-    "",
-    "```json",
-    JSON.stringify(Object.fromEntries(Object.entries(response.comparison).map(([key, value]) => [key, value.chronologicalFolds])), null, 2),
-    "```",
-  ];
-  const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+function exportMarkdown(response: Top5OpeningRangeBreakoutResponse) {
+  const markdown = buildTop5OpeningRangeBreakoutMarkdown(response);
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `daily-watchlist-${response.metadata.runId}.md`;
+  anchor.download = `top-5-opening-range-breakout-${response.metadata.runId}.md`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -194,69 +155,54 @@ function SignalList({ title, signals }: { title: string; signals: Array<Record<s
       <div className="trade-foot"><span>Entry {timestamp(signal.entryTimestamp)} · {money(signal.entryPrice)}</span><span>Breakout {money(signal.breakoutLevel)}</span></div>
       <div className="trade-foot"><span>VWAP {money(signal.sessionVwap)} · EMA {number(signal.emaFast)}/{number(signal.emaSlow)}</span><span>RSI {number(signal.rsi)} · RVOL {number(signal.rollingRvol)}x</span></div>
       <div className="trade-foot"><span>Stop {money(signal.stopPrice)} · target {money(signal.targetPrice)}</span><span>{String(signal.exitReason ?? "—").replaceAll("_", " ")} · net {money(signal.netPnl)}</span></div>
-      <div className="trade-foot"><span>Rank {String(signal.rankBeforeRescan ?? "—")} → {String(signal.rankAfterRescan ?? "—")}</span><span>{String(signal.promotionReason ?? "OPENING_SELECTION")}</span></div>
     </article>)}</div> : <div className="empty-history">No BUY signal passed the causal rules.</div>}
   </details>;
 }
 
-export function DailyWatchlistResults({ response }: { response: DailyWatchlistResponse }) {
+export function Top5OpeningRangeBreakoutResults({ response }: { response: Top5OpeningRangeBreakoutResponse }) {
+  if (response.metadata.strategyKey !== TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
+    return <section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span>Top-5 renderer rejected a mismatched strategy response.</span></div></section>;
+  }
   return <>
     <section className="backtest-panel">
-      <div className="panel-title"><div><span className="section-kicker">{response.metadata.researchLabel}</span><h2>Daily Scalping Watchlist validation</h2></div><button type="button" className="secondary-action" onClick={() => exportMarkdown(response)}><Download size={15} /> Export Markdown</button></div>
+      <div className="panel-title"><div><span className="section-kicker">{response.metadata.researchLabel}</span><h2>Top-5 Opening Range Breakout</h2></div><button type="button" className="secondary-action" onClick={() => exportMarkdown(response)}><Download size={15} /> Export Markdown</button></div>
       <div className={`backtest-message ${response.validationDecision.status === "REJECTED_RESEARCH_ONLY" ? "error" : "open-position"}`}><AlertTriangle size={17} /><span><strong>{response.validationDecision.status.replaceAll("_", " ")}</strong> — {response.validationDecision.reason} Live orders remain disabled.</span></div>
+      <div className="metric-grid"><div><span>Watchlist mode</span><strong>{response.metadata.watchlistMode}</strong></div><div><span>Universe evaluated</span><strong>{response.metadata.universeEvaluated}</strong></div><div><span>Trading days</span><strong>{response.metadata.tradingDays}</strong></div></div>
       <details className="advanced-settings" open><summary>Effective settings · {response.metadata.configurationHash.slice(0, 12)}</summary><pre className="configuration-audit">{JSON.stringify(response.metadata.effectiveConfiguration, null, 2)}</pre></details>
     </section>
 
     <section className="backtest-overview">
-      <div><span>Opening candidates</span><strong>{response.summary.rawOpeningCandidates}</strong></div>
-      <div><span>Midday candidates</span><strong>{response.summary.rawMiddayCandidates}</strong></div>
+      <div><span>Daily watchlists</span><strong>{response.summary.dailyWatchlists}</strong></div>
+      <div><span>PRIMARY selections</span><strong>{response.summary.primarySelections}</strong></div>
+      <div><span>RESERVE selections</span><strong>{response.summary.reserveSelections}</strong></div>
+      <div><span>Watchlist replacements</span><strong>{response.summary.watchlistReplacements}</strong></div>
+      <div><span>Opening breakout candidates</span><strong>{response.summary.openingBreakoutCandidates}</strong></div>
       <div><span>Accepted BUY signals</span><strong>{response.summary.acceptedBuySignals}</strong></div>
       <div><span>Executed trades</span><strong>{response.summary.executedTrades}</strong></div>
-      <div><span>Fixed quantity</span><strong>{response.summary.executedQuantity} shares</strong></div>
       <div><span>Net P&amp;L</span><strong>{money(response.summary.netPnlAfterCosts)}</strong></div>
     </section>
 
     <section className="backtest-panel">
-      <div className="panel-title"><div><span className="section-kicker">Explainable chronology</span><h2>Signal funnel and rejections</h2></div></div>
-      <div className="metric-grid">{Object.entries(response.summary.funnel).map(([label, value]) => <div key={label}><span>{label.replace(/([a-z])([A-Z])/g, "$1 $2")}</span><strong>{value}</strong></div>)}</div>
-      <details className="advanced-settings"><summary>Primary rejection reasons</summary><div className="metric-grid">{Object.entries(response.summary.rejectionCounts).map(([label, value]) => <div key={label}><span>{label.replaceAll("_", " ")}</span><strong>{value}</strong></div>)}</div></details>
-    </section>
-
-    <section className="backtest-panel">
-      <div className="panel-title"><div><span className="section-kicker">Opening selection audit</span><h2>Daily selected symbols</h2></div><span className="cost-note">Rank · PRIMARY/RESERVE · timestamp</span></div>
+      <div className="panel-title"><div><span className="section-kicker">Opening selection audit</span><h2>Daily selected symbols</h2></div><span className="cost-note">Rank · PRIMARY/RESERVE · selection timestamp</span></div>
       {response.dailySelections.length ? <div className="trade-list">{response.dailySelections.map((selection) => <article className="trade-card" key={`${selection.sessionDate}-${selection.selectionTimestamp}`}>
         <div className="trade-card-top"><strong>{selection.sessionDate}</strong><span>{timestamp(selection.selectionTimestamp)}</span></div>
         <div className="trade-foot"><span>{selection.symbols.map((item) => `#${item.rank ?? item.rankAfter} ${item.symbol} ${item.tier}`).join(" · ")}</span></div>
-      </article>)}</div> : <div className="empty-history">No opening selection could be formed from available completed candles.</div>}
+      </article>)}</div> : <div className="empty-history">No opening watchlist could be formed.</div>}
       <details className="advanced-settings"><summary>Complete intraday watchlist history ({response.watchlist.history.length})</summary><pre className="configuration-audit">{JSON.stringify(response.watchlist.history, null, 2)}</pre></details>
       <details className="advanced-settings"><summary>Midday replacements ({response.middayReplacements.length})</summary><pre className="configuration-audit">{JSON.stringify(response.middayReplacements, null, 2)}</pre></details>
     </section>
 
-    <section className="backtest-panel">
-      <div className="panel-title"><div><span className="section-kicker">Causal entries</span><h2>Opening and midday BUY signals</h2></div></div>
-      <SignalList title="Opening range BUY signals" signals={response.openingSignals} />
-      <SignalList title="Midday promotion BUY signals" signals={response.middaySignals} />
-    </section>
+    <section className="backtest-panel"><div className="panel-title"><div><span className="section-kicker">Causal entries</span><h2>Opening and midday BUY signals</h2></div></div><SignalList title="Opening range BUY signals" signals={response.openingSignals} /><SignalList title="Midday promotion BUY signals" signals={response.middaySignals} /></section>
 
     <section className="backtest-panel">
-      <div className="panel-title"><div><span className="section-kicker">Identical costs and risk rules</span><h2>Selector and baseline comparison</h2></div></div>
+      <div className="panel-title"><div><span className="section-kicker">Identical costs and risk rules</span><h2>Top-5, Top-2 and baseline results</h2></div></div>
       {Object.entries(response.comparison).map(([key, value]) => <details className="advanced-settings" key={key} open={key === "FROZEN_OPEN_TOP_FIVE" || key === "ROLLING_TOP_FIVE"}>
-        <summary>{comparisonNames[key] ?? key}</summary>
-        <Metrics row={value.overall} />
-        <div className="metric-grid"><div><span>Rescans</span><strong>{value.rescans}</strong></div><div><span>Replacements</span><strong>{value.replacements}</strong></div><div><span>Opening signals</span><strong>{value.signalsFromOpeningSelection}</strong></div><div><span>Midday signals</span><strong>{value.signalsFromMiddayPromotions}</strong></div></div>
+        <summary>{comparisonNames[key] ?? key}</summary><Metrics row={value.overall} />
         {value.chronologicalFolds.map((fold, index) => <div key={`${key}-${index}`}><h3>Fold {index + 1}</h3><p>Development {fold.developmentFrom}–{fold.developmentTo}</p><Metrics row={fold.development} /><p>Untouched validation {fold.validationFrom}–{fold.validationTo}</p><Metrics row={fold.validation} /></div>)}
-        <details className="advanced-settings"><summary>Midday time buckets</summary>{Object.entries(value.midday).map(([label, metrics]) => <div key={label}><h3>{label}</h3><Metrics row={metrics} /></div>)}</details>
       </details>)}
     </section>
 
-    <section className="backtest-panel">
-      <div className="panel-title"><div><span className="section-kicker">Execution audit</span><h2>Executed trades</h2></div><span className="cost-note">Every row must show 50 shares</span></div>
-      {response.trades.length ? <div className="trade-list">{response.trades.map((trade, index) => <article className="trade-card" key={String(trade.tradeId ?? index)}>
-        <div className="trade-card-top"><strong>{String(trade.symbol)} · {String(trade.signalType).replaceAll("_", " ")}</strong><span>{String(trade.exitReason).replaceAll("_", " ")} · {money(trade.netPnl)}</span></div>
-        <div className="trade-foot"><span>Entry {money(trade.entryPrice)} · stop {money(trade.stopPrice)} · target {money(trade.targetPrice)}</span><span>{String(trade.executedQuantity)} shares</span></div>
-        <div className="trade-foot"><span>Gross {money(trade.grossPnl)}</span><span>Costs {money(trade.totalCosts)}</span></div>
-      </article>)}</div> : <div className="empty-history">No trade passed every causal signal and portfolio rule.</div>}
-    </section>
+    <section className="backtest-panel"><div className="panel-title"><div><span className="section-kicker">Execution audit</span><h2>Executed trades</h2></div><span className="cost-note">Every row must show 50 shares</span></div>{response.trades.length ? <div className="trade-list">{response.trades.map((trade, index) => <article className="trade-card" key={String(trade.tradeId ?? index)}><div className="trade-card-top"><strong>{String(trade.symbol)} · {String(trade.signalType).replaceAll("_", " ")}</strong><span>{String(trade.exitReason).replaceAll("_", " ")} · {money(trade.netPnl)}</span></div><div className="trade-foot"><span>Entry {money(trade.entryPrice)} · stop {money(trade.stopPrice)} · target {money(trade.targetPrice)}</span><span>{String(trade.executedQuantity)} shares</span></div><div className="trade-foot"><span>Gross {money(trade.grossPnl)}</span><span>Costs {money(trade.totalCosts)}</span></div></article>)}</div> : <div className="empty-history">No trade passed every causal signal and portfolio rule.</div>}</section>
 
     {(response.errors.length > 0 || response.warnings.length > 0) && <section className="backtest-notes"><h3>Backtest notes</h3>{response.errors.map((item) => <p key={`${item.symbol}-${item.message}`}><AlertTriangle size={14} /> <strong>{item.symbol}:</strong> {item.message}</p>)}{response.warnings.map((warning) => <p key={warning}><Info size={14} /> {warning}</p>)}</section>}
   </>;

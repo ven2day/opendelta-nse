@@ -19,17 +19,17 @@ import pandas as pd
 from main import IST
 
 
-STRATEGY_KEY = "daily_scalping_watchlist"
-STRATEGY_NAME = "Daily Scalping Watchlist"
+STRATEGY_KEY = "top_5_opening_range_breakout"
+STRATEGY_NAME = "Top-5 Opening Range Breakout"
 STRATEGY_DESCRIPTION = (
     "Research-only top-five Opening Range Breakout with optional causal intraday rescans "
     "and Rolling Momentum Breakout entries for newly promoted symbols."
 )
-STRATEGY_VERSION = "daily-scalping-watchlist-1.0.1"
-FEATURE_CODE_VERSION = "daily-watchlist-features-1"
+STRATEGY_VERSION = "top-5-opening-range-breakout-1.0.0"
+FEATURE_CODE_VERSION = "top-5-opening-range-breakout-features-1"
 SESSION_RULE_VERSION = "nse-completed-five-minute-session-1"
-PORTFOLIO_RULE_VERSION = "daily-watchlist-portfolio-1"
-WATCHLIST_RULE_VERSION = "daily-scalping-watchlist-selection-2"
+PORTFOLIO_RULE_VERSION = "top-5-opening-range-breakout-portfolio-1"
+WATCHLIST_RULE_VERSION = "top-5-opening-range-breakout-selection-1"
 OPENING_RANGE_RULE_VERSION = "top-five-orb-0915-0930-1"
 MINIMUM_UNTOUCHED_VALIDATION_TRADES = 20
 WatchlistMode = Literal["FROZEN_OPEN", "ROLLING"]

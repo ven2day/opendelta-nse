@@ -46,23 +46,19 @@ import {
 import { JsonConfigurationEditor } from "./json-configuration-editor";
 import { createJsonConfiguration } from "./json-configuration.mjs";
 import {
-  VwapPullbackSettingsPanel,
-  VWAP_PULLBACK_STRATEGY_KEY,
-  type VwapPullbackSettings,
-} from "./vwap-pullback-settings";
-import {
   VwapPullbackResults,
   type VwapPullbackResponse,
 } from "./vwap-pullback-results";
 import {
-  DailyWatchlistSettingsPanel,
-  DAILY_WATCHLIST_STRATEGY_KEY,
-  type DailyWatchlistSettings,
+  Top5OpeningRangeBreakoutSettingsPanel,
+  TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY,
+  type Top5OpeningRangeBreakoutSettings,
 } from "./daily-watchlist-settings";
 import {
-  DailyWatchlistResults,
-  type DailyWatchlistResponse,
+  Top5OpeningRangeBreakoutResults,
+  type Top5OpeningRangeBreakoutResponse,
 } from "./daily-watchlist-results";
+import { createTop5OpeningRangeBreakoutRequest } from "./top-5-opening-range-breakout-contract.mjs";
 import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
 import {
   backtestHistorySummary,
@@ -186,7 +182,7 @@ type BacktestResponse = {
   warnings: string[];
 };
 
-type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | DailyWatchlistResponse) & { detail?: string };
+type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse) & { detail?: string };
 type BacktestJobStatus = {
   jobId: string;
   status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETE" | "FAILED";
@@ -234,21 +230,19 @@ type RunProgress = {
   stage?: string;
   workers?: number;
 };
-type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | DailyWatchlistResponse | RetiredMarketAlignedResponse;
-type StrategyMode = "rsi_range" | "rsi_recovery" | "market_aligned_vwap_pullback_scalper" | "daily_scalping_watchlist";
+type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | RetiredMarketAlignedResponse;
+type StrategyMode = "rsi_range" | "rsi_recovery" | "top_5_opening_range_breakout";
 type StoredBacktest = BacktestHistoryEntry<ActiveResponse>;
 type StoredBacktestSummary = BacktestHistorySummary;
 
 const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
-  daily_scalping_watchlist: "Daily Scalping Watchlist + Top-5 Opening Range Breakout",
-  market_aligned_vwap_pullback_scalper: "Market-Aligned VWAP Pullback Scalper",
+  top_5_opening_range_breakout: "Top-5 Opening Range Breakout",
 };
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
-const marketRecommendedDefaults = strategyDefaults(VWAP_PULLBACK_STRATEGY_KEY);
-const dailyWatchlistRecommendedDefaults = strategyDefaults(DAILY_WATCHLIST_STRATEGY_KEY);
+const top5OpeningRangeBreakoutRecommendedDefaults = strategyDefaults(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY);
 const rangeRecommendedDefaults = strategyDefaults("rsi_range");
 const recoveryRecommendedDefaults = strategyDefaults("rsi_recovery");
 
@@ -271,11 +265,12 @@ function isRecoveryResponse(value: ActiveResponse | null): value is RecoveryBack
 }
 
 function isVwapPullbackResponse(value: ActiveResponse | null): value is VwapPullbackResponse {
-  return value?.metadata.strategyMode === VWAP_PULLBACK_STRATEGY_KEY;
+  return value?.metadata.strategyMode === "market_aligned_vwap_pullback_scalper";
 }
 
-function isDailyWatchlistResponse(value: ActiveResponse | null): value is DailyWatchlistResponse {
-  return value?.metadata.strategyMode === DAILY_WATCHLIST_STRATEGY_KEY;
+function isTop5OpeningRangeBreakoutResponse(value: ActiveResponse | null): value is Top5OpeningRangeBreakoutResponse {
+  return value?.metadata.strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY
+    && value.metadata.strategyKey === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY;
 }
 
 function isRetiredMarketAlignedResponse(value: ActiveResponse | null): value is RetiredMarketAlignedResponse {
@@ -669,8 +664,7 @@ function PerformanceChart({
 export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
-  const [vwapPullbackSettings, setVwapPullbackSettings] = useState<VwapPullbackSettings>({ ...marketRecommendedDefaults });
-  const [dailyWatchlistSettings, setDailyWatchlistSettings] = useState<DailyWatchlistSettings>({ ...dailyWatchlistRecommendedDefaults });
+  const [top5OpeningRangeBreakoutSettings, setTop5OpeningRangeBreakoutSettings] = useState<Top5OpeningRangeBreakoutSettings>({ ...top5OpeningRangeBreakoutRecommendedDefaults });
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const [symbolRegistryError, setSymbolRegistryError] = useState<string | null>(null);
@@ -784,13 +778,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     setNumericErrors({});
   };
 
-  const applyMarketValues = (values: Record<string, number | string | boolean>) => {
-    setVwapPullbackSettings({ ...marketRecommendedDefaults, ...values });
-    setNumericErrors({});
-  };
-
-  const applyDailyWatchlistValues = (values: Record<string, number | string | boolean>) => {
-    setDailyWatchlistSettings({ ...dailyWatchlistRecommendedDefaults, ...values, quantityPerTrade: 50 });
+  const applyTop5OpeningRangeBreakoutValues = (values: Record<string, number | string | boolean>) => {
+    setTop5OpeningRangeBreakoutSettings({ ...top5OpeningRangeBreakoutRecommendedDefaults, ...values, quantityPerTrade: 50 });
     setNumericErrors({});
   };
 
@@ -807,34 +796,14 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       executionModel, exitModel, exitProtectionEnabled, positionSizing,
       rsiExitExecutionModel, timeExit: "NEXT_TRADING_SESSION_OPEN",
     };
-    if (strategy === DAILY_WATCHLIST_STRATEGY_KEY) return dailyWatchlistSettings;
-    return vwapPullbackSettings;
+    return top5OpeningRangeBreakoutSettings;
   };
 
-  const marketRelationshipErrors = useMemo(() => {
+  const top5OpeningRangeBreakoutRelationshipErrors = useMemo(() => {
     const errors: Record<string, string> = {};
-    const setting = (key: string) => Number(vwapPullbackSettings[key]);
-    if (!(setting("rsiPullbackMinimum") < setting("rsiPullbackMaximum")
-      && setting("rsiPullbackMaximum") <= setting("rsiTriggerLevel")
-      && setting("rsiTriggerLevel") < setting("maximumTriggerRsi"))) {
-      errors.rsi = "Use pullback minimum < pullback maximum <= trigger < maximum trigger RSI.";
-    }
-    if (!(setting("emaFast") < setting("emaSlow"))) errors.ema = "EMA fast length must be below EMA slow length.";
-    if (!(String(vwapPullbackSettings.entryStartTime) < String(vwapPullbackSettings.lastEntryTime)
-      && String(vwapPullbackSettings.lastEntryTime) < String(vwapPullbackSettings.squareOffTime))) {
-      errors.sessionTimes = "Use entry start < last entry < square-off.";
-    }
-    if (!(setting("minimumStopPct") <= setting("maximumStopPct"))) errors.stop = "Minimum stop cannot exceed maximum stop.";
-    return errors;
-  }, [vwapPullbackSettings]);
-
-  const marketFormInvalid = Object.keys(numericErrors).length > 0 || Object.keys(marketRelationshipErrors).length > 0;
-
-  const dailyWatchlistRelationshipErrors = useMemo(() => {
-    const errors: Record<string, string> = {};
-    const setting = (key: string) => Number(dailyWatchlistSettings[key]);
-    const time = (key: string) => String(dailyWatchlistSettings[key]);
-    if (setting("quantityPerTrade") !== 50) errors.quantity = "Daily Watchlist quantity must remain exactly 50 shares.";
+    const setting = (key: string) => Number(top5OpeningRangeBreakoutSettings[key]);
+    const time = (key: string) => String(top5OpeningRangeBreakoutSettings[key]);
+    if (setting("quantityPerTrade") !== 50) errors.quantity = "Top-5 Opening Range Breakout quantity must remain exactly 50 shares.";
     if (setting("emaFast") >= setting("emaSlow")) errors.ema = "EMA fast length must be below EMA slow length.";
     if (setting("minimumStopPct") > setting("maximumStopPct")) errors.stop = "Minimum stop cannot exceed maximum stop.";
     if (setting("watchlistPrimarySymbols") > setting("watchlistSelectedSymbols")) errors.watchlistPrimary = "Primary symbols cannot exceed selected watchlist symbols.";
@@ -848,9 +817,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       errors.sessionTimes = "Use opening start < opening end ≤ selection ≤ final rescan < last entry < square-off.";
     }
     return errors;
-  }, [dailyWatchlistSettings]);
+  }, [top5OpeningRangeBreakoutSettings]);
 
-  const dailyWatchlistFormInvalid = Object.keys(numericErrors).length > 0 || Object.keys(dailyWatchlistRelationshipErrors).length > 0;
+  const top5OpeningRangeBreakoutFormInvalid = Object.keys(numericErrors).length > 0 || Object.keys(top5OpeningRangeBreakoutRelationshipErrors).length > 0;
 
   const [optimizerGrid, setOptimizerGrid] = useState({
     stopAtrMultipliers: "0.75, 1.00, 1.25, 1.50, 2.00",
@@ -1012,13 +981,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     } catch {
       saved = {};
     }
-    if (next === VWAP_PULLBACK_STRATEGY_KEY) {
-      const values = { ...marketRecommendedDefaults, ...saved };
-      applyMarketValues(values as Record<string, number | string | boolean>);
-      setExitModel("LEGACY_FIXED_TARGET");
-    } else if (next === DAILY_WATCHLIST_STRATEGY_KEY) {
-      const values = { ...dailyWatchlistRecommendedDefaults, ...saved, quantityPerTrade: 50 };
-      applyDailyWatchlistValues(values as Record<string, number | string | boolean>);
+    if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
+      const values = { ...top5OpeningRangeBreakoutRecommendedDefaults, ...saved, quantityPerTrade: 50 };
+      applyTop5OpeningRangeBreakoutValues(values as Record<string, number | string | boolean>);
       setExitModel("LEGACY_FIXED_TARGET");
     } else if (next === "rsi_recovery") {
       applyRecoveryValues({ ...recoveryRecommendedDefaults, ...saved });
@@ -1030,7 +995,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     const savedTimeframe = typeof saved.timeframe === "string" && timeframes.includes(saved.timeframe as typeof timeframes[number])
       ? saved.timeframe as typeof timeframes[number]
       : next === "rsi_range" ? "1d" : "5m";
-    setTimeframe(next === VWAP_PULLBACK_STRATEGY_KEY || next === DAILY_WATCHLIST_STRATEGY_KEY ? "5m" : savedTimeframe);
+    setTimeframe(next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "5m" : savedTimeframe);
     setResponse(null); setActiveHistoryId(null); setError(null);
   };
 
@@ -1074,14 +1039,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         setError("RSI ranges must be ordered from the low entry range to the high exit range.");
         return;
       }
-    } else if (strategyMode === VWAP_PULLBACK_STRATEGY_KEY) {
-      if (marketFormInvalid) {
-        setError(Object.values(numericErrors)[0] ?? Object.values(marketRelationshipErrors)[0] ?? "Review the highlighted VWAP pullback settings.");
-        return;
-      }
-    } else if (strategyMode === DAILY_WATCHLIST_STRATEGY_KEY) {
-      if (dailyWatchlistFormInvalid) {
-        setError(Object.values(numericErrors)[0] ?? Object.values(dailyWatchlistRelationshipErrors)[0] ?? "Review the highlighted Daily Watchlist settings.");
+    } else if (strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
+      if (top5OpeningRangeBreakoutFormInvalid) {
+        setError(Object.values(numericErrors)[0] ?? Object.values(top5OpeningRangeBreakoutRelationshipErrors)[0] ?? "Review the highlighted Top-5 Opening Range Breakout settings.");
         return;
       }
     } else {
@@ -1165,10 +1125,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     let completedCount = 0;
     const runId = crypto.randomUUID();
     try {
-      let aggregate: BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | DailyWatchlistResponse | null = null;
+      let aggregate: BacktestResponse | RecoveryBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
       // Cross-symbol ranking and portfolio capacity require one chronological stream.
       const batchSize = 10;
-      const crossSymbolStrategy = strategyMode === VWAP_PULLBACK_STRATEGY_KEY || strategyMode === DAILY_WATCHLIST_STRATEGY_KEY;
+      const crossSymbolStrategy = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY;
       const effectiveBatchSize = crossSymbolStrategy ? symbolsToRun.length : batchSize;
       for (let offset = 0; offset < symbolsToRun.length; offset += effectiveBatchSize) {
         const batch = symbolsToRun.slice(offset, offset + effectiveBatchSize);
@@ -1177,10 +1137,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           entryHigh,
           exitLow,
           exitHigh,
-        } : strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? {
-          vwapPullbackConfiguration: vwapPullbackSettings,
-        } : strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? {
-          dailyWatchlistConfiguration: dailyWatchlistSettings,
+        } : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? {
+          top5OpeningRangeBreakoutConfiguration: top5OpeningRangeBreakoutSettings,
         } : {
           rsiLength,
           rsiArmLow,
@@ -1221,9 +1179,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           rsiExitExecutionModel,
           timeExit: "NEXT_TRADING_SESSION_OPEN",
         };
-        const requestBody = {
+        const commonRequest = {
           symbols: batch,
           strategyMode,
+          strategyKey: strategyMode,
           universeMode: useAllSymbols ? "all" : "selected",
           runId,
           durationYears,
@@ -1231,6 +1190,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           cachePolicy: crossSymbolStrategy ? cachePolicy : "RUN_AGAIN",
           ...strategyPayload,
         };
+        const requestBody = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY
+          ? createTop5OpeningRangeBreakoutRequest(commonRequest, top5OpeningRangeBreakoutSettings)
+          : commonRequest;
         let payload: BacktestPayload;
         if (crossSymbolStrategy) {
           const started = await fetch("/api/backtest?action=start-job", {
@@ -1307,11 +1269,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             errors: [...previous.errors, ...payload.errors],
             warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
           } : payload;
-        } else if (strategyMode === VWAP_PULLBACK_STRATEGY_KEY) {
-          if (!isVwapPullbackResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
-          aggregate = payload;
         } else {
-          if (!isDailyWatchlistResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
+          if (!isTop5OpeningRangeBreakoutResponse(payload)) throw new Error("Backtest service returned the wrong strategy key.");
           aggregate = payload;
         }
 
@@ -1578,11 +1537,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       applyRangeValues(settings);
     } else if (strategyMode === "rsi_recovery") {
       applyRecoveryValues(settings);
-    } else if (strategyMode === DAILY_WATCHLIST_STRATEGY_KEY) {
-      if (Number(settings.quantityPerTrade) !== 50) return "Daily Watchlist quantity must remain exactly 50 shares.";
-      applyDailyWatchlistValues(settings as Record<string, number | string | boolean>);
     } else {
-      applyMarketValues(settings as Record<string, number | string | boolean>);
+      if (Number(settings.quantityPerTrade) !== 50) return "Top-5 Opening Range Breakout quantity must remain exactly 50 shares.";
+      applyTop5OpeningRangeBreakoutValues(settings as Record<string, number | string | boolean>);
     }
     setResponse(null);
     setActiveHistoryId(null);
@@ -1597,11 +1554,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     } else if (strategyMode === "rsi_recovery") {
       applyRecoveryValues(recoveryRecommendedDefaults);
       setTimeframe("5m");
-    } else if (strategyMode === DAILY_WATCHLIST_STRATEGY_KEY) {
-      applyDailyWatchlistValues(dailyWatchlistRecommendedDefaults);
-      setTimeframe("5m");
     } else {
-      applyMarketValues(marketRecommendedDefaults);
+      applyTop5OpeningRangeBreakoutValues(top5OpeningRangeBreakoutRecommendedDefaults);
       setTimeframe("5m");
     }
     setDurationYears(1);
@@ -1639,14 +1593,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
           <button type="button" className={strategyMode === "rsi_range" ? "active" : ""} onClick={() => switchStrategy("rsi_range")}>RSI Range Strategy</button>
           <button type="button" className={strategyMode === "rsi_recovery" ? "active" : ""} onClick={() => switchStrategy("rsi_recovery")}>RSI Recovery Scalping</button>
-          <button type="button" className={strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? "active" : ""} onClick={() => switchStrategy(DAILY_WATCHLIST_STRATEGY_KEY)}>Daily Scalping Watchlist + Top-5 ORB</button>
-          <button type="button" className={strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? "active" : ""} onClick={() => switchStrategy(VWAP_PULLBACK_STRATEGY_KEY)}>Market-Aligned VWAP Pullback Scalper</button>
+          <button type="button" className={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "active" : ""} onClick={() => switchStrategy(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY)}>Top-5 Opening Range Breakout</button>
         </div>
         <section className="backtest-intro">
-          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? "Select a causal top-five watchlist at the open or on rolling rescans, then test opening-range and midday momentum breakouts." : "Controlled RSI pullbacks to VWAP or rising EMAs inside an established intraday uptrend."}</p></div>
+          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : "Select a causal top-five watchlist at the open or on rolling rescans, then test opening-range and midday momentum breakouts."}</p></div>
           <button type="button" className="method-pill strategy-rule-trigger" aria-label="Hover or focus to view all backtest conditions">
             <Clock3 size={16} />
-            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? "Causal watchlist + next-bar ORB" : "Completed-candle VWAP pullback"}; hover for all conditions</span>
+            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : "Causal Top-5 watchlist + next-bar ORB"}; hover for all conditions</span>
             <span className="strategy-rules-popover" role="tooltip">
               {strategyMode === "rsi_range" ? <>
                 <strong>Buy / hold / sell conditions</strong>
@@ -1654,20 +1607,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 <span><b>CHECK:</b> When RSI is {exitLow}-{exitHigh}, estimate the next-open sale after entry fee, exit fee, and slippage.</span>
                 <span><b>SELL:</b> Execute only when estimated net profit is at least 1% of the buy cost.</span>
                 <span><b>HOLD:</b> If net profit is below 1%, cancel that exit and wait for a later high-RSI opportunity.</span>
-              </> : strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? <>
-                <strong>Daily Scalping Watchlist + Top-5 ORB</strong>
+              </> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <>
+                <strong>Top-5 Opening Range Breakout</strong>
                 <span>FROZEN_OPEN selects five symbols at 09:30. ROLLING rescans completed candles every 30 minutes through 14:00.</span>
                 <span>The opening range is 09:15–09:30. A completed breakout candle can enter only at the next candle open.</span>
                 <span>Symbols promoted midday use a six-bar momentum breakout that excludes the trigger candle.</span>
                 <span>Every executed trade is exactly 50 shares. Costs, 1.5R exits and portfolio limits are identical across all comparison baselines.</span>
                 <span>Research and paper-signal only; no live broker orders.</span>
-              </> : strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? <>
-                <strong>Market-Aligned VWAP Pullback BUY conditions</strong>
-                <span>EMA9 stays above EMA20 while EMA20 rises, then RSI pulls back between 38 and 50 near VWAP or an EMA.</span>
-                <span>A completed candle must close above the previous high, session VWAP and EMA9 with RSI above 50 and at most 65.</span>
-                <span>RVOL and historical liquidity must pass. NIFTY must not be strongly bearish when context is available.</span>
-                <span>Entry is the next candle open. ATR and pullback structure freeze the stop and 1.5R target.</span>
-                <span>Sector, breadth, relative strength and optional OI are ranking or advisory context, not repeated mandatory gates.</span>
               </> : <>
                 <strong>RSI Recovery BUY and hold conditions</strong>
                 <span><b>ARM:</b> RSI enters {rsiArmLow}–{rsiArmHigh}. Falling below the arm range does not cancel it.</span>
@@ -1696,7 +1642,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             {useAllSymbols ? (
               <div className="all-symbols-selection">
                 <strong>Entire symbols.csv universe</strong>
-                <span>{strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? "Runs as one causal cross-symbol ranking stream with bounded workers." : "Runs automatically in safe groups of 10."} Keep this page open to see progress.</span>
+                <span>{strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "Runs as one causal cross-symbol ranking stream with bounded workers." : "Runs automatically in safe groups of 10."} Keep this page open to see progress.</span>
               </div>
             ) : (
               <div className="selected-symbols">
@@ -1721,19 +1667,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           </div>
 
           <div className="control-block compact-control"><span className="control-title">Duration</span><div className="segmented backtest-segmented">{([1, 3] as const).map((years) => <button key={years} type="button" className={durationYears === years ? "active" : ""} onClick={() => setDurationYears(years)}>{years} year{years > 1 ? "s" : ""}</button>)}</div></div>
-          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" disabled={(strategyMode === DAILY_WATCHLIST_STRATEGY_KEY || strategyMode === VWAP_PULLBACK_STRATEGY_KEY) && item !== "5m"} className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
+          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" disabled={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY && item !== "5m"} className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
           {strategyMode === "rsi_range" ? <>
             <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "entryLow")} value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "entryHigh")} value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
             <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "exitLow")} value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "exitHigh")} value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
-          </> : strategyMode === DAILY_WATCHLIST_STRATEGY_KEY ? <DailyWatchlistSettingsPanel
-            settings={dailyWatchlistSettings}
-            onChange={(key, value) => setDailyWatchlistSettings((current) => ({ ...current, [key]: key === "quantityPerTrade" ? 50 : value }))}
-            onValidityChange={setNumericValidity}
-            cachePolicy={cachePolicy}
-            onCachePolicyChange={setCachePolicy}
-          /> : strategyMode === VWAP_PULLBACK_STRATEGY_KEY ? <VwapPullbackSettingsPanel
-            settings={vwapPullbackSettings}
-            onChange={(key, value) => setVwapPullbackSettings((current) => ({ ...current, [key]: value }))}
+          </> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <Top5OpeningRangeBreakoutSettingsPanel
+            settings={top5OpeningRangeBreakoutSettings}
+            onChange={(key, value) => setTop5OpeningRangeBreakoutSettings((current) => ({ ...current, [key]: key === "quantityPerTrade" ? 50 : value }))}
             onValidityChange={setNumericValidity}
             cachePolicy={cachePolicy}
             onCachePolicyChange={setCachePolicy}
@@ -1853,7 +1793,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           {loading ? (
             <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? (runProgress.stage === "SUPPORTING_MARKET_FEATURES" && runProgress.supportTotal ? `support ${runProgress.supportCompleted ?? 0}/${runProgress.supportTotal}` : `${runProgress.completed}/${runProgress.total}`) : "run"}</button>
           ) : (
-            <button className="run-backtest" type="submit" disabled={(strategyMode === VWAP_PULLBACK_STRATEGY_KEY && marketFormInvalid) || (strategyMode === DAILY_WATCHLIST_STRATEGY_KEY && dailyWatchlistFormInvalid)}><TrendingUp size={17} />Run backtest</button>
+            <button className="run-backtest" type="submit" disabled={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY && top5OpeningRangeBreakoutFormInvalid}><TrendingUp size={17} />Run backtest</button>
           )}
         </form>
 
@@ -1886,8 +1826,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         {rsiComparison && <RsiExitComparisonResults response={rsiComparison} />}
         {response && (
           isRetiredMarketAlignedResponse(response) ? <section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned RSI Scalper result is preserved read-only.</span></div></section>
-            : isDailyWatchlistResponse(response) ? <DailyWatchlistResults response={response} />
-            : isVwapPullbackResponse(response) ? <VwapPullbackResults response={response} />
+            : isTop5OpeningRangeBreakoutResponse(response) ? <Top5OpeningRangeBreakoutResults response={response} />
+            : isVwapPullbackResponse(response) ? <><section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned VWAP Pullback Scalper result is preserved read-only.</span></div></section><VwapPullbackResults response={response} /></>
             : isRecoveryResponse(response) ? <RecoveryResults response={response} /> : <>
             <section className="backtest-overview">
               <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>

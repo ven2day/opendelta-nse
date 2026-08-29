@@ -1,7 +1,34 @@
-# OpenDelta dashboard
+# OpenDelta NSE
 
-Private NSE dashboard with RSI filters, yesterday/current RSI,
-yesterday/current close, and 24-hour volume.
+Authenticated NSE market-research dashboard with RSI filters, signals,
+point-in-time backtesting, saved account history and auditable strategy
+diagnostics.
+
+- Website: <https://nse.ventoday.com>
+- Backtest: <https://nse.ventoday.com/backtest>
+
+## Strategy status
+
+| Strategy | Status | Notes |
+| --- | --- | --- |
+| RSI Range Strategy | Active | Existing strategy behavior and historical results are preserved. |
+| RSI Recovery Scalping | Active | Existing strategy key, configuration, signals and exits are preserved. |
+| Top-5 Opening Range Breakout | Research only | Supports `FROZEN_OPEN` and `ROLLING`; broker orders are disabled. |
+| Market-Aligned RSI Scalper | Retired | Historical results remain read-only; new runs are blocked. |
+| Market-Aligned VWAP Pullback Scalper | Retired | Historical results remain read-only; new runs are blocked. |
+
+No strategy in this repository is represented as guaranteed profitable.
+
+## Repository security
+
+This is a public repository. Never commit `.env` files, Dhan credentials,
+access tokens, TOTP secrets, private keys, production host details or database
+credentials. Use the checked-in example files only as templates and keep real
+values in the server environment with restrictive file permissions.
+
+The root `.gitignore` excludes local environment files, common private-key
+formats, SSH private-key filenames, runtime data, reports and deployment
+archives. Review staged files and run a secret scan before every public push.
 
 ## Local development
 
@@ -137,6 +164,20 @@ calendar-session and active-day trade frequencies separately, audit the exact
 next-bar timestamps, and keep Markdown compact. Complete watchlists,
 candidates, signals, trades and benchmark records are downloaded separately as
 CSV or JSON.
+
+#### Latest production research validation
+
+The dated one-year run completed on 2026-08-30 used 649 requested symbols in
+the configured ₹100-₹5,000 range. Frozen mode scored 619 symbols and executed
+3 trades across 247 tested sessions; Rolling mode executed 159 trades. Frozen
+ended at ₹-1,296.04 after costs and Rolling at ₹-19,533.23 after costs. In the
+untouched final three months, Frozen executed 1 trade for ₹-17.29 and Rolling
+executed 43 trades for ₹-5,788.08.
+
+The result is `REJECTED_RESEARCH_ONLY`: after-cost expectancy was negative,
+profit factor remained below 1, and the acceptance baselines were not beaten
+reliably. This result must not be used to enable live broker orders. It is a
+dated research observation, not a promise about future performance.
 
 After deploying the dashboard and backtest images, run
 `web/deploy/smoke-top-5-opening-range-breakout.sh`. It authenticates through the

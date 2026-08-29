@@ -6,6 +6,7 @@ source /etc/vento-nse.env
 set +a
 
 base_url="${1:-https://nse.ventoday.com}"
+exporter_container="${2:-vento-nse}"
 cookie_jar="$(mktemp)"
 response="$(mktemp)"
 page="$(mktemp)"
@@ -81,7 +82,7 @@ jq -e '
 ' "${page}" >/dev/null
 ! grep -qi 'VWAP pullback performance' "${page}"
 
-docker exec -i vento-nse node --input-type=module -e '
+docker exec -i "${exporter_container}" node --input-type=module -e '
   const { buildTop5OpeningRangeBreakoutMarkdown } = await import(
     "file:///app/web/app/backtest/top-5-opening-range-breakout-contract.mjs"
   );

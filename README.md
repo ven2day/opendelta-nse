@@ -108,6 +108,28 @@ This strategy is labelled `Research candidate — paper trading required` and
 must not be represented as profitable without untouched chronological
 validation.
 
+### Daily Scalping Watchlist research modes
+
+`Daily Scalping Watchlist` is a standalone backtest strategy with
+`daily_scalping_watchlist` as its internal key. It supports `FROZEN_OPEN` (the
+default) and `ROLLING` selection. Frozen mode ranks at 09:30 and retains five
+symbols for the session. Rolling mode rescans completed candles every 30 minutes
+through 14:00, applies score-advantage, residence-time, replacement-count and
+sector caps, and makes a promoted symbol eligible only from the next completed
+five-minute candle.
+
+The opening research rule uses the completed 09:15-09:30 range and enters a
+qualifying breakout only at the next candle open. Midday promotions use a
+six-bar Rolling Momentum Breakout; the trigger candle is excluded from the
+breakout level. Frozen top five, rolling top five, opening top two, full
+eligible universe, liquidity-only top five and a causally matched random five
+all share the same chronological portfolio, exactly 50 shares per executed
+trade, stop/target, cost, slippage and square-off rules. Historical spread
+remains advisory when bid/ask data is unavailable. The strategy produces
+research and paper signals only and has no broker-order path. It remains
+rejected unless every untouched validation fold has positive after-cost
+expectancy and net P&L and outperforms the comparison baselines.
+
 ## Release rollback
 
 Before a cutover, record the active release directory and both container image

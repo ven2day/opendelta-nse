@@ -7,6 +7,7 @@ const STORE_NAME = "completed-runs";
 export type BacktestHistoryStrategy =
   | "rsi_range"
   | "rsi_recovery"
+  | "daily_scalping_watchlist"
   | "market_aligned_vwap_pullback_scalper"
   | "market_aligned_rsi_scalper";
 
@@ -71,7 +72,7 @@ function isHistoryEntry(value: unknown): value is BacktestHistoryEntry {
   const response = entry.response as { metadata?: unknown; results?: unknown } | undefined;
   return typeof entry.id === "string"
     && typeof entry.completedAt === "string"
-    && ["rsi_range", "rsi_recovery", "market_aligned_vwap_pullback_scalper", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
+    && ["rsi_range", "rsi_recovery", "daily_scalping_watchlist", "market_aligned_vwap_pullback_scalper", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
     && typeof entry.strategyName === "string"
     && typeof entry.timeframe === "string"
     && typeof entry.durationYears === "number"
@@ -86,7 +87,7 @@ function isHistorySummary(value: unknown): value is BacktestHistorySummary {
   const entry = value as Partial<BacktestHistorySummary>;
   return typeof entry.id === "string"
     && typeof entry.completedAt === "string"
-    && ["rsi_range", "rsi_recovery", "market_aligned_vwap_pullback_scalper", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
+    && ["rsi_range", "rsi_recovery", "daily_scalping_watchlist", "market_aligned_vwap_pullback_scalper", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
     && typeof entry.strategyName === "string"
     && typeof entry.timeframe === "string"
     && typeof entry.durationYears === "number"

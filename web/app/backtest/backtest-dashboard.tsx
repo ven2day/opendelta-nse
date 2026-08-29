@@ -15,6 +15,7 @@ import {
   Moon,
   Radio,
   RotateCcw,
+  ScanSearch,
   Search,
   Settings2,
   Square,
@@ -1576,6 +1577,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           </a>
           <nav className="top-nav" aria-label="Main navigation">
             <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
+            <a className="nav-item" href="/scanner"><ScanSearch size={16} />Stock Scanner</a>
             <a className="nav-item active" href="/backtest" aria-current="page"><TrendingUp size={16} />Backtest</a>
             <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
             <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>

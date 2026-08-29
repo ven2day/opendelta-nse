@@ -12,6 +12,7 @@ import {
   Pin,
   Radio,
   RefreshCw,
+  ScanSearch,
   Settings2,
   TrendingUp,
 } from "lucide-react";
@@ -373,6 +374,7 @@ export function LiveUniverse({ userName, signOutHref }: { userName: string; sign
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
       <nav className="top-nav" aria-label="Main navigation">
         <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
+        <a className="nav-item" href="/scanner"><ScanSearch size={16} />Stock Scanner</a>
         <a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a>
         <a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a>
         <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>

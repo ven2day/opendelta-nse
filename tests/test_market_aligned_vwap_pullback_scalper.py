@@ -335,3 +335,50 @@ def test_cold_and_cached_runs_have_identical_strategy_semantics(tmp_path, monkey
     assert cached["metadata"]["configurationHash"] == fresh["metadata"]["configurationHash"]
     assert cached["summary"] == fresh["summary"]
     assert cached["trades"] == fresh["trades"]
+
+
+def test_missing_optional_support_is_not_a_failed_trading_symbol(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BACKTEST_WORKERS", "1")
+    mapping = tmp_path / "market-sector-map.csv"
+    mapping.write_text(
+        "symbol,sector\nTEST,Technology\nMISSING,Technology\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MARKET_CONTEXT_SECTOR_MAP_FILE", str(mapping))
+    monkeypatch.setenv("MARKET_CONTEXT_BREADTH_UNIVERSE_FILE", str(mapping))
+
+    class Store:
+        cache_directory = tmp_path
+
+        @staticmethod
+        def universe() -> list[str]:
+            return ["TEST", "MISSING"]
+
+        def _cache_path(self, symbol: str, interval: str, years: int):
+            return self.cache_directory / f"{symbol}-{interval}-{years}y.csv.gz"
+
+    index = pd.date_range("2026-08-24 09:15", periods=75, freq="5min", tz=IST)
+    raw = pd.DataFrame({
+        "Open": 100.0, "High": 100.2, "Low": 99.8, "Close": 100.0,
+        "Volume": 1_000_000.0,
+    }, index=index)
+    raw.to_csv(tmp_path / "TEST-5-1y.csv.gz", index_label="Timestamp", compression="gzip")
+    raw.to_csv(tmp_path / "NIFTY50-5-1y.csv.gz", index_label="Timestamp", compression="gzip")
+
+    result = run_vwap_pullback_backtest(
+        BacktestRequest(
+            symbols=["TEST"], strategyMode=STRATEGY_KEY, timeframe="5m",
+            durationYears=1, cachePolicy="RUN_AGAIN",
+        ),
+        Store(),
+        datetime(2026, 8, 29, 12, 0, tzinfo=IST),
+    )
+
+    assert result["metadata"]["symbolsProcessed"] == 1
+    assert result["metadata"]["symbolsFailed"] == 0
+    assert result["metadata"]["supportingData"]["supportSymbolsUnavailable"] == 1
+    assert result["errors"] == []
+    assert result["supportingDataErrors"] == [{
+        "symbol": "MISSING",
+        "message": "Local 5-minute candle cache is unavailable for MISSING",
+    }]

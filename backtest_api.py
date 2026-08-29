@@ -2329,6 +2329,7 @@ def run_vwap_pullback_backtest(
     )
     prepared = [row["item"] for row in rows if row.get("item") is not None]
     errors = [row["error"] for row in rows if row.get("error") is not None]
+    support_errors: list[dict[str, str]] = []
     feature_paths = {str(item["symbol"]): str(item["featurePath"]) for item in prepared}
     symbol_results = [item["result"] for item in prepared if item.get("result") is not None]
     candidates = [candidate for result in symbol_results for candidate in result.get("candidates", [])]
@@ -2355,15 +2356,22 @@ def run_vwap_pullback_backtest(
             str(row["item"]["symbol"]): str(row["item"]["featurePath"])
             for row in support_rows if row.get("item") is not None
         })
-        errors.extend(row["error"] for row in support_rows if row.get("error") is not None)
-    unique_errors: list[dict[str, str]] = []
-    seen_errors: set[tuple[str, str]] = set()
-    for error in errors:
-        key = (str(error.get("symbol") or ""), str(error.get("message") or ""))
-        if key not in seen_errors:
-            unique_errors.append(error)
-            seen_errors.add(key)
-    errors = unique_errors
+        support_errors.extend(
+            row["error"] for row in support_rows if row.get("error") is not None
+        )
+
+    def unique_error_rows(values: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+        unique: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for error in values:
+            key = (str(error.get("symbol") or ""), str(error.get("message") or ""))
+            if key not in seen:
+                unique.append(error)
+                seen.add(key)
+        return unique
+
+    errors = unique_error_rows(errors)
+    support_errors = unique_error_rows(support_errors)
     if cancel_event is not None and cancel_event.is_set():
         raise BacktestCancelledError("Backtest cancellation requested")
 
@@ -2468,6 +2476,7 @@ def run_vwap_pullback_backtest(
                 "breadthSource": support_plan["breadthSource"],
                 "breadthSymbols": len(support_plan["breadthSymbols"]),
                 "sectorSymbols": len(support_plan["sectorSymbols"]),
+                "supportSymbolsUnavailable": len(support_errors),
             },
         },
         "summary": summary,
@@ -2478,6 +2487,7 @@ def run_vwap_pullback_backtest(
             trades, analysis_start, now, request.durationYears
         ),
         "errors": errors,
+        "supportingDataErrors": support_errors,
         "warnings": [
             "Signals and indicators use completed candles; NEXT_BAR_OPEN entries do not use the entry candle for signal decisions.",
             "Historical bid/ask spread is unavailable and is not fabricated.",

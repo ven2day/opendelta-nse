@@ -248,6 +248,17 @@ class RepositoryAndPaperTests(unittest.TestCase):
         self.assertFalse(trade["brokerExecution"])
         self.assertNotIn("place_order", inspect.getsource(LiveSignalRepository.create_paper_trade))
 
+    def test_legacy_oi_fields_never_block_rsi_recovery_paper_trade(self) -> None:
+        isolated = signal_record("SIG-OI-ISOLATED")
+        isolated.update({
+            "oiFilterMode": "ENFORCED",
+            "executionEligible": False,
+            "oiDecision": "SKIPPED_STRONGLY_BEARISH_OI",
+        })
+        self.repo.add_signal(isolated)
+        trade = self.repo.create_paper_trade("SIG-OI-ISOLATED", 100, 10)
+        self.assertEqual(trade["status"], "OPEN")
+
     def test_paper_target_hit_and_manual_close(self) -> None:
         first = self.repo.create_paper_trade("SIG-TEST", 100, 10)
         self.repo.process_completed_candle("TEST", {"timestamp": "2026-08-26T10:10:00+05:30", "Low": 99, "High": 100.6, "Close": 100.5})

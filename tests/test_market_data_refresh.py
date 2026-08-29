@@ -34,8 +34,11 @@ class MarketDataRefreshServiceTests(unittest.TestCase):
         self.addCleanup(self.environment.stop)
 
     def test_refresh_publishes_all_rows_and_reports_file_timestamp(self) -> None:
-        def runner(config):
+        def runner(config, progress):
+            self.assertIsNotNone(progress)
+            progress(0, 2)
             result = pd.DataFrame([{"symbol": "LUPIN"}, {"symbol": "SBIN"}])
+            progress(2, 2)
             result.to_csv(config.output_file, index=False)
             return result
 
@@ -48,6 +51,8 @@ class MarketDataRefreshServiceTests(unittest.TestCase):
         self.assertTrue(started["accepted"])
         self.assertEqual(completed["state"], "SUCCEEDED")
         self.assertEqual(completed["rowsPublished"], 2)
+        self.assertEqual(completed["processedSymbols"], 2)
+        self.assertEqual(completed["totalSymbols"], 2)
         self.assertIsNotNone(completed["lastRefreshTimestamp"])
         self.assertEqual(pd.read_csv(self.output_file)["symbol"].tolist(), ["LUPIN", "SBIN"])
 
@@ -55,7 +60,8 @@ class MarketDataRefreshServiceTests(unittest.TestCase):
         entered = threading.Event()
         release = threading.Event()
 
-        def runner(config):
+        def runner(config, progress):
+            progress(1, 2)
             entered.set()
             release.wait(timeout=2)
             result = pd.DataFrame([{"symbol": "LUPIN"}])
@@ -74,10 +80,15 @@ class MarketDataRefreshServiceTests(unittest.TestCase):
         self.assertTrue(first["accepted"])
         self.assertFalse(second["accepted"])
         self.assertTrue(second["running"])
+        self.assertEqual(second["processedSymbols"], 1)
+        self.assertEqual(second["totalSymbols"], 2)
         self.assertEqual(completed["state"], "SUCCEEDED")
+        self.assertEqual(completed["rowsPublished"], 1)
+        self.assertEqual(completed["processedSymbols"], 2)
+        self.assertEqual(completed["totalSymbols"], 2)
 
     def test_sanitized_collector_failure_is_reported(self) -> None:
-        def runner(config):
+        def runner(config, progress):
             raise DhanAPIError("Dhan Data API subscription is not active")
 
         service = MarketDataRefreshService(self.output_file, runner=runner)

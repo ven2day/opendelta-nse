@@ -1,14 +1,14 @@
 "use client";
 
 import { Download, Info, SortAsc, SortDesc } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { FeatureAnalysis } from "./feature-analysis";
 
 export type RecoveryTrade = {
   tradeId: string;
   sequenceNumber: number;
   runId: string;
-  strategyMode: "rsi_recovery";
+  strategyMode: "rsi_recovery" | "market_aligned_rsi_scalper";
   symbol: string;
   timeframe: string;
   signalTimestamp: string;
@@ -55,6 +55,11 @@ export type RecoveryTrade = {
   grossReturnPct: number;
   estimatedCostPct: number;
   netReturnPct: number;
+  oiRegimeAtSignal?: string | null;
+  oiScoreAtSignal?: number | null;
+  oiConfidence?: string | null;
+  oiDecision?: string | null;
+  oiSourceTimestamp?: string | null;
 };
 
 export type ProtectedPosition = {
@@ -66,12 +71,32 @@ export type ProtectedPosition = {
   entryPrice: number;
   quantity: number;
   capitalDeployed: number;
+  exitModel?: "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
+  atrLength?: number;
+  atrTimeframe?: string;
+  atrAtSignal?: number;
+  atrPctAtEntry?: number;
+  stopAtrMultiplier?: number;
+  rewardRiskRatio?: number;
+  minimumStopPct?: number;
+  maximumStopPct?: number;
+  dynamicStopPct?: number;
+  dynamicTargetPct?: number;
+  stopLossPrice?: number;
+  rupeeRiskAtEntry?: number;
+  minimumProfitPct?: number;
+  minimumProfitableExitPrice?: number;
+  profitExitRsi?: number;
+  upperRsiLevel?: number;
+  stopLossPct?: number;
+  exitRsi?: number | null;
+  exitExecutionModel?: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
   targetPrice: number;
   exitTimestamp: string | null;
   exitPrice: number | null;
-  exitReason: "TARGET_EXIT" | "TIME_EXIT" | null;
-  exitFill: "GAP_OPEN" | "TARGET_PRICE" | "NEXT_TRADING_SESSION_OPEN" | null;
-  status: "TARGET_EXIT" | "TIME_EXIT" | "OPEN";
+  exitReason: "TARGET_EXIT" | "TARGET_GAP" | "RSI_PROFIT_EXIT" | "RSI_OVERBOUGHT_PROFIT_EXIT" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | null;
+  exitFill: string | null;
+  status: "TARGET_EXIT" | "TARGET_GAP" | "RSI_PROFIT_EXIT" | "RSI_OVERBOUGHT_PROFIT_EXIT" | "STOP_EXIT" | "STOP_GAP" | "TIME_EXIT" | "OPEN";
   holdingSessions: number;
   tradingSessionsHeld: number;
   barsHeld: number;
@@ -88,14 +113,23 @@ export type ProtectedPosition = {
   slippageCost: number;
   estimatedOpenExitCost: number;
   totalCosts: number;
+  tradingCosts?: number;
+  netPnl?: number;
   realizedPnl: number | null;
   unrealizedPnl: number;
   lastTimestamp: string;
   lastClose: number;
   confirmationScore: number;
+  confirmationsPassed?: number;
+  confirmationsEnabled?: number;
   requiredConfirmations: number;
   rsiAtEntry: number;
   executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
+  oiRegimeAtSignal?: string | null;
+  oiScoreAtSignal?: number | null;
+  oiConfidence?: string | null;
+  oiDecision?: string | null;
+  oiSourceTimestamp?: string | null;
 };
 
 export type SkippedRecoverySignal = {
@@ -115,11 +149,31 @@ export type ProtectedRecoverySummary = {
   executedTrades: number;
   skippedMaxOpenLots: number;
   targetExits: number;
+  targetGapExits?: number;
+  rsiProfitExits?: number;
+  rsiOverboughtProfitExits?: number;
+  profitableRsiExits?: number;
+  stopExits?: number;
+  stopGapExits?: number;
   targetsHit: number;
   timeExits: number;
   openPositions: number;
   openSignals: number;
   targetHitRate: number;
+  winningTrades?: number;
+  losingTrades?: number;
+  winRate?: number;
+  averageDynamicTargetPct?: number | null;
+  averageDynamicStopPct?: number | null;
+  averageRewardRisk?: number | null;
+  grossProfit?: number;
+  grossLoss?: number;
+  tradingCosts?: number;
+  estimatedOpenExitCosts?: number;
+  expectancyPerTrade?: number | null;
+  maximumConsecutiveLosses?: number;
+  averageWinner?: number | null;
+  averageLoser?: number | null;
   profitableClosedTrades: number;
   losingClosedTrades: number;
   realizedGrossProfit: number;
@@ -140,9 +194,91 @@ export type ProtectedRecoverySummary = {
   averageHoldingSessions: number | null;
   medianHoldingSessions: number | null;
   candleRowsProcessed: number;
+  skippedOiSignals?: number;
+  oiFilterMode?: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
 };
 
 type SpeedBucket = { count: number; pct: number };
+
+export type CandidateRejectionDetail = { code: string; message: string };
+
+export type MarketCandidateDiagnostic = {
+  candidateTimestamp: string;
+  symbol: string;
+  tradeId?: string | null;
+  rsiArmTimestamp: string | null;
+  rsiAtArm: number | null;
+  previousRsi: number | null;
+  signalRsi: number | null;
+  timeWindowPassed: boolean;
+  niftyDataAvailable: boolean;
+  niftyTrendScore: number | null;
+  niftyPass: boolean;
+  sectorMappingFound: boolean;
+  sectorName: string | null;
+  sectorDataAvailable: boolean;
+  sectorMemberCount: number;
+  sectorRequiredMembers: number;
+  sectorBullishPct: number | null;
+  sectorPass: boolean;
+  breadthDataAvailable: boolean;
+  breadthSymbolCount: number;
+  breadthRequiredSymbols: number;
+  breadthPct: number | null;
+  breadthPass: boolean;
+  relativeStrengthValue: number | null;
+  relativeStrengthPass: boolean;
+  price: number | null;
+  sessionVwap: number | null;
+  priceAboveVwap: boolean;
+  vwapPass: boolean;
+  emaFastValue: number | null;
+  emaSlowValue: number | null;
+  ema9AboveEma20: boolean;
+  ema9AboveEma20Pass: boolean;
+  ema9Rising: boolean;
+  ema9RisingPass: boolean;
+  emaPass: boolean;
+  rvolValue: number | null;
+  rvolPass: boolean;
+  liquidityValue: number | null;
+  liquidityPass: boolean;
+  roomToTargetValue: number | null;
+  roomToTargetPass: boolean;
+  oiMode: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED" | "NOT_SET";
+  oiResult: string;
+  alignmentScore: number | null;
+  requiredScore: number;
+  scorePass: boolean;
+  rejectionReasons: string[];
+  rejectionReasonDetails: CandidateRejectionDetail[];
+  finalStatus: "ACCEPTED" | "REJECTED_GATE" | "SKIPPED_DATA_UNAVAILABLE";
+  executed: boolean;
+  sourceTimestamps: {
+    stock: string | null;
+    nifty: string | null;
+    sector: string | null;
+    breadth: string | null;
+    oi: string | null;
+  };
+};
+
+export type MarketCandidateFunnel = {
+  rsiArmed: number;
+  rsiRecoveryCandidates: number;
+  timeWindowPassed: number;
+  niftyPassed: number;
+  sectorPassed: number;
+  breadthPassed: number;
+  relativeStrengthPassed: number;
+  vwapPassed: number;
+  emaPassed: number;
+  rvolPassed: number;
+  liquidityPassed: number;
+  roomPassed: number;
+  scorePassed: number;
+  executedTrades: number;
+};
 
 export type RecoverySymbolResult = {
   symbol: string;
@@ -197,6 +333,9 @@ export type RecoverySymbolResult = {
   maximumConcurrentPositions?: number;
   peakCapitalDeployed?: number;
   maximumDrawdown?: number;
+  candidateDiagnostics?: MarketCandidateDiagnostic[];
+  skippedCandidates?: MarketCandidateDiagnostic[];
+  rsiArmedCount?: number;
 };
 
 export type RecoverySummary = {
@@ -234,12 +373,22 @@ export type RecoverySummary = {
   averageOpenMaePct: number | null;
   worstOpenMaePct: number | null;
   candleRowsProcessed: number;
+  skippedOiSignals?: number;
+  oiFilterMode?: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
+  candidateBuySignals?: number;
+  marketAlignmentRejectedSignals?: number;
+  oiRejectedSignals?: number;
+  candidateFunnel?: MarketCandidateFunnel;
 };
 
 export type RecoveryBacktestResponse = {
   metadata: {
     runId: string;
-    strategyMode: "rsi_recovery";
+    strategyMode: "rsi_recovery" | "market_aligned_rsi_scalper";
+    strategyKey?: "rsi_recovery" | "market_aligned_rsi_scalper";
+    strategyName?: string;
+    strategyDescription?: string;
+    configuration?: Record<string, unknown>;
     strategyVersion: string;
     startedAt: string;
     completedAt: string;
@@ -255,15 +404,35 @@ export type RecoveryBacktestResponse = {
     symbolsFailed: number;
     workerCount: number;
     runtimeSeconds: number;
+    cachedResult?: boolean;
+    originalRunTimestamp?: string | null;
+    fingerprint?: string | null;
+    performance?: {
+      optimized?: boolean;
+      totalCandles?: number;
+      databaseQueries?: number;
+      bytesRead?: number;
+      peakMemoryBytes?: number;
+      featureCacheHits?: number;
+      featureCacheMisses?: number;
+      stagesSeconds?: Record<string, number | null>;
+    };
     timezone: string;
     executionModel: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
+    exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
     backtestSemantics?: "SIGNAL_OBSERVATION" | "POSITION";
     exitProtection?: {
       enabled: boolean;
+      exitModel?: "LEGACY_FIXED_TARGET" | "LEGACY_PROTECTED_TARGET" | "FIXED_TP_SL" | "ATR_DYNAMIC_TP_SL" | "RSI_PROFIT_RISK_CONTROL";
       quantityPerTrade: number;
       maxOpenLotsPerSymbol: number;
       maxHoldingTradingDays: number;
       timeExit: "NEXT_TRADING_SESSION_OPEN";
+      minimumProfitPct?: number;
+      profitExitRsi?: number;
+      upperRsiLevel?: number;
+      hardStopLossPct?: number;
+      rsiExitExecutionModel?: "SIGNAL_CLOSE" | "NEXT_BAR_OPEN";
     };
     positionBacktestVersion?: string | null;
     strategyParameters: Record<string, string | number | boolean>;
@@ -279,6 +448,12 @@ export type RecoveryBacktestResponse = {
       speedScore: string;
       maeScore: string;
       openPenalty: string;
+    };
+    oiFilter?: {
+      mode: "OFF" | "ADVISORY" | "RESEARCH_FILTER" | "ENFORCED";
+      version: string;
+      parameters: Record<string, unknown>;
+      decisionOrder: string;
     };
     corporateActionAdjustment: string;
     gitCommitSha: string | null;
@@ -398,13 +573,27 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
   const positions = results.flatMap((result) => result.positions ?? []);
   const skipped = results.flatMap((result) => result.skippedSignals ?? []);
   const closed = positions.filter((position) => position.status !== "OPEN");
-  const targets = positions.filter((position) => position.status === "TARGET_EXIT");
+  const targetExits = positions.filter((position) => position.status === "TARGET_EXIT");
+  const targetGaps = positions.filter((position) => position.status === "TARGET_GAP");
+  const targets = [...targetExits, ...targetGaps];
+  const rsiProfitExits = positions.filter((position) => position.status === "RSI_PROFIT_EXIT");
+  const rsiOverboughtProfitExits = positions.filter((position) => position.status === "RSI_OVERBOUGHT_PROFIT_EXIT");
+  const stopExits = positions.filter((position) => position.status === "STOP_EXIT");
+  const stopGaps = positions.filter((position) => position.status === "STOP_GAP");
   const timeExits = positions.filter((position) => position.status === "TIME_EXIT");
   const open = positions.filter((position) => position.status === "OPEN");
   const realized = finite(closed.map((position) => position.realizedPnl));
   const profits = realized.filter((value) => value > 0);
   const losses = realized.filter((value) => value < 0);
   const gross = closed.map((position) => position.grossPnl);
+  const dynamicExitResults = positions.some((position) => position.exitModel === "FIXED_TP_SL" || position.exitModel === "ATR_DYNAMIC_TP_SL" || position.exitModel === "RSI_PROFIT_RISK_CONTROL");
+  const costs = finite((dynamicExitResults ? positions : closed).map((position) => position.tradingCosts ?? position.totalCosts));
+  const estimatedOpenExitCosts = dynamicExitResults
+    ? open.reduce((sum, position) => sum + (position.estimatedOpenExitCost ?? 0), 0)
+    : 0;
+  const dynamicTargets = finite(positions.map((position) => position.dynamicTargetPct));
+  const dynamicStops = finite(positions.map((position) => position.dynamicStopPct));
+  const rewardRisks = finite(positions.map((position) => position.rewardRiskRatio));
   const holdingMinutes = positions.map((position) => position.durationMinutes);
   const holdingSessions = positions.map((position) => position.holdingSessions);
   const timeline = positions.flatMap((position) => [
@@ -425,28 +614,58 @@ export function aggregateProtectedResults(results: RecoverySymbolResult[]): Prot
   const unrealizedPnl = open.reduce((sum, position) => sum + position.unrealizedPnl, 0);
   const maximumDrawdown = results.reduce((sum, result) => sum + (result.maximumDrawdown ?? 0), 0);
   const totalValidBuySignals = positions.length + skipped.length;
+  const orderedClosed = [...closed].sort((left, right) => Date.parse(left.exitTimestamp ?? "") - Date.parse(right.exitTimestamp ?? "") || left.sequenceNumber - right.sequenceNumber);
+  let consecutiveLosses = 0;
+  let maximumConsecutiveLosses = 0;
+  orderedClosed.forEach((position) => {
+    if ((position.realizedPnl ?? 0) < 0) {
+      consecutiveLosses += 1;
+      maximumConsecutiveLosses = Math.max(maximumConsecutiveLosses, consecutiveLosses);
+    } else consecutiveLosses = 0;
+  });
+  const profitableRsiExits = rsiProfitExits.length + rsiOverboughtProfitExits.length;
   return {
     totalValidBuySignals,
     totalBuySignals: totalValidBuySignals,
     buySignals: totalValidBuySignals,
     executedTrades: positions.length,
     skippedMaxOpenLots: skipped.length,
-    targetExits: targets.length,
+    targetExits: targetExits.length,
+    targetGapExits: targetGaps.length,
+    rsiProfitExits: rsiProfitExits.length,
+    rsiOverboughtProfitExits: rsiOverboughtProfitExits.length,
+    profitableRsiExits,
+    stopExits: stopExits.length,
+    stopGapExits: stopGaps.length,
     targetsHit: targets.length,
     timeExits: timeExits.length,
     openPositions: open.length,
     openSignals: open.length,
-    targetHitRate: positions.length ? rounded(targets.length / positions.length * 100, 2) ?? 0 : 0,
+    targetHitRate: positions.length ? rounded((targets.length + profitableRsiExits) / positions.length * 100, 2) ?? 0 : 0,
+    winningTrades: profits.length,
+    losingTrades: losses.length,
+    winRate: closed.length ? rounded(profits.length / closed.length * 100, 2) ?? 0 : 0,
+    averageDynamicTargetPct: rounded(mean(dynamicTargets), 6),
+    averageDynamicStopPct: rounded(mean(dynamicStops), 6),
+    averageRewardRisk: rounded(mean(rewardRisks), 6),
     profitableClosedTrades: profits.length,
     losingClosedTrades: losses.length,
     realizedGrossProfit: rounded(gross.filter((value) => value > 0).reduce((sum, value) => sum + value, 0), 2) ?? 0,
     realizedGrossLoss: rounded(Math.abs(gross.filter((value) => value < 0).reduce((sum, value) => sum + value, 0)), 2) ?? 0,
+    grossProfit: rounded(gross.filter((value) => value > 0).reduce((sum, value) => sum + value, 0), 2) ?? 0,
+    grossLoss: rounded(Math.abs(gross.filter((value) => value < 0).reduce((sum, value) => sum + value, 0)), 2) ?? 0,
+    tradingCosts: rounded(costs.reduce((sum, value) => sum + value, 0), 2) ?? 0,
+    estimatedOpenExitCosts: rounded(estimatedOpenExitCosts, 2) ?? 0,
     netRealizedPnl: rounded(netRealizedPnl, 2) ?? 0,
     unrealizedPnl: rounded(unrealizedPnl, 2) ?? 0,
     combinedPnl: rounded(netRealizedPnl + unrealizedPnl, 2) ?? 0,
     averageProfitPerTrade: rounded(mean(profits), 2),
     averageLossPerTrade: rounded(mean(losses), 2),
+    averageWinner: rounded(mean(profits), 2),
+    averageLoser: rounded(mean(losses), 2),
     profitFactor: losses.length ? rounded(profits.reduce((sum, value) => sum + value, 0) / Math.abs(losses.reduce((sum, value) => sum + value, 0)), 4) : null,
+    expectancyPerTrade: rounded(mean(realized), 2),
+    maximumConsecutiveLosses,
     maximumDrawdown: rounded(maximumDrawdown, 2) ?? 0,
     maximumDrawdownPct: peakCapital ? rounded(maximumDrawdown / peakCapital * 100, 4) ?? 0 : 0,
     maximumConcurrentPositions: maximumConcurrent,
@@ -548,23 +767,25 @@ type SortKey = keyof Pick<RecoverySymbolResult,
 
 function ProtectedPositionTable({ positions }: { positions: ProtectedPosition[] }) {
   if (!positions.length) return <div className="empty-history">No executed positions are available in this view.</div>;
+  const rsiExitMode = positions.some((position) => position.exitModel === "RSI_PROFIT_RISK_CONTROL");
   return <div className="protected-position-table" role="region" aria-label="Protected position results">
-    <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>Target</span><span>Exit</span><span>Exit price</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Realized P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
+    <div className="protected-position-grid protected-position-head"><span>Signal</span><span>Entry</span><span>{rsiExitMode ? "RSI at entry" : "ATR at entry"}</span><span>Entry price</span><span>Qty</span><span>Capital</span><span>{rsiExitMode ? "Minimum profit" : "TP"}</span><span>SL</span><span>Exit</span><span>Reason</span><span>Sessions</span><span>MAE / MFE</span><span>Net P&amp;L</span><span>Unrealized P&amp;L</span><span>Status</span></div>
     {positions.map((position) => <div className="protected-position-grid protected-position-row" key={position.tradeId}>
-      <span data-label="Signal">{formatIst(position.signalTimestamp)}</span>
+      <span data-label="Signal">{formatIst(position.signalTimestamp)}{position.oiRegimeAtSignal && <small className={`oi-regime-label regime-${position.oiRegimeAtSignal.toLowerCase()}`}>{position.oiRegimeAtSignal.replaceAll("_", " ")} · {number(position.oiScoreAtSignal ?? null)}</small>}</span>
       <span data-label="Entry">{formatIst(position.entryTimestamp)}</span>
+      <span data-label={rsiExitMode ? "RSI at entry" : "ATR at entry"}>{rsiExitMode ? number(position.rsiAtEntry) : position.atrAtSignal === undefined ? "—" : money(position.atrAtSignal)}<small>{rsiExitMode ? `Exit from RSI ${number(position.profitExitRsi ?? null, 0)}+` : position.atrPctAtEntry === undefined ? "" : percent(position.atrPctAtEntry)}</small></span>
       <span data-label="Entry price">{money(position.entryPrice)}</span>
       <span data-label="Quantity">{position.quantity}</span>
       <span data-label="Capital">{money(position.capitalDeployed)}</span>
-      <span data-label="Target">{money(position.targetPrice)}</span>
-      <span data-label="Exit">{formatIst(position.exitTimestamp)}</span>
-      <span data-label="Exit price">{money(position.exitPrice)}</span>
-      <span data-label="Exit reason">{position.exitReason?.replaceAll("_", " ") ?? "—"}</span>
+      <span data-label={rsiExitMode ? "Minimum profit" : "Take profit"}>{money(position.targetPrice)}<small>{position.dynamicTargetPct === undefined ? "" : percent(position.dynamicTargetPct)}</small></span>
+      <span data-label="Stop loss">{position.stopLossPrice === undefined ? "—" : money(position.stopLossPrice)}<small>{position.dynamicStopPct === undefined ? "" : percent(-position.dynamicStopPct)}</small></span>
+      <span data-label="Exit">{formatIst(position.exitTimestamp)}<small>{money(position.exitPrice)}</small></span>
+      <span data-label="Exit reason">{position.exitReason?.replaceAll("_", " ") ?? "—"}<small>{position.confirmationScore} of {position.confirmationsEnabled ?? 3} passed · minimum required {position.requiredConfirmations}</small></span>
       <span data-label="Holding sessions">{position.holdingSessions}<small>{duration(position.durationMinutes)} · {position.barsHeld} bars</small></span>
       <span data-label="MAE / MFE"><b className="negative-value">{percent(position.maxAdversePct)}</b><small className="positive-value">{percent(position.maxFavorablePct)}</small></span>
-      <span data-label="Realized P&L" className={tone(position.realizedPnl)}>{money(position.realizedPnl)}</span>
+      <span data-label="Net P&L" className={tone(position.realizedPnl)}>{money(position.realizedPnl)}<small>{position.tradingCosts === undefined ? "" : `${money(position.tradingCosts)} costs`}</small></span>
       <span data-label="Unrealized P&L" className={tone(position.status === "OPEN" ? position.unrealizedPnl : null)}>{position.status === "OPEN" ? money(position.unrealizedPnl) : "—"}</span>
-      <span data-label="Status"><b className={`trade-status ${position.status.toLowerCase()}`}>{position.status.replaceAll("_", " ")}</b></span>
+      <span data-label="Status"><b className={`trade-status ${position.status.toLowerCase()}`}>{position.status.replaceAll("_", " ")}</b>{position.oiDecision && <small title={position.oiSourceTimestamp ? `OI source ${formatIst(position.oiSourceTimestamp)}` : "No OI source timestamp"}>{position.oiDecision.replaceAll("_", " ")} · {position.oiConfidence ?? "—"}</small>}</span>
     </div>)}
   </div>;
 }
@@ -588,6 +809,9 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
     ["features", "Feature Analysis", null],
   ] as const;
   const protection = response.metadata.exitProtection;
+  const dynamicExit = response.metadata.exitModel === "ATR_DYNAMIC_TP_SL" || response.metadata.exitModel === "FIXED_TP_SL";
+  const rsiExitMode = response.metadata.exitModel === "RSI_PROFIT_RISK_CONTROL";
+  const explicitRiskExit = dynamicExit || rsiExitMode;
 
   return <>
     <nav className="recovery-result-tabs" aria-label="Protected position result views">
@@ -599,16 +823,21 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
         <div><span>Valid BUY signals</span><strong>{summary.totalValidBuySignals.toLocaleString("en-IN")}</strong></div>
         <div><span>Executed trades</span><strong>{summary.executedTrades.toLocaleString("en-IN")}</strong></div>
         <div><span>Skipped · max lots</span><strong>{summary.skippedMaxOpenLots.toLocaleString("en-IN")}</strong></div>
-        <div><span>Target exits</span><strong>{summary.targetExits.toLocaleString("en-IN")}</strong></div>
+        {rsiExitMode ? <><div><span>RSI profit exits</span><strong>{(summary.rsiProfitExits ?? 0).toLocaleString("en-IN")}</strong></div><div><span>RSI overbought exits</span><strong>{(summary.rsiOverboughtProfitExits ?? 0).toLocaleString("en-IN")}</strong></div></> : <div><span>Target exits</span><strong>{(summary.targetExits + (summary.targetGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
+        {explicitRiskExit && <div><span>Stop exits</span><strong>{((summary.stopExits ?? 0) + (summary.stopGapExits ?? 0)).toLocaleString("en-IN")}</strong></div>}
         <div><span>Time exits</span><strong>{summary.timeExits.toLocaleString("en-IN")}</strong></div>
         <div><span>Open positions</span><strong className={summary.openPositions ? "warning-value" : "positive-value"}>{summary.openPositions.toLocaleString("en-IN")}</strong></div>
+        {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {(response.summary as RecoverySummary).skippedOiSignals ?? 0}</strong></div>}
       </section>
-      <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with exit protection.</strong> Target-hit rate measures target exits, not profitability. Skipped signals are preserved separately and excluded from trade P&amp;L.</span></div>
+      <div className="research-semantics"><Info size={16} /><span><strong>Position backtest with {rsiExitMode ? "profitable RSI exits, a hard stop, and a time exit" : dynamicExit ? "explicit TP/SL exits" : "legacy exit protection"}.</strong> Win rate and net P&amp;L measure closed-trade profitability; an exit percentage is not used as a substitute. Skipped signals remain separate.</span></div>
 
       <section className="backtest-panel recovery-section">
         <div className="panel-title"><div><span className="section-kicker">Position outcomes</span><h2>Exit and profitability summary</h2></div><span className="date-window">{protection?.quantityPerTrade ?? 50} shares · max {protection?.maxOpenLotsPerSymbol ?? 1} lot · {protection?.maxHoldingTradingDays ?? 5} NSE sessions</span></div>
         <div className="metric-grid protected-metric-grid">
-          <div><span>Target-hit rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
+          {!rsiExitMode && <div><span>Target-hit rate</span><strong>{percent(summary.targetHitRate)}</strong></div>}
+          {explicitRiskExit && <div><span>Win rate</span><strong>{percent(summary.winRate ?? 0)}</strong></div>}
+          {dynamicExit && <div><span>Target gaps</span><strong>{summary.targetGapExits ?? 0}</strong></div>}
+          {explicitRiskExit && <div><span>Stop exits / gaps</span><strong>{summary.stopExits ?? 0} / {summary.stopGapExits ?? 0}</strong></div>}
           <div><span>Profitable closed</span><strong className="positive-value">{summary.profitableClosedTrades}</strong></div>
           <div><span>Losing closed</span><strong className="negative-value">{summary.losingClosedTrades}</strong></div>
           <div><span>Realized gross profit</span><strong className="positive-value">{money(summary.realizedGrossProfit)}</strong></div>
@@ -619,6 +848,11 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
           <div><span>Average profit / trade</span><strong className="positive-value">{money(summary.averageProfitPerTrade)}</strong></div>
           <div><span>Average loss / trade</span><strong className="negative-value">{money(summary.averageLossPerTrade)}</strong></div>
           <div><span>Profit factor</span><strong>{number(summary.profitFactor)}</strong></div>
+          {explicitRiskExit && <div><span>{rsiExitMode ? "Minimum profit / hard stop" : "Average TP / SL"}</span><strong>{percent(summary.averageDynamicTargetPct ?? null)} / {percent(-(summary.averageDynamicStopPct ?? 0))}</strong></div>}
+          {dynamicExit && <div><span>Average reward:risk</span><strong>{number(summary.averageRewardRisk ?? null)}</strong></div>}
+          {explicitRiskExit && <div><span>Trading costs</span><strong>{money(summary.tradingCosts ?? 0)}</strong></div>}
+          {explicitRiskExit && <div><span>Expectancy / closed trade</span><strong className={tone(summary.expectancyPerTrade ?? null)}>{money(summary.expectancyPerTrade ?? null)}</strong></div>}
+          {rsiExitMode && <div><span>Maximum consecutive losses</span><strong className="negative-value">{summary.maximumConsecutiveLosses ?? 0}</strong></div>}
           <div><span>Maximum drawdown</span><strong className="negative-value">{money(-summary.maximumDrawdown)}<small>{percent(-summary.maximumDrawdownPct)}</small></strong></div>
           <div><span>Maximum concurrent</span><strong>{summary.maximumConcurrentPositions}</strong></div>
           <div><span>Peak capital deployed</span><strong>{money(summary.peakCapitalDeployed)}</strong></div>
@@ -648,7 +882,7 @@ function ProtectedRecoveryResults({ response }: { response: RecoveryBacktestResp
 
     <section className="backtest-notes recovery-run-metadata">
       <h3>Run metadata and cautions</h3>
-      <p><strong>Mode:</strong> Exit protection ON · {response.metadata.executionModel} · target {number(Number(response.metadata.strategyParameters.targetPct))}% · no stop loss.</p>
+      <p><strong>Mode:</strong> {response.metadata.exitModel?.replaceAll("_", " ") ?? "Legacy exit protection"} · {response.metadata.executionModel}{rsiExitMode ? ` · RSI exit ${String(protection?.rsiExitExecutionModel ?? "SIGNAL_CLOSE")} · minimum profit ${number(Number(protection?.minimumProfitPct ?? 0.5))}% · hard stop ${number(Number(protection?.hardStopLossPct ?? 1.5))}%` : dynamicExit ? " · TP/SL frozen at entry" : ` · target ${number(Number(response.metadata.strategyParameters.targetPct))}% · no stop loss`}.</p>
       <p><strong>Costs:</strong> buy {number(response.metadata.costModel.buyCostBps)} bps, sell {number(response.metadata.costModel.sellCostBps)} bps, slippage {number(response.metadata.costModel.slippageBpsPerSide)} bps per side.</p>
       <p><strong>P&amp;L:</strong> Combined P&amp;L equals net realized P&amp;L plus estimated net unrealized P&amp;L at the final close. Multi-symbol drawdown conservatively sums independent symbol drawdowns.</p>
       {response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}
@@ -663,7 +897,95 @@ export function RecoveryResults({ response }: { response: RecoveryBacktestRespon
     : <SignalRecoveryResults response={response} />;
 }
 
+function DiagnosticsContainer({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  if (!collapsed) return <>{children}</>;
+  return <details className="backtest-panel market-result-diagnostics"><summary><span><strong>Diagnostics</strong><small>Target timing, excursions and raw signal observations</small></span></summary><div className="market-result-diagnostics-body">{children}</div></details>;
+}
+
+function gateLabel(passed: boolean, available = true) {
+  if (!available) return <b className="candidate-gate unavailable">Unavailable</b>;
+  return <b className={`candidate-gate ${passed ? "pass" : "fail"}`}>{passed ? "Pass" : "Fail"}</b>;
+}
+
+function candidateValue(value: number | null | undefined, suffix = "") {
+  return value === null || value === undefined ? "—" : `${number(value)}${suffix}`;
+}
+
+function MarketCandidateDiagnostics({
+  funnel,
+  diagnostics,
+}: {
+  funnel?: MarketCandidateFunnel;
+  diagnostics: MarketCandidateDiagnostic[];
+}) {
+  const skipped = diagnostics.filter((item) => item.finalStatus !== "ACCEPTED");
+  const funnelRows: Array<[keyof MarketCandidateFunnel, string]> = [
+    ["rsiArmed", "RSI armed"],
+    ["rsiRecoveryCandidates", "RSI recovery candidates"],
+    ["timeWindowPassed", "Time-window passed"],
+    ["niftyPassed", "NIFTY passed"],
+    ["sectorPassed", "Sector passed"],
+    ["breadthPassed", "Breadth passed"],
+    ["relativeStrengthPassed", "Relative strength passed"],
+    ["vwapPassed", "VWAP passed"],
+    ["emaPassed", "EMA passed"],
+    ["rvolPassed", "RVOL passed"],
+    ["liquidityPassed", "Liquidity passed"],
+    ["roomPassed", "Room passed"],
+    ["scorePassed", "Score passed"],
+    ["executedTrades", "Executed trades"],
+  ];
+  return <>
+    <section className="backtest-panel market-candidate-funnel" aria-label="Market-Aligned candidate funnel">
+      <div className="panel-title"><div><span className="section-kicker">Candidate lifecycle</span><h2>Entry funnel</h2></div><span className="date-window">Cumulative point-in-time pass counts</span></div>
+      <div className="candidate-funnel-grid">
+        {funnelRows.map(([key, label]) => <div key={key}><span>{label}</span><strong>{(funnel?.[key] ?? 0).toLocaleString("en-IN")}</strong></div>)}
+      </div>
+    </section>
+
+    <section className="backtest-panel market-skipped-candidates" aria-label="Skipped Market-Aligned candidates">
+      <div className="panel-title"><div><span className="section-kicker">Candidate-level audit</span><h2>Skipped Candidates</h2></div><span className="date-window">{skipped.length.toLocaleString("en-IN")} rejected or unavailable</span></div>
+      {skipped.length ? <div className="candidate-table-wrap">
+        <table className="candidate-diagnostics-table">
+          <thead><tr><th>Candidate</th><th>Supporting market</th><th>Stock gates</th><th>Decision</th></tr></thead>
+          <tbody>{skipped.map((item) => <tr key={item.tradeId ?? `${item.symbol}:${item.candidateTimestamp}`}>
+            <td data-label="Candidate">
+              <strong>{item.symbol}</strong><span>{formatIst(item.candidateTimestamp)}</span>
+              <small>Arm {formatIst(item.rsiArmTimestamp)} · RSI {candidateValue(item.rsiAtArm)}</small>
+              <small>Previous RSI {candidateValue(item.previousRsi)} · Signal RSI {candidateValue(item.signalRsi)}</small>
+              <small>Time window {gateLabel(item.timeWindowPassed)}</small>
+            </td>
+            <td data-label="Supporting market">
+              <span>NIFTY data {gateLabel(item.niftyPass, item.niftyDataAvailable)} · score {candidateValue(item.niftyTrendScore)}</span>
+              <span>Sector mapping {item.sectorMappingFound ? "Found" : "Missing"} · {item.sectorName ?? "—"}</span>
+              <span>Sector data {gateLabel(item.sectorPass, item.sectorDataAvailable)} · {candidateValue(item.sectorBullishPct, "%")} · {item.sectorMemberCount}/{item.sectorRequiredMembers} members</span>
+              <span>Breadth data {gateLabel(item.breadthPass, item.breadthDataAvailable)} · {candidateValue(item.breadthPct, "%")} · {item.breadthSymbolCount}/{item.breadthRequiredSymbols} symbols</span>
+              <span>Relative strength {candidateValue(item.relativeStrengthValue, "%")} {gateLabel(item.relativeStrengthPass, item.niftyDataAvailable && item.sectorDataAvailable)}</span>
+            </td>
+            <td data-label="Stock gates">
+              <span>Price {candidateValue(item.price)} · VWAP {candidateValue(item.sessionVwap)} {gateLabel(item.vwapPass)}</span>
+              <span>EMA9 {candidateValue(item.emaFastValue)} &gt; EMA20 {candidateValue(item.emaSlowValue)} {gateLabel(item.ema9AboveEma20Pass)}</span>
+              <span>EMA9 rising {gateLabel(item.ema9RisingPass)} · combined {gateLabel(item.emaPass)}</span>
+              <span>RVOL {candidateValue(item.rvolValue)} {gateLabel(item.rvolPass)}</span>
+              <span>Liquidity ₹{candidateValue(item.liquidityValue)} {gateLabel(item.liquidityPass)}</span>
+              <span>Room {candidateValue(item.roomToTargetValue, "%")} {gateLabel(item.roomToTargetPass)}</span>
+            </td>
+            <td data-label="Decision">
+              <strong className={`candidate-final-status ${item.finalStatus.toLowerCase()}`}>{item.finalStatus}</strong>
+              <span>Alignment {candidateValue(item.alignmentScore)} / {candidateValue(item.requiredScore)} {gateLabel(item.scorePass)}</span>
+              <span>OI {item.oiMode} · {item.oiResult}</span>
+              <div className="candidate-reason-list">{item.rejectionReasonDetails.map((reason) => <span key={reason.code} title={reason.message}><b>{reason.code}</b>{reason.message}</span>)}</div>
+              <small>Sources: stock {formatIst(item.sourceTimestamps.stock)} · NIFTY {formatIst(item.sourceTimestamps.nifty)} · sector {formatIst(item.sourceTimestamps.sector)} · breadth {formatIst(item.sourceTimestamps.breadth)} · OI {formatIst(item.sourceTimestamps.oi)}</small>
+            </td>
+          </tr>)}</tbody>
+        </table>
+      </div> : <div className="empty-history">No candidates were rejected in this run.</div>}
+    </section>
+  </>;
+}
+
 function SignalRecoveryResults({ response }: { response: RecoveryBacktestResponse }) {
+  const marketAligned = response.metadata.strategyMode === "market_aligned_rsi_scalper";
   const [activeView, setActiveView] = useState<"overview" | "signals" | "open" | "features">("overview");
   const [sortKey, setSortKey] = useState<SortKey>("qualityScore");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
@@ -679,6 +1001,10 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
   const detail = response.results.find((result) => result.symbol === detailSymbol) ?? sorted[0] ?? null;
   const openTrades = useMemo(
     () => response.results.flatMap((result) => result.trades.filter((trade) => trade.status === "OPEN")),
+    [response.results],
+  );
+  const candidateDiagnostics = useMemo(
+    () => response.results.flatMap((result) => result.candidateDiagnostics ?? []),
     [response.results],
   );
 
@@ -705,29 +1031,58 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
 
   return (
     <>
-      <nav className="recovery-result-tabs" aria-label="RSI Recovery result views">
+      <nav className="recovery-result-tabs" aria-label={`${response.metadata.strategyName ?? "RSI Recovery Scalping"} result views`}>
         {([
           ["overview", "Overview"],
           ["signals", "Signals"],
           ["open", "Open Signals"],
-          ["features", "Feature Analysis"],
-        ] as const).map(([key, label]) => {
+          ...(!marketAligned ? [["features", "Feature Analysis"]] : []),
+        ] as Array<["overview" | "signals" | "open" | "features", string]>).map(([key, label]) => {
           const count = key === "signals" ? summary.buySignals : key === "open" ? summary.stillOpen : null;
           return <button key={key} type="button" className={activeView === key ? "active" : ""} onClick={() => setActiveView(key)}>{label}{count === null ? "" : ` (${count.toLocaleString("en-IN")})`}</button>;
         })}
       </nav>
 
       {activeView === "overview" && <>
-      <section className="recovery-top-cards" aria-label="RSI Recovery summary">
+      {marketAligned ? <section className="recovery-top-cards market-primary-results" aria-label="Market-Aligned RSI Scalper primary results">
+        <div><span>Executed trades</span><strong>{summary.buySignals.toLocaleString("en-IN")}</strong></div>
+        <div><span>Winning trades</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
+        <div><span>Losing trades</span><strong title="Not available in the current independent-signal research model">—</strong></div>
+        <div><span>Win rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
+        <div><span>Net P&amp;L</span><strong title="Requires a chronological portfolio backtest">—</strong></div>
+        <div><span>Profit factor</span><strong title="Requires completed winning and losing portfolio trades">—</strong></div>
+        <div><span>Expectancy</span><strong title="Requires completed winning and losing portfolio trades">—</strong></div>
+        <div><span>Maximum drawdown</span><strong title="Requires a chronological portfolio equity curve">—</strong></div>
+        <div><span>Target exits</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
+        <div><span>Stop exits</span><strong title="Not available in the current independent-signal research model">—</strong></div>
+        <div><span>Time exits</span><strong title="Not available in the current independent-signal research model">—</strong></div>
+        <div><span>Skipped signals</span><strong>{((summary.marketAlignmentRejectedSignals ?? 0) + (summary.skippedOiSignals ?? 0)).toLocaleString("en-IN")}</strong></div>
+      </section> : <section className="recovery-top-cards" aria-label={`${response.metadata.strategyName ?? "RSI Recovery Scalping"} summary`}>
         <div><span>BUY Signals</span><strong>{summary.buySignals.toLocaleString("en-IN")}</strong></div>
         <div><span>Targets Hit</span><strong>{summary.targetsHit.toLocaleString("en-IN")}</strong></div>
         <div><span>Hit Rate</span><strong>{percent(summary.targetHitRate)}</strong></div>
         <div><span>Open Signals</span><strong className={summary.stillOpen ? "warning-value" : "positive-value"}>{summary.stillOpen.toLocaleString("en-IN")}</strong></div>
         <div><span>Max Concurrent Signals</span><strong>{summary.maximumConcurrentSignalsUniverse.toLocaleString("en-IN")}</strong></div>
         <div><span>Max Concurrent Same Symbol</span><strong>{summary.maximumConcurrentSignalsSameSymbol.toLocaleString("en-IN")}</strong></div>
-      </section>
-      <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open.</span></div>
+        {response.metadata.oiFilter?.mode !== "OFF" && <div><span>OI filter / skipped</span><strong>{response.metadata.oiFilter?.mode} · {summary.skippedOiSignals ?? 0}</strong></div>}
+      </section>}
+      <div className="research-semantics"><Info size={14} /><span><strong>Signal backtest, not a portfolio backtest.</strong> {marketAligned ? "RSI candidates are evaluated only against completed point-in-time NIFTY, sector, breadth, stock and optional OI context." : "Every fresh RSI arm/recovery cycle is an independent observation, even while earlier observations for the same symbol remain open."}</span></div>
 
+      {marketAligned && <MarketCandidateDiagnostics funnel={summary.candidateFunnel} diagnostics={candidateDiagnostics} />}
+
+      <DiagnosticsContainer collapsed={marketAligned}>
+      {marketAligned && response.metadata.performance && <section className="backtest-panel recovery-section compact-section">
+        <div className="panel-title"><div><span className="section-kicker">Execution profile</span><h2>Performance diagnostics</h2></div><span className="cost-note">{response.metadata.cachedResult ? "Cached result" : response.metadata.performance.optimized ? "Optimized pipeline" : "Legacy pipeline"}</span></div>
+        <div className="metric-grid recovery-risk-grid">
+          <div><span>Candles</span><strong>{number(response.metadata.performance.totalCandles ?? summary.candleRowsProcessed, 0)}</strong></div>
+          <div><span>Database queries</span><strong>{number(response.metadata.performance.databaseQueries ?? 0, 0)}</strong></div>
+          <div><span>Bytes read</span><strong>{number(response.metadata.performance.bytesRead ?? 0, 0)}</strong></div>
+          <div><span>Peak memory</span><strong>{number((response.metadata.performance.peakMemoryBytes ?? 0) / 1_048_576, 1)} MB</strong></div>
+          <div><span>Feature cache hit / miss</span><strong>{number(response.metadata.performance.featureCacheHits ?? 0, 0)} / {number(response.metadata.performance.featureCacheMisses ?? 0, 0)}</strong></div>
+          <div><span>Fingerprint</span><strong title={response.metadata.fingerprint ?? undefined}>{response.metadata.fingerprint?.slice(0, 12) ?? "—"}</strong></div>
+        </div>
+        <div className="session-breakdown">{Object.entries(response.metadata.performance.stagesSeconds ?? {}).map(([stage, seconds]) => <span key={stage}><b>{stage.replaceAll(/([A-Z])/g, " $1")}</b>{seconds == null ? "n/a" : `${number(seconds, 3)}s`}</span>)}</div>
+      </section>}
       <section className="backtest-panel recovery-section">
         <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Target achievement</span><h2>Target speed</h2></div><span className="date-window">Percentages use completed targets only</span></div>
         <div className="speed-bucket-grid">{speedOrder.map(([key, label]) => {
@@ -772,6 +1127,7 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
           </div>
         </section>
       </div>
+      </DiagnosticsContainer>
 
       </>}
 
@@ -794,16 +1150,16 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
       </section>
 
       {detail && <section className="backtest-panel recovery-detail-panel">
-        <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Selected symbol</span><h2>{detail.symbol} recovery trades</h2></div><span className="date-window">{formatIst(detail.firstCandle)} – {formatIst(detail.lastCandle)}</span></div>
+        <div className="panel-title recovery-panel-title"><div><span className="section-kicker">Selected symbol</span><h2>{detail.symbol} {marketAligned ? "market-aligned trades" : "recovery trades"}</h2></div><span className="date-window">{formatIst(detail.firstCandle)} – {formatIst(detail.lastCandle)}</span></div>
         <div className="quality-components">
           <span>Hit-rate score <b>{number(detail.hitRateScore, 1)}</b></span><span>Speed score <b>{number(detail.speedScore, 1)}</b></span><span>MAE score <b>{number(detail.maeScore, 1)}</b></span><span>Open penalty <b>{number(detail.openPenalty, 1)}</b></span><span>Quality <b>{number(detail.qualityScore, 1)}</b></span>
         </div>
         {detail.trades.length ? <div className="recovery-trade-list">
           <div className="recovery-trade-grid recovery-trade-head"><span>Entry</span><span>Entry price</span><span>Target</span><span>Target hit</span><span>Time / bars</span><span>Confirmations</span><span>EMA</span><span>VWAP</span><span>Volume</span><span>MAE</span><span>MFE</span><span>Status</span></div>
-          {detail.trades.map((trade) => <div className="recovery-trade-grid recovery-trade-row" key={trade.tradeId} title={`Trade ${trade.tradeId}. RSI recovery mandatory; ${trade.confirmationScore}/${trade.requiredConfirmations} enabled confirmations passed. Independent signal observation; no stop loss or end-of-day exit. Target monitoring started after its own entry candle.`}>
+          {detail.trades.map((trade) => <div className="recovery-trade-grid recovery-trade-row" key={trade.tradeId} title={`Trade ${trade.tradeId}. RSI recovery mandatory; ${trade.confirmationScore}/${trade.requiredConfirmations} enabled confirmations passed. OI regime ${trade.oiRegimeAtSignal ?? "OFF"}; score ${trade.oiScoreAtSignal ?? "unavailable"}; confidence ${trade.oiConfidence ?? "unavailable"}; decision ${trade.oiDecision ?? "OI_OFF"}; source ${trade.oiSourceTimestamp ?? "unavailable"}. Independent signal observation; no stop loss or end-of-day exit. Target monitoring started after its own entry candle.`}>
             <span data-label="Entry"><b>#{trade.sequenceNumber}</b> {formatIst(trade.entryTimestamp)}<small>Signal {formatIst(trade.signalTimestamp)}</small></span><span data-label="Entry price">{money(trade.entryPrice)}</span><span data-label="Target">{money(trade.targetPrice)}</span><span data-label="Target hit">{formatIst(trade.targetHitTimestamp)}</span><span data-label="Time / bars">{duration(trade.durationMinutes)}<small>{trade.barsHeld} bars · {trade.tradingSessionsHeld} sessions</small></span><span data-label="Confirmations"><b>{trade.confirmationScore}/{trade.requiredConfirmations}</b><small>RSI {number(trade.rsiAtEntry)}</small></span><span data-label="EMA" className={trade.emaConfirmation ? "positive-value" : "neutral-value"}>{trade.emaEnabled ? (trade.emaConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="VWAP" className={trade.vwapConfirmation ? "positive-value" : "neutral-value"}>{trade.vwapEnabled ? (trade.vwapConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="Volume" className={trade.volumeConfirmation ? "positive-value" : "neutral-value"}>{trade.volumeEnabled ? (trade.volumeConfirmation ? "Pass" : "Fail") : "Off"}</span><span data-label="MAE" className="negative-value">{percent(trade.maxAdversePct)}</span><span data-label="MFE" className="positive-value">{percent(trade.maxFavorablePct)}</span><span data-label="Status"><b className={`trade-status ${trade.status === "OPEN" ? "open" : "hit"}`}>{trade.status === "OPEN" ? "OPEN" : "TARGET HIT"}</b>{trade.status === "OPEN" && <small>{percent(trade.currentPnlPct)} · {duration(trade.durationMinutes)}</small>}</span>
           </div>)}
-        </div> : <div className="empty-history">No valid armed-RSI recovery BUY occurred for this symbol in the selected window.</div>}
+        </div> : <div className="empty-history">{marketAligned ? "No RSI candidate passed every point-in-time market-alignment gate for this symbol." : "No valid armed-RSI recovery BUY occurred for this symbol in the selected window."}</div>}
       </section>}
       </>}
 
@@ -830,7 +1186,8 @@ function SignalRecoveryResults({ response }: { response: RecoveryBacktestRespons
 
       <section className="backtest-notes recovery-run-metadata">
         <h3>Run metadata and cautions</h3>
-        <p><strong>Run:</strong> {response.metadata.runId} · {response.metadata.strategyVersion} · {response.metadata.executionModel} · {response.metadata.timeframe} · {response.metadata.durationYears}Y</p>
+        <p><strong>Run:</strong> {response.metadata.runId} · {response.metadata.strategyName ?? "RSI Recovery Scalping"} · {response.metadata.strategyVersion} · {response.metadata.executionModel} · {response.metadata.timeframe} · {response.metadata.durationYears}Y</p>
+        {response.metadata.cachedResult && <p><strong>Cached result:</strong> original run {formatIst(response.metadata.originalRunTimestamp ?? null)} · fingerprint {response.metadata.fingerprint}</p>}
         <p><strong>Processed:</strong> {response.metadata.symbolsProcessed}/{response.metadata.symbolsRequested} symbols, {response.metadata.symbolsFailed} failed, {summary.candleRowsProcessed.toLocaleString("en-IN")} candle rows, {number(response.metadata.runtimeSeconds)} seconds, {response.metadata.workerCount} workers.</p>
         <p><strong>Costs:</strong> buy {number(response.metadata.costModel.buyCostBps)} bps, sell {number(response.metadata.costModel.sellCostBps)} bps, slippage {number(response.metadata.costModel.slippageBpsPerSide)} bps per side. Estimated round trip {number(response.metadata.costModel.estimatedRoundTripCostPct)}%.</p>
         {response.errors.map((item) => <p key={item.symbol}><strong>{item.symbol}:</strong> {item.message}</p>)}

@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -45,6 +45,7 @@ IST = ZoneInfo("Asia/Kolkata")
 OUTPUT_COLUMNS = [
     "rank",
     "symbol",
+    "company_name",
     "trading_date",
     "previous_date",
     "previous_close",
@@ -218,6 +219,7 @@ class DhanClient:
         self._sleep = sleep
         self._clock = clock
         self._last_data_request = 0.0
+        self._last_option_chain_request = float("-inf")
         self._access_token: str | None = None
 
     def _request_json(
@@ -283,6 +285,12 @@ class DhanClient:
         if elapsed < interval:
             self._sleep(interval - elapsed)
         self._last_data_request = self._clock()
+
+    def _wait_for_option_chain_slot(self) -> None:
+        elapsed = self._clock() - self._last_option_chain_request
+        if elapsed < 3.0:
+            self._sleep(3.0 - elapsed)
+        self._last_option_chain_request = self._clock()
 
     def _load_cached_token(self) -> str | None:
         cache_file = self.config.token_cache_file
@@ -410,6 +418,120 @@ class DhanClient:
             if isinstance(quote, dict)
         }
 
+    def market_quote_segments(
+        self,
+        instruments: dict[str, list[str | int]],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """Fetch quote/OI snapshots for multiple exchange segments in one request."""
+        body: dict[str, list[int]] = {}
+        total = 0
+        for segment, security_ids in instruments.items():
+            normalized = list(dict.fromkeys(str(value).strip() for value in security_ids))
+            if any(not value.isdigit() for value in normalized):
+                raise DhanAPIError("Dhan quote security IDs must be numeric")
+            if normalized:
+                body[str(segment)] = [int(value) for value in normalized]
+                total += len(normalized)
+        if total == 0:
+            return {}
+        if total > 1_000:
+            raise DhanAPIError("Dhan market quote supports at most 1,000 instruments per request")
+        payload = self._request_with_access_token(
+            "POST",
+            f"{self.config.base_url}/marketfeed/quote",
+            headers={"client-id": self.config.client_id},
+            body=body,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise DhanAPIError("Dhan market quote response omitted quote data")
+        return {
+            str(segment): {
+                str(security_id): dict(quote)
+                for security_id, quote in segment_quotes.items()
+                if isinstance(quote, dict)
+            }
+            for segment, segment_quotes in data.items()
+            if isinstance(segment_quotes, dict)
+        }
+
+    def option_expiry_list(
+        self,
+        underlying_security_id: str | int,
+        underlying_segment: str = "IDX_I",
+    ) -> list[str]:
+        self._wait_for_option_chain_slot()
+        payload = self._request_with_access_token(
+            "POST",
+            f"{self.config.base_url}/optionchain/expirylist",
+            headers={"client-id": self.config.client_id},
+            body={
+                "UnderlyingScrip": int(underlying_security_id),
+                "UnderlyingSeg": underlying_segment,
+            },
+            throttle_data_api=False,
+        )
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            raise DhanAPIError("Dhan option-expiry response omitted the expiry list")
+        return [str(value) for value in data]
+
+    def option_chain(
+        self,
+        underlying_security_id: str | int,
+        expiry: str,
+        underlying_segment: str = "IDX_I",
+    ) -> dict[str, Any]:
+        self._wait_for_option_chain_slot()
+        payload = self._request_with_access_token(
+            "POST",
+            f"{self.config.base_url}/optionchain",
+            headers={"client-id": self.config.client_id},
+            body={
+                "UnderlyingScrip": int(underlying_security_id),
+                "UnderlyingSeg": underlying_segment,
+                "Expiry": str(expiry),
+            },
+            throttle_data_api=False,
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+            raise DhanAPIError("Dhan option-chain response omitted option data")
+        return payload
+
+    def rolling_option_history(
+        self,
+        underlying_security_id: str | int,
+        *,
+        interval: str,
+        expiry_flag: Literal["WEEK", "MONTH"],
+        expiry_code: int,
+        strike: str,
+        option_type: Literal["CALL", "PUT"],
+        from_date: date,
+        to_date: date,
+    ) -> dict[str, Any]:
+        payload = self._request_with_access_token(
+            "POST",
+            f"{self.config.base_url}/charts/rollingoption",
+            body={
+                "exchangeSegment": "NSE_FNO",
+                "interval": str(interval),
+                "securityId": int(underlying_security_id),
+                "instrument": "OPTIDX",
+                "expiryFlag": expiry_flag,
+                "expiryCode": int(expiry_code),
+                "strike": strike,
+                "drvOptionType": option_type,
+                "requiredData": ["open", "high", "low", "close", "iv", "volume", "strike", "oi", "spot"],
+                "fromDate": from_date.isoformat(),
+                "toDate": to_date.isoformat(),
+            },
+            throttle_data_api=True,
+        )
+        if not isinstance(payload, dict):
+            raise DhanAPIError("Dhan expired-options response was not a JSON object")
+        return payload
+
     def historical_daily(
         self,
         security_id: str,
@@ -446,6 +568,7 @@ class DhanClient:
         *,
         exchange_segment: str | None = None,
         instrument: str | None = None,
+        include_oi: bool = False,
     ) -> dict[str, Any]:
         payload = self._request_with_access_token(
             "POST",
@@ -455,7 +578,7 @@ class DhanClient:
                 "exchangeSegment": exchange_segment or self.config.exchange_segment,
                 "instrument": instrument or self.config.instrument,
                 "interval": interval,
-                "oi": False,
+                "oi": bool(include_oi),
                 "fromDate": from_time.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
                 "toDate": to_time.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
             },
@@ -562,6 +685,23 @@ def parse_instrument_master(csv_bytes: bytes) -> pd.DataFrame:
     return eligible.drop_duplicates("symbol", keep="first")
 
 
+def instrument_company_name(instrument: pd.Series | dict[str, Any]) -> str:
+    """Return the best human-readable company name supplied by Dhan."""
+    for column in ("SM_SYMBOL_NAME", "SEM_CUSTOM_SYMBOL"):
+        value = " ".join(str(instrument.get(column, "")).split())
+        if value:
+            return value.title() if value.isupper() else value
+    return ""
+
+
+def build_company_name_map(instruments: pd.DataFrame) -> dict[str, str]:
+    return {
+        str(instrument["symbol"]): company_name
+        for _, instrument in instruments.iterrows()
+        if (company_name := instrument_company_name(instrument))
+    }
+
+
 def download_instrument_master(url: str) -> pd.DataFrame:
     request = Request(url, headers={"User-Agent": "vento-nse-data/1.0"})
     try:
@@ -614,6 +754,8 @@ def historical_payload_to_frame(payload: dict[str, Any]) -> pd.DataFrame:
         ("low", "Low"),
         ("close", "Close"),
         ("volume", "Volume"),
+        ("open_interest", "OpenInterest"),
+        ("oi", "OpenInterest"),
     ):
         values = payload.get(source)
         if isinstance(values, list):
@@ -831,11 +973,16 @@ def build_session_consistent_output(
     symbols: list[str],
     results: dict[str, dict[str, Any]],
     target_session: date,
+    company_names: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for rank, symbol in enumerate(symbols, start=1):
         result = results.get(symbol)
-        row: dict[str, Any] = {"rank": rank, "symbol": symbol}
+        row: dict[str, Any] = {
+            "rank": rank,
+            "symbol": symbol,
+            "company_name": (company_names or {}).get(symbol, symbol),
+        }
         if result and result.get("trading_date") == target_session:
             row.update(result)
             row["rank"] = rank
@@ -881,9 +1028,14 @@ def _fetch_result(
     return process_symbol(symbol, frame)
 
 
-def _run_screener_unlocked(config: DhanConfig) -> pd.DataFrame:
+def _run_screener_unlocked(
+    config: DhanConfig,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> pd.DataFrame:
     symbols = load_symbols(config.symbols_file)
     print(f"Loaded {len(symbols)} symbols from {config.symbols_file}", flush=True)
+    if progress_callback is not None:
+        progress_callback(0, len(symbols))
 
     client = DhanClient(config)
     profile = client.profile()
@@ -894,6 +1046,7 @@ def _run_screener_unlocked(config: DhanConfig) -> pd.DataFrame:
 
     instruments = download_instrument_master(config.instrument_master_url)
     security_map, unmapped = build_security_map(symbols, instruments)
+    company_names = build_company_name_map(instruments)
     if unmapped:
         print(
             f"Instrument mapping missing for {len(unmapped)} symbols: "
@@ -939,6 +1092,8 @@ def _run_screener_unlocked(config: DhanConfig) -> pd.DataFrame:
 
         if position % 25 == 0 or position == len(symbols):
             print(f"Downloaded {position}/{len(symbols)} symbols", flush=True)
+        if progress_callback is not None:
+            progress_callback(position, len(symbols))
 
     target_session = choose_target_session(results)
     if target_session is None:
@@ -986,7 +1141,12 @@ def _run_screener_unlocked(config: DhanConfig) -> pd.DataFrame:
             f"({coverage:.1%}, minimum {config.minimum_coverage:.1%})"
         )
 
-    output = build_session_consistent_output(symbols, results, target_session)
+    output = build_session_consistent_output(
+        symbols,
+        results,
+        target_session,
+        company_names,
+    )
     write_csv_atomically(output, config.output_file)
     print(f"Published session: {target_session} (IST)", flush=True)
     print(f"Session-consistent symbols: {valid_count}/{len(symbols)}", flush=True)
@@ -1012,10 +1172,13 @@ def market_data_refresh_lock(output_file: Path) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def run_screener(config: DhanConfig | None = None) -> pd.DataFrame:
+def run_screener(
+    config: DhanConfig | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> pd.DataFrame:
     resolved = config or DhanConfig.from_environment()
     with market_data_refresh_lock(resolved.output_file):
-        return _run_screener_unlocked(resolved)
+        return _run_screener_unlocked(resolved, progress_callback)
 
 
 if __name__ == "__main__":

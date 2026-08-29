@@ -6,6 +6,11 @@
 *.key
 *.p12
 *.pfx
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+credentials.json
 
 # Python
 .venv/
@@ -28,6 +33,7 @@ data/
 reports/
 outputs/
 work/
+.runtime/
 *.tar.gz
 *.zip
 Lastdata.csv

@@ -15,6 +15,9 @@ fi
 install -d -o 10001 -g 10001 -m 0700 /var/lib/vento-nse/backtest
 install -d -o 10001 -g 10001 -m 0700 /var/lib/vento-nse/dhan
 install -d -m 0755 /var/lib/vento-nse/data
+if [[ ! -s /var/lib/vento-nse/data/symbols.csv ]]; then
+  install -o 10001 -g 10001 -m 0644 "${release}/symbols.csv" /var/lib/vento-nse/data/symbols.csv
+fi
 install -m 0644 \
   "${release}/web/deploy/vento-nse-backtest.service" \
   /etc/systemd/system/vento-nse-backtest.service

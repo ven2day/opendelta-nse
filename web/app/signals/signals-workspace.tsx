@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatGlobalPriceRange, isPriceInGlobalRange, parseGlobalSettings, type GlobalPriceRange } from "../global-settings-shared";
 
 type Tab = "live" | "watch" | "paper" | "history";
 type SortKey = "signalTimestamp" | "rank" | "qualityScore" | "goodRate" | "medianTargetMinutes" | "atrPct" | "volumeRatio" | "distanceToResistancePct";
@@ -41,6 +42,29 @@ type EngineStatus = {
   marketSession: string;
   paperOnly: boolean;
   liveOrdersEnabled: boolean;
+  oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
+  oiRegime: OiRegime | null;
+  oiHistory: OiHistoryStatus | null;
+};
+
+type OiHistoryStatus = {
+  state: string;
+  request?: { fromDate?: string; toDate?: string };
+  optionRowsImported?: number;
+  enforcementReady?: boolean;
+  reason?: string;
+};
+
+type OiRegime = {
+  regime: string;
+  combinedScore: number | null;
+  confidence: string;
+  sourceTimestamp: string | null;
+  dataAgeSeconds: number | null;
+  reason: string;
+  options?: { score?: number | null };
+  futures?: { score?: number | null };
+  spot?: { score?: number | null };
 };
 
 type Settings = {
@@ -55,6 +79,27 @@ type Settings = {
   recentMinutes: number;
   supportLookbackShort: number;
   supportLookbackLong: number;
+  oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
+  oiLookbackBars: number;
+  oiStrikesEachSide: number;
+  oiMinimumPriceChangePct: number;
+  oiMinimumChangePct: number;
+  oiMaximumSpreadPct: number;
+  oiStaleDataSeconds: number;
+  oiMinimumValidContractFraction: number;
+  oiMinimumFuturesVolume: number;
+  oiVolatilityPriceRisePct: number;
+  oiVolatilityIvRise: number;
+  oiMinimumCoverage: number;
+  oiOptionsWeight: number;
+  oiFuturesWeight: number;
+  oiSpotWeight: number;
+  oiStronglyBearishThreshold: number;
+  oiBearishThreshold: number;
+  oiBullishThreshold: number;
+  oiStronglyBullishThreshold: number;
+  oiElevatedQualityThreshold: number;
+  oiFailPolicy: "SKIP" | "ALLOW";
 };
 
 type Signal = {
@@ -134,6 +179,14 @@ type Signal = {
     mfePct: number | null;
     lastClose: number;
   };
+  oiFilterMode: "OFF" | "ADVISORY" | "ENFORCED";
+  oiRegimeAtSignal: string | null;
+  oiScoreAtSignal: number | null;
+  oiConfidence: string | null;
+  oiDecision: string;
+  oiDecisionReason: string;
+  oiSourceTimestamp: string | null;
+  executionEligible: boolean;
 };
 
 type PaperTrade = {
@@ -174,6 +227,7 @@ const EMPTY_STATUS: EngineStatus = {
   connectionStatus: "DISCONNECTED", engineStatus: "STARTING", message: "Loading live-signal runtime", universeVersion: null,
   universeFrozen: false, monitoredSymbols: 0, subscribedSymbols: 0, timeframe: "5m", strategyVersion: "rsi-recovery-1.1.0",
   lastCompletedCandle: null, lastMarketDataTimestamp: null, dataAgeSeconds: null, marketSession: "CLOSED", paperOnly: true, liveOrdersEnabled: false,
+  oiFilterMode: "OFF", oiRegime: null, oiHistory: null,
 };
 
 function money(value: number | null | undefined, digits = 2) {
@@ -259,6 +313,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
         <Metric label="15m momentum" value={percent(signal.momentum15m, 3)} />
         <Metric label="30m momentum" value={percent(signal.momentum30m, 3)} />
       </div><div className="confirmation-pills"><span className={signal.emaConfirmation ? "pass" : "fail"}>EMA</span><span className={signal.vwapConfirmation ? "pass" : "fail"}>VWAP</span><span className={signal.volumeConfirmation ? "pass" : "fail"}>VOLUME</span></div></section>
+      <section><h3>Strategy isolation</h3><div className="signal-detail-grid"><Metric label="Strategy" value="RSI Recovery Scalping" /><Metric label="OI execution gate" value="NOT APPLIED" /></div><small>Market-Aligned VWAP Pullback Scalper is a separate backtest strategy. This signal preserves RSI Recovery behavior.</small></section>
       <section><h3>Support and target room</h3><div className="signal-detail-grid">
         <Metric label="Recent support" value={money(levels.support)} />
         <Metric label="Distance to support" value={percent(levels.distanceToSupportPct)} />
@@ -270,13 +325,13 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
     </div>
     <div className="signal-card-foot">
       <div><span>Entry range method: {signal.buyRange.method.replaceAll("_", " ")} heuristic</span><small>{signal.buyRange.formula}</small></div>
-      {!readOnly && signal.manualAction !== "PAPER_BUY" && <div className="signal-actions"><button className="paper-buy-button" onClick={() => onPaper(signal)}><IndianRupee size={14} />Paper buy</button>{signal.manualAction !== "WATCH" && <button onClick={() => onWatch(signal)}><Eye size={14} />Watch</button>}<button onClick={() => onIgnore(signal)}><X size={14} />Ignore</button></div>}
+      {!readOnly && signal.manualAction !== "PAPER_BUY" && <div className="signal-actions"><button className="paper-buy-button" title="Record a paper BUY" onClick={() => onPaper(signal)}><IndianRupee size={14} />Paper buy</button>{signal.manualAction !== "WATCH" && <button onClick={() => onWatch(signal)}><Eye size={14} />Watch</button>}<button onClick={() => onIgnore(signal)}><X size={14} />Ignore</button></div>}
       {signal.manualAction !== "NO_ACTION" && <span className={`manual-action ${signal.manualAction.toLowerCase()}`}>{signal.manualAction.replace("_", " ")}</span>}
     </div>
   </article>;
 }
 
-export function SignalsWorkspace({ userName, signOutHref }: { userName: string; signOutHref: string }) {
+export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRange }: { userName: string; signOutHref: string; initialGlobalPriceRange: GlobalPriceRange }) {
   const [tab, setTab] = useState<Tab>("live");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>([]);
@@ -300,20 +355,23 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
   const [confirmationFilter, setConfirmationFilter] = useState("ALL");
   const [rankFilter, setRankFilter] = useState("ALL");
   const [sortKey, setSortKey] = useState<SortKey>("signalTimestamp");
+  const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const seenSignals = useRef<Set<string>>(new Set());
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const [signalResponse, settingsResponse, paperResponse] = await Promise.all([
+      const [signalResponse, settingsResponse, paperResponse, globalSettingsResponse] = await Promise.all([
         fetch("/api/live-signals?action=signals", { cache: "no-store" }),
         fetch("/api/live-signals?action=settings", { cache: "no-store" }),
         fetch("/api/live-signals?action=paper", { cache: "no-store" }),
+        fetch("/api/global-settings", { cache: "no-store" }),
       ]);
-      const [signalBody, settingsBody, paperBody] = await Promise.all([payload(signalResponse), payload(settingsResponse), payload(paperResponse)]);
+      const [signalBody, settingsBody, paperBody, globalSettingsBody] = await Promise.all([payload(signalResponse), payload(settingsResponse), payload(paperResponse), payload(globalSettingsResponse)]);
       if (!signalResponse.ok) throw new Error(signalBody.detail ?? "Unable to load live signals");
       if (!settingsResponse.ok) throw new Error(settingsBody.detail ?? "Unable to load signal settings");
       if (!paperResponse.ok) throw new Error(paperBody.detail ?? "Unable to load paper positions");
+      if (globalSettingsResponse.ok) setGlobalPriceRange(parseGlobalSettings(globalSettingsBody).priceRange);
       const incoming: Signal[] = signalBody.signals ?? [];
       if (seenSignals.current.size) {
         const fresh = incoming.filter((item) => !seenSignals.current.has(item.signalId));
@@ -374,7 +432,8 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
 
   const visibleSignals = useMemo(() => {
     const base = tab === "watch" ? signals.filter((item) => item.manualAction === "WATCH") : tab === "live" ? signals.filter((item) => item.manualAction === "NO_ACTION") : signals;
-    return base.filter((item) => rangeFilter === "ALL" || item.buyRangeStatus === rangeFilter)
+    return base.filter((item) => isPriceInGlobalRange(item.currentPrice ?? item.signalClose, globalPriceRange))
+      .filter((item) => rangeFilter === "ALL" || item.buyRangeStatus === rangeFilter)
       .filter((item) => confirmationFilter === "ALL" || item.confirmationScore === Number(confirmationFilter))
       .filter((item) => {
         const rank = item.historicalContext.rank ?? 9999;
@@ -390,7 +449,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
         if (sortKey === "rank" || sortKey === "medianTargetMinutes") return Number(a ?? Infinity) - Number(b ?? Infinity);
         return Number(b ?? -Infinity) - Number(a ?? -Infinity);
       });
-  }, [confirmationFilter, rangeFilter, rankFilter, signals, sortKey, tab]);
+  }, [confirmationFilter, globalPriceRange, rangeFilter, rankFilter, signals, sortKey, tab]);
 
   const initials = userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const connected = status.connectionStatus === "CONNECTED";
@@ -398,7 +457,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
   return <div className="site-shell backtest-shell signals-shell">
     <header className="global-header"><div className="header-inner">
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
-      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a></nav>
+      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
       <div className="header-actions"><div className="user-chip"><div className="avatar">{initials}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
     </div></header>
 
@@ -411,6 +470,11 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
         <div className="health-item"><Clock3 size={16} /><div><span>Last completed candle</span><strong>{formatIst(status.lastCompletedCandle)}</strong></div></div>
         <div className="health-item"><Radio size={16} /><div><span>Monitored</span><strong>{status.monitoredSymbols} symbols · {status.timeframe}</strong></div></div>
         <button className="icon-button" onClick={() => void load()} aria-label="Refresh signals"><RefreshCw size={16} /></button><button className="icon-button" onClick={() => { setDraftSettings(settings); setSettingsOpen(true); }} aria-label="Signals settings"><Settings2 size={16} /></button>
+      </section>
+
+      <section className="backtest-panel oi-regime-card" aria-label="RSI Recovery strategy isolation">
+        <div className="panel-title"><div><span className="section-kicker">RSI Recovery Scalping</span><h2>Existing live behavior preserved</h2></div><span className="date-window">OI gate: OFF</span></div>
+        <small>Optional market context belongs to the separate Market-Aligned VWAP Pullback Scalper backtest. It does not block, create, or resize RSI Recovery Signals trades.</small>
       </section>
 
       {notice && <div className="signal-notice"><BellRing size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={14} /></button></div>}
@@ -426,6 +490,7 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
       </section>
 
       <nav className="signals-tabs" aria-label="Signals views"><button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}>Live signals</button><button className={tab === "watch" ? "active" : ""} onClick={() => setTab("watch")}>Watch</button><button className={tab === "paper" ? "active" : ""} onClick={() => setTab("paper")}>Paper positions</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button><a href="/signals?view=universe">Universe</a></nav>
+      {tab !== "paper" && <a className="global-range-badge signals-global-range" href="/admin">Global price: {formatGlobalPriceRange(globalPriceRange)}</a>}
 
       {tab !== "paper" && <section className="signals-filterbar"><select aria-label="Buy range status" value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}><option value="ALL">All range states</option><option value="IN_RANGE">In range</option><option value="ABOVE_RANGE">Above range</option><option value="BELOW_RANGE">Below range</option></select><select aria-label="Confirmation score" value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)}><option value="ALL">All confirmations</option><option value="2">2/3 confirmations</option><option value="3">3/3 confirmations</option></select><select aria-label="Historical rank" value={rankFilter} onChange={(event) => setRankFilter(event.target.value)}><option value="ALL">All historical ranks</option><option value="1-50">Rank 1–50</option><option value="51-100">Rank 51–100</option><option value="101-200">Rank 101–200</option><option value="201-300">Rank 201–300</option></select><select aria-label="Sort signals" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}><option value="signalTimestamp">Newest first</option><option value="rank">Historical rank</option><option value="qualityScore">Quality</option><option value="goodRate">GOOD rate</option><option value="medianTargetMinutes">Median target time</option><option value="atrPct">ATR</option><option value="volumeRatio">Volume ratio</option><option value="distanceToResistancePct">Distance to resistance</option></select><span>{visibleSignals.length} observations</span></section>}
 
@@ -437,6 +502,28 @@ export function SignalsWorkspace({ userName, signOutHref }: { userName: string; 
       <div className="signal-settings-grid"><label><span>Entry range method</span><select value={draftSettings.entryRangeMethod} onChange={(event) => setDraftSettings({ ...draftSettings, entryRangeMethod: event.target.value as Settings["entryRangeMethod"] })}><option value="FIXED_PERCENT">Fixed percent</option><option value="ATR_BASED">ATR based</option></select></label>
         {draftSettings.entryRangeMethod === "FIXED_PERCENT" ? <><label><span>Lower tolerance %</span><input type="number" min="0" step="0.01" value={draftSettings.fixedLowerPct} onChange={(event) => setDraftSettings({ ...draftSettings, fixedLowerPct: Number(event.target.value) })} /></label><label><span>Upper chase tolerance %</span><input type="number" min="0" step="0.01" value={draftSettings.fixedUpperPct} onChange={(event) => setDraftSettings({ ...draftSettings, fixedUpperPct: Number(event.target.value) })} /></label></> : <><label><span>Lower ATR multiplier</span><input type="number" min="0" step="0.05" value={draftSettings.atrLowerMultiplier} onChange={(event) => setDraftSettings({ ...draftSettings, atrLowerMultiplier: Number(event.target.value) })} /></label><label><span>Upper ATR multiplier</span><input type="number" min="0" step="0.05" value={draftSettings.atrUpperMultiplier} onChange={(event) => setDraftSettings({ ...draftSettings, atrUpperMultiplier: Number(event.target.value) })} /></label></>}
         <label><span>Default paper allocation</span><input type="number" min="1" step="1000" value={draftSettings.paperAllocation} onChange={(event) => setDraftSettings({ ...draftSettings, paperAllocation: Number(event.target.value) })} /></label><label><span>Stale-data threshold seconds</span><input type="number" min="10" value={draftSettings.staleDataSeconds} onChange={(event) => setDraftSettings({ ...draftSettings, staleDataSeconds: Number(event.target.value) })} /></label></div>
+      {status.strategyVersion === "market-aligned-rsi-scalper-1.0.0" && <details className="advanced-settings"><summary>Advanced OI settings</summary><div className="signal-settings-grid">
+        <label><span>Completed 5m lookback</span><input type="number" min="1" max="100" value={draftSettings.oiLookbackBars} onChange={(event) => setDraftSettings({ ...draftSettings, oiLookbackBars: Number(event.target.value) })} /></label>
+        <label><span>Strikes each side of ATM</span><input type="number" min="0" max="20" value={draftSettings.oiStrikesEachSide} onChange={(event) => setDraftSettings({ ...draftSettings, oiStrikesEachSide: Number(event.target.value) })} /></label>
+        <label><span>Minimum premium change %</span><input type="number" min="0" step="0.01" value={draftSettings.oiMinimumPriceChangePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumPriceChangePct: Number(event.target.value) })} /></label>
+        <label><span>Minimum OI change %</span><input type="number" min="0" step="0.1" value={draftSettings.oiMinimumChangePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumChangePct: Number(event.target.value) })} /></label>
+        <label><span>Maximum spread %</span><input type="number" min="0.01" step="0.5" value={draftSettings.oiMaximumSpreadPct} onChange={(event) => setDraftSettings({ ...draftSettings, oiMaximumSpreadPct: Number(event.target.value) })} /></label>
+        <label><span>OI stale after seconds</span><input type="number" min="1" step="30" value={draftSettings.oiStaleDataSeconds} onChange={(event) => setDraftSettings({ ...draftSettings, oiStaleDataSeconds: Number(event.target.value) })} /></label>
+        <label><span>Minimum valid contracts</span><input type="number" min="0.01" max="1" step="0.05" value={draftSettings.oiMinimumValidContractFraction} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumValidContractFraction: Number(event.target.value) })} /></label>
+        <label><span>Minimum futures volume</span><input type="number" min="0" step="1" value={draftSettings.oiMinimumFuturesVolume} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumFuturesVolume: Number(event.target.value) })} /></label>
+        <label><span>IV expansion premium rise %</span><input type="number" min="0" step="0.05" value={draftSettings.oiVolatilityPriceRisePct} onChange={(event) => setDraftSettings({ ...draftSettings, oiVolatilityPriceRisePct: Number(event.target.value) })} /></label>
+        <label><span>IV expansion IV rise</span><input type="number" min="0" step="0.1" value={draftSettings.oiVolatilityIvRise} onChange={(event) => setDraftSettings({ ...draftSettings, oiVolatilityIvRise: Number(event.target.value) })} /></label>
+        <label><span>Minimum coverage</span><input type="number" min="0.01" max="1" step="0.05" value={draftSettings.oiMinimumCoverage} onChange={(event) => setDraftSettings({ ...draftSettings, oiMinimumCoverage: Number(event.target.value) })} /></label>
+        <label><span>Options weight</span><input type="number" min="0" max="1" step="0.05" value={draftSettings.oiOptionsWeight} onChange={(event) => setDraftSettings({ ...draftSettings, oiOptionsWeight: Number(event.target.value) })} /></label>
+        <label><span>Futures weight</span><input type="number" min="0" max="1" step="0.05" value={draftSettings.oiFuturesWeight} onChange={(event) => setDraftSettings({ ...draftSettings, oiFuturesWeight: Number(event.target.value) })} /></label>
+        <label><span>Spot trend weight</span><input type="number" min="0" max="1" step="0.05" value={draftSettings.oiSpotWeight} onChange={(event) => setDraftSettings({ ...draftSettings, oiSpotWeight: Number(event.target.value) })} /></label>
+        <label><span>Strong bearish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiStronglyBearishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiStronglyBearishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Bearish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiBearishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiBearishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Bullish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiBullishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiBullishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Strong bullish threshold</span><input type="number" min="-100" max="100" value={draftSettings.oiStronglyBullishThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiStronglyBullishThreshold: Number(event.target.value) })} /></label>
+        <label><span>Elevated stock quality</span><input type="number" min="0" max="100" value={draftSettings.oiElevatedQualityThreshold} onChange={(event) => setDraftSettings({ ...draftSettings, oiElevatedQualityThreshold: Number(event.target.value) })} /></label>
+        <label><span>Missing-data policy</span><select value={draftSettings.oiFailPolicy} onChange={(event) => setDraftSettings({ ...draftSettings, oiFailPolicy: event.target.value as Settings["oiFailPolicy"] })}><option value="SKIP">Skip and record</option><option value="ALLOW">Allow (explicit override)</option></select></label>
+      </div></details>}
       <div className="allocation-presets">{[10000, 25000, 50000, 100000].map((value) => <button key={value} className={draftSettings.paperAllocation === value ? "active" : ""} onClick={() => setDraftSettings({ ...draftSettings, paperAllocation: value })}>{money(value, 0)}</button>)}</div><div className="modal-actions"><button onClick={() => setSettingsOpen(false)}>Cancel</button><button className="paper-buy-button" disabled={working} onClick={() => void saveSettings()}>Save paper settings</button></div>
     </section></div>}
 

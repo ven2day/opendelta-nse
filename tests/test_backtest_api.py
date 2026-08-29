@@ -2,20 +2,30 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import pandas as pd
 
 from backtest_api import (
+    BacktestHistorySaveRequest,
     BacktestRequest,
     IST,
     LiveSignalDecisionRequest,
     LiveSignalSettingsRequest,
     LiveUniverseRequest,
     LiveUniverseSaveRequest,
+    MarketSymbolRequest,
+    GlobalPriceSettingsRequest,
+    MAX_SYMBOLS_PER_RUN,
     PaperBuyRequest,
     PaperCloseRequest,
     app,
     _entry_signal,
+    list_market_symbols,
+    application_settings,
+    update_application_settings,
     prepare_candles,
     run_backtest,
     simulate_symbol,
@@ -155,6 +165,29 @@ class SignalTests(unittest.TestCase):
 
 
 class CandlePreparationTests(unittest.TestCase):
+    def test_fresh_second_resolution_candles_accept_microsecond_boundary(self) -> None:
+        index = pd.date_range("2025-01-01", periods=3, freq="1D", tz=IST).as_unit("s")
+        frame = pd.DataFrame(
+            {
+                "Open": [100, 101, 102],
+                "High": [101, 102, 103],
+                "Low": [99, 100, 101],
+                "Close": [100.5, 101.5, 102.5],
+                "Volume": [1_000, 1_100, 1_200],
+            },
+            index=index,
+        )
+
+        prepared = prepare_candles(
+            frame,
+            "1d",
+            datetime(2025, 1, 2, 0, 0, 0, 123456, tzinfo=IST),
+            datetime(2025, 1, 10, 16, 0, tzinfo=IST),
+        )
+
+        self.assertEqual(prepared.index.dtype, pd.DatetimeTZDtype(unit="us", tz=IST))
+        self.assertEqual(prepared.index.tolist(), [pd.Timestamp("2025-01-03", tz=IST)])
+
     def test_two_hour_candles_are_anchored_to_nse_open_in_ist(self) -> None:
         session_start = pd.Timestamp("2025-01-02 09:15", tz=IST)
         index = pd.date_range(session_start, periods=7, freq="60min")
@@ -184,6 +217,38 @@ class RequestTests(unittest.TestCase):
     def test_symbols_are_normalized_and_deduplicated(self) -> None:
         request = BacktestRequest(symbols=[" lupin.ns ", "LUPIN", "INFY"])
         self.assertEqual(request.symbols, ["LUPIN", "INFY"])
+
+    def test_managed_universe_can_grow_past_the_original_bundle(self) -> None:
+        self.assertGreater(MAX_SYMBOLS_PER_RUN, 750)
+        symbols = [f"SYMBOL{index}" for index in range(751)]
+        self.assertEqual(len(BacktestRequest(symbols=symbols).symbols), 751)
+
+    def test_exit_model_contract_preserves_legacy_clients(self) -> None:
+        legacy = BacktestRequest(symbols=["LUPIN"], strategyMode="rsi_recovery")
+        self.assertEqual(legacy.resolved_exit_model(), "LEGACY_FIXED_TARGET")
+
+        old_protected_client = BacktestRequest(
+            symbols=["LUPIN"],
+            strategyMode="rsi_recovery",
+            exitProtectionEnabled=True,
+        )
+        self.assertEqual(old_protected_client.resolved_exit_model(), "LEGACY_PROTECTED_TARGET")
+
+        dynamic = BacktestRequest(
+            symbols=["LUPIN"],
+            strategyMode="rsi_recovery",
+            exitModel="ATR_DYNAMIC_TP_SL",
+        )
+        self.assertEqual(dynamic.resolved_exit_model(), "ATR_DYNAMIC_TP_SL")
+        self.assertTrue(dynamic.exitProtectionEnabled)
+
+    def test_atr_optimizer_api_surface_is_registered(self) -> None:
+        paths = {route.path for route in app.routes}
+        self.assertIn("/backtest/optimize-atr", paths)
+
+    def test_rsi_exit_comparison_api_surface_is_registered(self) -> None:
+        paths = {route.path for route in app.routes}
+        self.assertIn("/backtest/compare-rsi-exits", paths)
 
     def test_live_universe_defaults_and_overrides_are_validated(self) -> None:
         request = LiveUniverseRequest()
@@ -251,8 +316,91 @@ class RequestTests(unittest.TestCase):
                 "/market-data/status",
                 "/market-data/csv",
                 "/market-data/refresh",
+                "/market-data/symbols",
             }.issubset(paths)
         )
+        symbol_methods = {
+            method
+            for route in app.routes
+            if route.path == "/market-data/symbols"
+            for method in (route.methods or set())
+        }
+        self.assertTrue({"GET", "POST"}.issubset(symbol_methods))
+
+    def test_global_settings_api_surface_is_registered(self) -> None:
+        methods = {
+            method
+            for route in app.routes
+            if route.path == "/application-settings"
+            for method in (route.methods or set())
+        }
+        self.assertTrue({"GET", "PUT"}.issubset(methods))
+
+    def test_account_backtest_history_api_surface_is_registered(self) -> None:
+        methods = {
+            (route.path, method)
+            for route in app.routes
+            if route.path.startswith("/backtest-history")
+            for method in (route.methods or set())
+        }
+        self.assertTrue(
+            {
+                ("/backtest-history", "GET"),
+                ("/backtest-history", "POST"),
+                ("/backtest-history/{run_id}", "GET"),
+                ("/backtest-history/{run_id}", "DELETE"),
+            }.issubset(methods)
+        )
+
+    def test_backtest_history_request_preserves_result_metadata(self) -> None:
+        request = BacktestHistorySaveRequest(
+            id="run-1",
+            completedAt="2026-08-28T10:00:00+00:00",
+            strategyMode="rsi_recovery",
+            strategyName="RSI Recovery Scalping",
+            timeframe="5m",
+            durationYears=1,
+            symbolCount=1,
+            response={"metadata": {"runId": "run-1"}, "results": []},
+        )
+        self.assertEqual(request.persisted()["response"]["metadata"]["runId"], "run-1")
+
+    def test_market_symbol_list_reads_the_runtime_registry(self) -> None:
+        with TemporaryDirectory() as directory:
+            symbols_file = Path(directory) / "symbols.csv"
+            symbols_file.write_text("symbol\nALPHA\nBETA\nGAMMA\n", encoding="utf-8")
+            with patch.dict("os.environ", {"SYMBOLS_FILE": str(symbols_file), "APPLICATION_SETTINGS_DIR": directory}):
+                with patch("backtest_api._application_settings_repository", None):
+                    response = list_market_symbols()
+        self.assertEqual(response["symbols"], ["ALPHA", "BETA", "GAMMA"])
+        self.assertEqual(response["symbolCount"], 3)
+        self.assertEqual(response["totalSymbolCount"], 3)
+        self.assertFalse(response["priceFilterApplied"])
+
+    def test_market_symbol_list_applies_saved_global_price_range(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            symbols_file = root / "symbols.csv"
+            market_file = root / "market.csv"
+            symbols_file.write_text("symbol\nLOW\nMIN\nMAX\nHIGH\nMISSING\n", encoding="utf-8")
+            market_file.write_text("symbol,entry_price\nLOW,109\nMIN,110\nMAX,3000\nHIGH,3001\n", encoding="utf-8")
+            environment = {
+                "SYMBOLS_FILE": str(symbols_file),
+                "LIVE_MARKET_DATA_FILE": str(market_file),
+                "APPLICATION_SETTINGS_DIR": str(root / "settings"),
+            }
+            with patch.dict("os.environ", environment):
+                with patch("backtest_api._application_settings_repository", None):
+                    update_application_settings(GlobalPriceSettingsRequest(minimumPrice=110, maximumPrice=3000))
+                    response = list_market_symbols()
+                    current = application_settings()
+        self.assertEqual(response["symbols"], ["MIN", "MAX"])
+        self.assertEqual(response["missingPriceCount"], 1)
+        self.assertTrue(response["priceFilterApplied"])
+        self.assertEqual(current["priceRange"], {"minimumPrice": 110.0, "maximumPrice": 3000.0})
+
+    def test_market_symbol_request_normalizes_nse_suffix(self) -> None:
+        self.assertEqual(MarketSymbolRequest(symbol=" alpha.ns ").symbol, "ALPHA")
 
     def test_unavailable_batch_returns_symbol_errors_instead_of_failing_request(self) -> None:
         class UnavailableStore:

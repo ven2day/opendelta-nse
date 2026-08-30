@@ -18,7 +18,6 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Sun,
-  X,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type ReactNode } from "react";

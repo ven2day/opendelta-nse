@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Native navigation avoids stalled production transitions. */
 
 import {
   Activity,

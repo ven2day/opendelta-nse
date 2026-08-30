@@ -13,8 +13,9 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from datetime import time as datetime_time
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -52,6 +53,13 @@ from live_signals import (
     LiveSignalSettings,
 )
 from market_data_refresh import MarketDataRefreshService
+from opendelta.core import PlatformSettings
+from opendelta.platform import (
+    PlatformRuntime,
+    create_platform_router,
+    install_platform_observability,
+)
+from opendelta.research import ResearchExperimentRequest
 from market_symbol_registry import (
     MarketSymbolRegistry,
     SymbolAlreadyExistsError,
@@ -3392,7 +3400,21 @@ def create_store() -> HistoricalDataStore:
     return HistoricalDataStore(config, cache_directory)
 
 
-app = FastAPI(title="OpenDelta Backtest API", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def application_lifespan(_: FastAPI):
+    start_live_signal_runtime()
+    try:
+        yield
+    finally:
+        stop_live_signal_runtime()
+
+
+app = FastAPI(
+    title="OpenDelta Backtest API",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=application_lifespan,
+)
 _run_lock = asyncio.Lock()
 _backtest_job_service = BacktestJobService()
 _store: HistoricalDataStore | None = None
@@ -3406,6 +3428,7 @@ _backtest_history_repository: BacktestHistoryRepository | None = None
 _application_settings_repository: ApplicationSettingsRepository | None = None
 _stock_scanner_service: StockScannerService | None = None
 _crypto_market_service: CryptoMarketService | None = None
+_platform_runtime: PlatformRuntime | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -3531,6 +3554,79 @@ def get_crypto_market_service() -> CryptoMarketService:
 
 
 app.router.routes.extend(create_crypto_router(get_crypto_market_service).routes)
+
+
+def _platform_crypto_instruments() -> list[dict[str, Any]]:
+    return [item.public() for item in get_crypto_market_service().list_instruments()]
+
+
+def _platform_candles(request: ResearchExperimentRequest) -> pd.DataFrame:
+    if request.market == "NSE":
+        if request.timeframe not in TIMEFRAMES:
+            raise ValueError(
+                f"{request.timeframe} NSE candles are unavailable from the configured provider"
+            )
+        now_ist = datetime.now(IST)
+        analysis_start = now_ist - timedelta(days=366 * request.durationYears)
+        return get_store().candles(
+            request.symbol,
+            request.timeframe,
+            request.durationYears,
+            analysis_start,
+            now_ist,
+            warmup_bars=500,
+        )
+
+    service = get_crypto_market_service()
+    exact_symbol = request.symbol.strip().upper()
+    matches = [
+        instrument
+        for instrument in service.list_instruments()
+        if instrument.provider == request.provider
+        and exact_symbol
+        in {
+            instrument.instrument_id.upper(),
+            instrument.provider_symbol.upper(),
+            instrument.display_symbol.upper(),
+        }
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"{request.provider} does not publish the exact configured instrument {request.symbol}"
+        )
+    end = datetime.now(UTC)
+    start = end - timedelta(days=request.durationDays)
+    candles = service.sync_candles(matches[0], request.timeframe, start, end)
+    return pd.DataFrame(
+        [
+            {
+                "timestamp": candle.close_time,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "volume": candle.base_volume,
+            }
+            for candle in candles
+            if candle.complete
+        ]
+    )
+
+
+def get_platform_runtime() -> PlatformRuntime:
+    global _platform_runtime
+    if _platform_runtime is None:
+        _platform_runtime = PlatformRuntime.build(
+            PlatformSettings.from_environment(),
+            _platform_candles,
+            _platform_crypto_instruments,
+            lambda: get_crypto_market_service().status(),
+        )
+    return _platform_runtime
+
+
+app.router.routes.extend(create_platform_router(get_platform_runtime).routes)
+install_platform_observability(app, get_platform_runtime)
 
 
 def get_recovery_baseline_metadata() -> dict[str, Any]:
@@ -4240,7 +4336,6 @@ async def compare_rsi_exits(request: RsiExitComparisonRequest) -> dict[str, Any]
             raise HTTPException(status_code=502, detail=str(error)) from error
 
 
-@app.on_event("startup")
 def start_live_signal_runtime() -> None:
     if os.environ.get("LIVE_SIGNAL_ENGINE_ENABLED", "false").strip().casefold() in {"1", "true", "yes", "on"}:
         get_live_signal_engine().start()
@@ -4248,7 +4343,6 @@ def start_live_signal_runtime() -> None:
         get_crypto_market_service().start()
 
 
-@app.on_event("shutdown")
 def stop_live_signal_runtime() -> None:
     if _live_signal_engine is not None:
         _live_signal_engine.stop()
@@ -4256,4 +4350,6 @@ def stop_live_signal_runtime() -> None:
         _market_data_refresh_service.shutdown()
     if _crypto_market_service is not None:
         _crypto_market_service.stop()
+    if _platform_runtime is not None:
+        _platform_runtime.shutdown()
     _backtest_job_service.shutdown()

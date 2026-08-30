@@ -67,7 +67,7 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await page.goto(route);
       await expect(page.locator(".platform-topbar")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar")).toHaveCount(1);
-      await expect(page.locator('[aria-label="Toggle navigation"]')).toHaveCount(1);
+      await expect(page.locator(".platform-menu")).toHaveCount(1);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
       if (routesWithEmbeddedHeader.has(route)) {
         await expect(page.locator(".global-header .brand")).not.toBeVisible();
@@ -109,23 +109,26 @@ test("sidebar links perform full document navigation in production", async ({ pa
   await expect(page.locator(".platform-route-context strong")).toHaveText("Backtests");
 });
 
-test("desktop sidebar collapses, expands, and remembers its state", async ({ page }) => {
+test("desktop hamburger fully hides, restores, and remembers the sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
 
-  const collapse = page.getByRole("button", { name: "Collapse navigation" });
-  await collapse.click();
-  await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "true");
-  await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
+  const hideNavigation = page.getByRole("button", { name: "Hide navigation" });
+  await expect(hideNavigation).toBeVisible();
+  await hideNavigation.click();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "false");
+  await expect(page.getByRole("button", { name: "Show navigation" })).toBeVisible();
 
-  await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(80);
-  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeLessThanOrEqual(80);
-  expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-collapsed"))).toBe("true");
+  await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeLessThanOrEqual(1);
+  expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-open"))).toBe("false");
 
   await page.reload();
-  await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "true");
-  await page.getByRole("button", { name: "Expand navigation" }).click();
-  await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "false");
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "false");
+  await page.getByRole("button", { name: "Show navigation" }).click();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "true");
+  await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
+  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeGreaterThanOrEqual(247);
 });
 
 test("overview session values remain inside the table", async ({ page }) => {
@@ -187,9 +190,9 @@ test("data-health provider values wrap inside their columns", async ({ page }) =
 test("mobile navigation, logout, and authentication redirects work", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/markets");
-  const menu = page.getByRole("button", { name: "Toggle navigation" });
+  const menu = page.getByRole("button", { name: "Show navigation" });
   await menu.click();
-  await expect(menu).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("button", { name: "Hide navigation" })).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator(".platform-sidebar")).toBeVisible();
   await page.locator(".platform-signout").click();
   await expect(page).toHaveURL(/\/login$/);

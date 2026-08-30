@@ -12,15 +12,12 @@ import {
   LogOut,
   Menu,
   Moon,
-  PanelLeftClose,
-  PanelLeftOpen,
   Radio,
   ScanSearch,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Sun,
-  X,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -95,13 +92,13 @@ function statusTone(status: string): "good" | "warn" | "bad" | "neutral" {
 export function PlatformChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    if (window.matchMedia("(max-width: 820px)").matches) return false;
+    return window.localStorage.getItem("opendelta-sidebar-open") !== "false";
+  });
   const [clock, setClock] = useState(() => new Date());
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.localStorage.getItem("opendelta-sidebar-collapsed") === "true";
-  });
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "dark";
     const saved = window.localStorage.getItem("opendelta-theme");
@@ -149,12 +146,16 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   const worker = overview?.jobStatus?.status ?? "CHECKING";
   const freshnessLabel = overview?.dataFreshness?.reason === "MARKET_CLOSED_LAST_SESSION_CURRENT" ? "current" : freshness.toLowerCase();
 
-  const toggleSidebar = () => {
-    setSidebarCollapsed((current) => {
+  const toggleNavigation = () => {
+    setOpen((current) => {
       const next = !current;
-      window.localStorage.setItem("opendelta-sidebar-collapsed", String(next));
+      window.localStorage.setItem("opendelta-sidebar-open", String(next));
       return next;
     });
+  };
+
+  const closeNavigationOnMobile = () => {
+    if (window.matchMedia("(max-width: 820px)").matches) setOpen(false);
   };
 
   const toggleTheme = () => {
@@ -164,14 +165,14 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="platform-frame" data-theme={theme} data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"} data-ui-version="unified-v2" suppressHydrationWarning>
+    <div className="platform-frame" data-theme={theme} data-navigation-open={open ? "true" : "false"} data-ui-version="unified-v2" suppressHydrationWarning>
       <a className="platform-skip-link" href="#main-content">Skip to content</a>
       <div className="platform-shell" data-navigation-open={open ? "true" : "false"}>
         <header className="platform-topbar">
-          <button className="platform-menu" type="button" onClick={() => setOpen((current) => !current)} aria-label="Toggle navigation" aria-expanded={open}>
-            {open ? <X size={20} /> : <Menu size={20} />}
+          <button className="platform-menu" type="button" onClick={toggleNavigation} aria-label={open ? "Hide navigation" : "Show navigation"} title={open ? "Hide navigation" : "Show navigation"} aria-expanded={open}>
+            <Menu size={20} />
           </button>
-          <a className="platform-identity" href="/" aria-label="OpenDelta overview" onClick={() => setOpen(false)}>
+          <a className="platform-identity" href="/" aria-label="OpenDelta overview" onClick={closeNavigationOnMobile}>
             <span aria-hidden="true">Δ</span>
             <div><strong>OpenDelta</strong><small>Quant research</small></div>
           </a>
@@ -181,7 +182,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
           <div className="platform-market-switch" role="group" aria-label="Active market">
             {(["NSE", "CRYPTO"] as PlatformMarket[]).map((item) => (
-              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, item)} aria-current={market === item ? "true" : undefined} onClick={() => setOpen(false)}>{item === "CRYPTO" ? "Crypto" : "NSE"}</a>
+              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, item)} aria-current={market === item ? "true" : undefined} onClick={closeNavigationOnMobile}>{item === "CRYPTO" ? "Crypto" : "NSE"}</a>
             ))}
           </div>
           <div className="platform-live-strip">
@@ -196,15 +197,12 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
         </header>
         <aside className="platform-sidebar" aria-label="Platform navigation">
-          <button className="platform-sidebar-toggle" type="button" onClick={toggleSidebar} aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}>
-            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-          </button>
           <nav>
             {navigationGroups.map((group) => (
               <section key={group.label} className="platform-nav-group" aria-label={group.label}>
                 <span>{group.label}</span>
                 {group.items.map(({ href, label, icon: Icon, match }) => (
-                  <a key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} title={sidebarCollapsed ? label : undefined} onClick={() => setOpen(false)}>
+                  <a key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={closeNavigationOnMobile}>
                     <Icon size={17} /><span>{label}</span>
                   </a>
                 ))}

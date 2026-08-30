@@ -114,3 +114,11 @@ test("production scanner smoke validates the signal-first contract", async () =>
   assert.match(smoke, /market_aligned_vwap_pullback_scalper/);
   assert.match(smoke, /strategyStatus != "ACTIVE"/);
 });
+
+test("candidate deployment supports an isolated validated host port", async () => {
+  const runner = await source("deploy/run-container.sh");
+  assert.match(runner, /candidate_port="\$\{2:-3100\}"/);
+  assert.match(runner, /candidate port must be an integer between 1024 and 65535/);
+  assert.match(runner, /--publish "127\.0\.0\.1:\$\{candidate_port\}:3000"/);
+  assert.match(runner, /http:\/\/127\.0\.0\.1:\$\{candidate_port\}\/login/);
+});

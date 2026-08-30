@@ -2,6 +2,12 @@
 set -euo pipefail
 
 release_id="${1:?release id is required}"
+candidate_port="${2:-3100}"
+
+if [[ ! "$candidate_port" =~ ^[0-9]+$ ]] || (( candidate_port < 1024 || candidate_port > 65535 )); then
+  echo "candidate port must be an integer between 1024 and 65535" >&2
+  exit 1
+fi
 
 if [[ -n "$(docker ps -aq --filter name='^/vento-nse-candidate$')" ]]; then
   echo "vento-nse-candidate container already exists" >&2
@@ -18,7 +24,7 @@ docker run -d \
   --network vento-nse-internal \
   --env-file /etc/vento-nse.env \
   --env BACKTEST_SERVICE_URL=http://vento-nse-backtest:8000 \
-  --publish 127.0.0.1:3100:3000 \
+  --publish "127.0.0.1:${candidate_port}:3000" \
   --mount type=bind,source=/var/lib/vento-nse/data,target=/app/web/dist/client/live,readonly \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
@@ -28,11 +34,11 @@ docker run -d \
   "vento-nse-dashboard:${release_id}"
 
 for _ in {1..20}; do
-  if curl -fsS -o /dev/null http://127.0.0.1:3100/login; then
+  if curl -fsS -o /dev/null "http://127.0.0.1:${candidate_port}/login"; then
     break
   fi
   sleep 1
 done
 
-curl -fsS -o /dev/null http://127.0.0.1:3100/login
+curl -fsS -o /dev/null "http://127.0.0.1:${candidate_port}/login"
 docker ps --filter name='^/vento-nse-candidate$' --format '{{.Names}} {{.Status}} {{.Ports}}'

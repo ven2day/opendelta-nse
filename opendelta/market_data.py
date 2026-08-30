@@ -4,9 +4,10 @@ import json
 import sqlite3
 import threading
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -297,15 +298,67 @@ def file_data_version(path: Path) -> str:
     return stable_id("data", {"path": path.name, "size": stat.st_size, "mtimeNs": stat.st_mtime_ns})
 
 
-def freshness(path: Path, stale_seconds: int) -> dict[str, Any]:
+NSE_TIMEZONE = ZoneInfo("Asia/Kolkata")
+NSE_MARKET_OPEN = datetime_time(9, 15)
+NSE_MARKET_CLOSE = datetime_time(15, 30)
+
+
+def _previous_weekday(value: date) -> date:
+    candidate = value - timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def _nse_session_state(now: datetime) -> tuple[str, date]:
+    local_now = now.astimezone(NSE_TIMEZONE)
+    local_date = local_now.date()
+    local_time = local_now.time().replace(tzinfo=None)
+    weekday = local_date.weekday()
+
+    if weekday >= 5:
+        return "CLOSED", _previous_weekday(local_date)
+    if local_time < NSE_MARKET_OPEN:
+        return "CLOSED", _previous_weekday(local_date)
+    if local_time >= NSE_MARKET_CLOSE:
+        return "CLOSED", local_date
+    return "OPEN", local_date
+
+
+def freshness(
+    path: Path,
+    stale_seconds: int,
+    *,
+    market: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     if not path.exists():
         return {"status": "UNAVAILABLE", "reason": "MARKET_DATA_FILE_MISSING"}
+
+    checked_at = now or datetime.now(UTC)
+    if checked_at.tzinfo is None:
+        raise ValueError("freshness now must be timezone-aware")
+
     modified = datetime.fromtimestamp(path.stat().st_mtime, UTC)
-    age = max(0.0, (datetime.now(UTC) - modified).total_seconds())
-    return {
+    age = max(0.0, (checked_at - modified).total_seconds())
+    result = {
         "status": "FRESH" if age <= stale_seconds else "STALE",
         "modifiedAt": modified.isoformat(),
         "ageSeconds": round(age, 1),
         "thresholdSeconds": stale_seconds,
         "dataVersion": file_data_version(path),
     }
+
+    if market == "NSE":
+        market_status, expected_session = _nse_session_state(checked_at)
+        data_session = modified.astimezone(NSE_TIMEZONE).date()
+        result.update({
+            "marketStatus": market_status,
+            "expectedSessionDate": expected_session.isoformat(),
+            "dataSessionDate": data_session.isoformat(),
+        })
+        if market_status == "CLOSED" and data_session >= expected_session:
+            result["status"] = "FRESH"
+            result["reason"] = "MARKET_CLOSED_LAST_SESSION_CURRENT"
+
+    return result

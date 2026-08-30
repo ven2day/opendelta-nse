@@ -1,0 +1,334 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Literal
+
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+
+from .core import (
+    PLATFORM_VERSION,
+    MetricsRegistry,
+    PlatformSettings,
+    StructuredLogger,
+    request_id,
+    utc_now_iso,
+)
+from .factors import FactorEngine
+from .instruments import InstrumentRepository, InstrumentService
+from .jobs import JobRepository, JobService
+from .market_data import FeatureCache, PROVIDER_CAPABILITIES, freshness
+from .market_context import MarketContextService
+from .research import ResearchExperimentRequest, ResearchService
+from .risk import RiskService
+from .strategies import StrategyRegistry
+
+
+CandleLoader = Callable[[ResearchExperimentRequest], Any]
+CryptoInstrumentLoader = Callable[[], list[dict[str, Any]]]
+ProviderStatusLoader = Callable[[], dict[str, Any]]
+
+
+@dataclass
+class PlatformRuntime:
+    settings: PlatformSettings
+    instruments: InstrumentService
+    factors: FactorEngine
+    strategies: StrategyRegistry
+    research: ResearchService
+    risk: RiskService
+    jobs: JobService
+    job_repository: JobRepository
+    feature_cache: FeatureCache
+    market_context: MarketContextService
+    metrics: MetricsRegistry
+    logger: StructuredLogger
+    provider_status_loader: ProviderStatusLoader | None = None
+
+    @classmethod
+    def build(
+        cls,
+        settings: PlatformSettings,
+        candle_loader: CandleLoader,
+        crypto_instrument_loader: CryptoInstrumentLoader | None = None,
+        provider_status_loader: ProviderStatusLoader | None = None,
+    ) -> "PlatformRuntime":
+        job_repository = JobRepository(settings.database_path)
+        factor_engine = FactorEngine()
+        return cls(
+            settings=settings,
+            instruments=InstrumentService(
+                InstrumentRepository(settings.symbols_file, crypto_instrument_loader)
+            ),
+            factors=factor_engine,
+            strategies=StrategyRegistry(),
+            research=ResearchService(candle_loader, factor_engine),
+            risk=RiskService(),
+            jobs=JobService(
+                job_repository,
+                maximum_workers=settings.maximum_workers,
+                maximum_pending=settings.maximum_pending_jobs,
+                retry_limit=settings.job_retry_limit,
+            ),
+            job_repository=job_repository,
+            feature_cache=FeatureCache(settings.database_path),
+            market_context=MarketContextService(
+                settings.market_data_file, settings.data_stale_seconds
+            ),
+            metrics=MetricsRegistry(),
+            logger=StructuredLogger(),
+            provider_status_loader=provider_status_loader,
+        )
+
+    def provider_health(self) -> dict[str, Any]:
+        if self.provider_status_loader is None:
+            return {"status": "NOT_PROBED", "reason": "PROVIDER_STATUS_ADAPTER_NOT_CONFIGURED"}
+        try:
+            status = self.provider_status_loader()
+        except Exception as error:
+            return {"status": "DEGRADED", "errorType": type(error).__name__}
+        return {
+            "status": "DEGRADED" if status.get("lastError") else "HEALTHY",
+            **status,
+        }
+
+    def health(self) -> dict[str, Any]:
+        data = freshness(self.settings.market_data_file, self.settings.data_stale_seconds)
+        checks = {
+            "database": {
+                "status": "HEALTHY",
+                "migrations": self.job_repository.migrations(),
+            },
+            "worker": self.jobs.health(),
+            "featureCache": self.feature_cache.health(),
+            "marketData": data,
+            "instrumentMaster": {
+                "status": "HEALTHY" if self.settings.symbols_file.exists() else "DEGRADED",
+                "symbolsFileAvailable": self.settings.symbols_file.exists(),
+            },
+            "providers": self.provider_health(),
+        }
+        unavailable = any(
+            value.get("status") in {"FAILED", "UNAVAILABLE", "INVALID", "STALE", "DEGRADED"}
+            for value in checks.values()
+        )
+        return {
+            "status": "DEGRADED" if unavailable else "HEALTHY",
+            "version": PLATFORM_VERSION,
+            "environment": self.settings.environment,
+            "checkedAt": utc_now_iso(),
+            "checks": checks,
+            "paperOnly": True,
+            "liveOrdersEnabled": False,
+        }
+
+    def shutdown(self) -> None:
+        self.jobs.shutdown()
+
+
+def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> APIRouter:
+    router = APIRouter(prefix="/platform", tags=["quant-platform"])
+
+    @router.get("/health/live")
+    def liveness() -> dict[str, Any]:
+        return {
+            "status": "HEALTHY",
+            "version": PLATFORM_VERSION,
+            "checkedAt": utc_now_iso(),
+        }
+
+    @router.get("/health/ready")
+    def readiness() -> dict[str, Any]:
+        result = runtime_factory().health()
+        if result["status"] == "FAILED":
+            raise HTTPException(status_code=503, detail="Platform is not ready")
+        return result
+
+    @router.get("/overview")
+    def overview() -> dict[str, Any]:
+        runtime = runtime_factory()
+        factors = runtime.factors.registry.list()
+        strategies = runtime.strategies.list()
+        return {
+            "platform": "OpenDelta",
+            "version": PLATFORM_VERSION,
+            "environment": runtime.settings.environment,
+            "markets": ["NSE", "CRYPTO"],
+            "modules": [
+                "INSTRUMENT_MASTER",
+                "MARKET_DATA",
+                "MARKET_CONTEXT",
+                "FACTOR_ENGINE",
+                "STRATEGY_ENGINE",
+                "BACKTEST_ENGINE",
+                "RESEARCH_LAB",
+                "SIGNAL_ENGINE",
+                "PORTFOLIO_RISK",
+                "JOBS",
+                "ANALYTICS",
+                "AUDIT_OBSERVABILITY",
+            ],
+            "factorCount": len(factors),
+            "factorFamilies": sorted({factor.family for factor in factors}),
+            "strategyCount": len(strategies),
+            "jobStatus": runtime.jobs.health(),
+            "dataFreshness": freshness(
+                runtime.settings.market_data_file, runtime.settings.data_stale_seconds
+            ),
+            "paperOnly": True,
+            "liveOrdersEnabled": False,
+        }
+
+    @router.get("/instruments")
+    def instruments(
+        market: Literal["NSE", "CRYPTO"] | None = None,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        try:
+            return runtime_factory().instruments.list(market, offset, limit)
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.get("/market-context")
+    def market_context(
+        market: Literal["NSE", "CRYPTO"] = "NSE",
+    ) -> dict[str, Any]:
+        try:
+            return runtime_factory().market_context.snapshot(market)
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="Market context is unavailable") from error
+
+    @router.get("/factors")
+    def factors(family: str | None = Query(default=None, max_length=80)) -> dict[str, Any]:
+        rows = [item.public() for item in runtime_factory().factors.registry.list(family)]
+        return {"rows": rows, "count": len(rows), "family": family}
+
+    @router.get("/strategies")
+    def strategies(
+        market: Literal["NSE", "CRYPTO"] | None = None,
+    ) -> dict[str, Any]:
+        rows = [item.public() for item in runtime_factory().strategies.list(market)]
+        return {
+            "rows": rows,
+            "count": len(rows),
+            "paperOnly": True,
+            "liveOrdersEnabled": False,
+        }
+
+    @router.get("/risk")
+    def risk() -> dict[str, Any]:
+        return runtime_factory().risk.status()
+
+    @router.get("/data-health")
+    def data_health() -> dict[str, Any]:
+        runtime = runtime_factory()
+        return {
+            "marketData": freshness(
+                runtime.settings.market_data_file, runtime.settings.data_stale_seconds
+            ),
+            "featureCache": runtime.feature_cache.health(),
+            "providers": [
+                {
+                    **capability.__dict__,
+                    "status": "CONFIGURED",
+                    "privateTradingEndpoints": False,
+                }
+                for capability in PROVIDER_CAPABILITIES.values()
+            ],
+            "providerEngine": runtime.provider_health(),
+            "warnings": [
+                "Provider availability is evaluated independently per instrument and timeframe",
+                "Missing spread, sector, order-book, OI, or benchmark data is never manufactured",
+            ],
+        }
+
+    @router.get("/jobs")
+    def jobs(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        runtime = runtime_factory()
+        rows = runtime.job_repository.list(limit)
+        return {"rows": rows, "count": len(rows), "worker": runtime.jobs.health()}
+
+    @router.get("/jobs/{job_id}")
+    def job(job_id: str) -> dict[str, Any]:
+        try:
+            return runtime_factory().job_repository.get(job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job was not found") from error
+
+    @router.delete("/jobs/{job_id}")
+    def cancel_job(job_id: str) -> dict[str, Any]:
+        try:
+            return runtime_factory().jobs.cancel(job_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="Job was not found") from error
+
+    @router.post("/research/estimate")
+    def estimate_research(request: ResearchExperimentRequest) -> dict[str, Any]:
+        try:
+            return runtime_factory().research.estimate(request)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @router.post("/research/experiments", status_code=202)
+    def start_research(
+        request: ResearchExperimentRequest,
+        idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
+    ) -> dict[str, Any]:
+        runtime = runtime_factory()
+        try:
+            runtime.research.estimate(request)
+            result = runtime.jobs.submit(
+                "RESEARCH_EXPERIMENT",
+                request.snapshot(),
+                runtime.research.run,
+                idempotency_key=idempotency_key,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=429, detail=str(error)) from error
+        runtime.metrics.increment("research_jobs_submitted")
+        return result
+
+    @router.get("/metrics")
+    def metrics() -> dict[str, Any]:
+        runtime = runtime_factory()
+        return {
+            **runtime.metrics.snapshot(),
+            "jobs": runtime.jobs.health(),
+            "generatedAt": utc_now_iso(),
+        }
+
+    return router
+
+
+def install_platform_observability(
+    app: FastAPI, runtime_factory: Callable[[], PlatformRuntime]
+) -> None:
+    @app.middleware("http")
+    async def correlated_requests(request: Request, call_next):  # type: ignore[no-untyped-def]
+        identifier = request_id(request.headers.get("x-request-id"))
+        started = time.monotonic()
+        try:
+            response = await call_next(request)
+        except Exception as error:
+            runtime = runtime_factory()
+            runtime.metrics.increment("http_unhandled_errors")
+            runtime.logger.event(
+                "http_request_failed",
+                requestId=identifier,
+                path=request.url.path,
+                errorType=type(error).__name__,
+            )
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error", "requestId": identifier},
+            )
+        elapsed = time.monotonic() - started
+        runtime = runtime_factory()
+        runtime.metrics.increment(f"http_status_{response.status_code}")
+        runtime.metrics.observe("http_request_seconds", elapsed)
+        response.headers["X-Request-ID"] = identifier
+        return response

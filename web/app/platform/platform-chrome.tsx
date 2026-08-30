@@ -98,7 +98,10 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("opendelta-sidebar-collapsed") === "true";
+  });
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "dark";
     const saved = window.localStorage.getItem("opendelta-theme");
@@ -107,10 +110,6 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   const shellEnabled = usesPlatformShell(pathname);
   const market = marketFor(pathname, searchParams.get("market"));
   const activeItem = navigation.find((item) => item.match(pathname)) ?? navigation[0];
-
-  useEffect(() => {
-    setSidebarCollapsed(window.localStorage.getItem("opendelta-sidebar-collapsed") === "true");
-  }, []);
 
   useEffect(() => {
     if (!shellEnabled) return;

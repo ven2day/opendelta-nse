@@ -19,6 +19,7 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-backtest \
   --env CRYPTO_SIGNAL_ENGINE_ENABLED=true \
   --env CRYPTO_MARKET_DIR=/var/lib/vento-nse/backtest/crypto-market \
   --env PLATFORM_DATA_DIR=/var/lib/vento-nse/backtest/platform \
+  --env RESEARCH_ENGINE_V2_ENABLED=false \
   --env LIVE_SIGNAL_DIR=/var/lib/vento-nse/backtest/live-signals \
   --env LIVE_MARKET_DATA_FILE=/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv \
   --env SYMBOLS_FILE=/var/lib/vento-nse/data/symbols.csv \

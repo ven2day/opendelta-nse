@@ -1,30 +1,160 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import { FlaskConical, Play, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { platformGet, platformPost, type PlatformMarket } from "../platform/platform-client";
 import { ErrorState, StatusBadge } from "../platform/workspace-ui";
 import type { Factor } from "./factor-catalog";
 
 type Mode = "EXACT" | "TOURNAMENT" | "FORWARD_SELECTION";
 type Estimate = { possibleCombinations: number; plannedEvaluations: number; bounded: boolean; candidateFactors: number };
-type Job = { jobId: string; status: string; progress: number; result?: Experiment | null; error?: { code: string; message: string } | null };
 type Metrics = { status: string; tradeCount: number; netProfit: number; expectancy: number; profitFactor: number; maximumDrawdown: number; returnToDrawdown: number; winRate: number };
 type Experiment = { experimentId: string; selectedFactorIds: string[]; baselineValidation: Metrics; untouchedTestResult: Metrics; validationResults: Metrics[]; unsupported: { factorId: string; reason: string }[]; warnings: string[]; paperOnly: boolean; liveOrdersEnabled: boolean };
+type Job = { jobId: string; status: string; progress: number; result?: Experiment | null; error?: { code: string; message: string } | null };
+type ResearchEngine = { enabled: boolean; status: string; message: string };
+type Overview = { researchEngine?: ResearchEngine };
 
 const initialSelection = ["ema_alignment"];
 
 export function ExperimentBuilder({ factors }: { factors: Factor[] }) {
-  const [market, setMarket] = useState<PlatformMarket>("NSE"); const [provider, setProvider] = useState("DHAN"); const [symbol, setSymbol] = useState("LUPIN"); const [timeframe, setTimeframe] = useState("5m"); const [mode, setMode] = useState<Mode>("EXACT"); const [selected, setSelected] = useState<string[]>(initialSelection); const [minimumTrades, setMinimumTrades] = useState(30); const [beamWidth, setBeamWidth] = useState(2); const [estimate, setEstimate] = useState<Estimate | null>(null); const [job, setJob] = useState<Job | null>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  const available = useMemo(() => factors.filter((factor) => factor.supported_markets.includes(market)), [factors, market]);
-  const payload = () => ({ mode, market, provider, symbol, timeframe, durationYears: 1, durationDays: 30, factorIds: selected, factorParameters: {}, minimumTrades, beamWidth, costBpsPerRoundTrip: market === "NSE" ? 10 : 20, validationFraction: .2, testFraction: .2 });
-  const chooseMarket = (next: PlatformMarket) => { setMarket(next); setProvider(next === "NSE" ? "DHAN" : "OKX"); setSymbol(next === "NSE" ? "LUPIN" : "BTC-USDT"); setTimeframe(next === "NSE" ? "5m" : "15m"); setSelected([next === "NSE" ? "ema_alignment" : "rvol"]); setEstimate(null); setJob(null); };
-  const toggle = (factor: Factor) => { setEstimate(null); if (mode === "EXACT") { setSelected([factor.factor_id]); return; } const sameFamily = mode !== "TOURNAMENT" || selected.length === 0 || available.find((item) => item.factor_id === selected[0])?.family === factor.family; if (!sameFamily) { setSelected([factor.factor_id]); return; } setSelected((current) => current.includes(factor.factor_id) ? current.filter((id) => id !== factor.factor_id) : [...current, factor.factor_id]); };
-  const getEstimate = async () => { setBusy(true); setError(""); try { setEstimate(await platformPost<Estimate>("estimate", payload())); } catch (reason) { setError(reason instanceof Error ? reason.message : "Estimate failed"); } finally { setBusy(false); } };
-  const poll = async (jobId: string) => { for (let count = 0; count < 240; count += 1) { const current = await platformGet<Job>("job", { jobId }); setJob(current); if (["COMPLETE", "FAILED", "CANCELLED"].includes(current.status)) return; await new Promise((resolve) => window.setTimeout(resolve, 1_000)); } throw new Error("The experiment is still running; continue monitoring it from Jobs."); };
-  const run = async () => { setBusy(true); setError(""); try { const started = await platformPost<Job>("experiment", payload()); setJob(started); await poll(started.jobId); } catch (reason) { setError(reason instanceof Error ? reason.message : "Experiment failed"); } finally { setBusy(false); } };
-  return <div className="research-builder"><section className="quant-panel research-config"><div className="quant-panel-heading"><div><FlaskConical size={18} /><div><h2>Experiment configuration</h2><p>Bounded search with chronological training, validation and untouched test periods.</p></div></div><StatusBadge tone="good">Next-bar execution</StatusBadge></div><div className="research-form-grid"><label><span>Mode</span><select value={mode} onChange={(event) => { const next = event.target.value as Mode; setMode(next); setSelected(initialSelection); setEstimate(null); }}><option value="EXACT">Exact configuration</option><option value="TOURNAMENT">Single-family tournament</option><option value="FORWARD_SELECTION">Forward selection</option></select></label><label><span>Market</span><select value={market} onChange={(event) => chooseMarket(event.target.value as PlatformMarket)}><option>NSE</option><option value="CRYPTO">Crypto</option></select></label><label><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value)}>{market === "NSE" ? <option>DHAN</option> : <><option>OKX</option><option>VALR</option></>}</select></label><label><span>Exact symbol</span><input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} /></label><label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>{["1m", "5m", "15m", "30m", "1h", "6h", "1d"].map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Minimum trades</span><input type="number" min="5" max="10000" value={minimumTrades} onChange={(event) => setMinimumTrades(Number(event.target.value))} /></label>{mode === "FORWARD_SELECTION" && <label><span>Beam width</span><input type="number" min="1" max="3" value={beamWidth} onChange={(event) => setBeamWidth(Number(event.target.value))} /></label>}</div><details><summary>Factor selection · {selected.length} selected</summary><div className="research-factor-select">{available.map((factor) => <div key={factor.factor_id} className={selected.includes(factor.factor_id) ? "selected" : ""}><input id={`factor-${factor.factor_id}`} type="checkbox" checked={selected.includes(factor.factor_id)} onChange={() => toggle(factor)} /><label htmlFor={`factor-${factor.factor_id}`} aria-label={`Select ${factor.name}`}><span><strong>{factor.name}</strong><small>{factor.family.replaceAll("_", " ")}</small></span></label></div>)}</div></details>{error && <ErrorState message={error} />}<div className="research-actions"><button type="button" disabled={busy || selected.length === 0} onClick={() => void getEstimate()}><RefreshCw size={15} />Estimate search</button><button className="primary" type="button" disabled={busy || selected.length === 0 || !estimate?.bounded} onClick={() => void run()}><Play size={15} />{busy ? "Working…" : "Run experiment"}</button><span>{estimate ? `${estimate.possibleCombinations.toLocaleString()} possible · ${estimate.plannedEvaluations} planned` : "Estimate combinations before running"}</span></div></section>{job && <section className="quant-panel research-result"><div className="quant-panel-heading"><div><h2>Experiment job</h2><p className="mono">{job.jobId}</p></div><StatusBadge tone={job.status === "COMPLETE" ? "good" : job.status === "FAILED" ? "bad" : "warn"}>{job.status}</StatusBadge></div><div className="quant-progress"><span style={{ width: `${job.progress}%` }} /></div>{job.error && <div className="quant-inline-warning">{job.error.code}: {job.error.message}</div>}{job.result && <ExperimentResult result={job.result} />}</section>}</div>;
+  const [market, setMarket] = useState<PlatformMarket>("NSE");
+  const [provider, setProvider] = useState("DHAN");
+  const [symbol, setSymbol] = useState("LUPIN");
+  const [timeframe, setTimeframe] = useState("5m");
+  const [mode, setMode] = useState<Mode>("EXACT");
+  const [selected, setSelected] = useState<string[]>(initialSelection);
+  const [minimumTrades, setMinimumTrades] = useState(30);
+  const [beamWidth, setBeamWidth] = useState(2);
+  const [estimate, setEstimate] = useState<Estimate | null>(null);
+  const [job, setJob] = useState<Job | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [researchEngine, setResearchEngine] = useState<ResearchEngine | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void platformGet<Overview>("overview")
+      .then((overview) => { if (active) setResearchEngine(overview.researchEngine ?? null); })
+      .catch(() => { if (active) setResearchEngine(null); });
+    return () => { active = false; };
+  }, []);
+
+  const researchEnabled = researchEngine?.enabled === true;
+  const available = useMemo(
+    () => factors.filter((factor) => factor.supported_markets.includes(market)),
+    [factors, market],
+  );
+  const payload = () => ({
+    mode,
+    market,
+    provider,
+    symbol,
+    timeframe,
+    durationYears: 1,
+    durationDays: 30,
+    factorIds: selected,
+    factorParameters: {},
+    minimumTrades,
+    beamWidth,
+    costBpsPerRoundTrip: market === "NSE" ? 10 : 20,
+    validationFraction: 0.2,
+    testFraction: 0.2,
+  });
+
+  const chooseMarket = (next: PlatformMarket) => {
+    setMarket(next);
+    setProvider(next === "NSE" ? "DHAN" : "OKX");
+    setSymbol(next === "NSE" ? "LUPIN" : "BTC-USDT");
+    setTimeframe(next === "NSE" ? "5m" : "15m");
+    setSelected([next === "NSE" ? "ema_alignment" : "rvol"]);
+    setEstimate(null);
+    setJob(null);
+  };
+
+  const toggle = (factor: Factor) => {
+    setEstimate(null);
+    if (mode === "EXACT") {
+      setSelected([factor.factor_id]);
+      return;
+    }
+    const sameFamily = mode !== "TOURNAMENT" || selected.length === 0 || available.find((item) => item.factor_id === selected[0])?.family === factor.family;
+    if (!sameFamily) {
+      setSelected([factor.factor_id]);
+      return;
+    }
+    setSelected((current) => current.includes(factor.factor_id)
+      ? current.filter((id) => id !== factor.factor_id)
+      : [...current, factor.factor_id]);
+  };
+
+  const getEstimate = async () => {
+    if (!researchEnabled) return;
+    setBusy(true);
+    setError("");
+    try {
+      setEstimate(await platformPost<Estimate>("estimate", payload()));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Estimate failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const poll = async (jobId: string) => {
+    for (let count = 0; count < 240; count += 1) {
+      const current = await platformGet<Job>("job", { jobId });
+      setJob(current);
+      if (["COMPLETE", "FAILED", "CANCELLED"].includes(current.status)) return;
+      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    }
+    throw new Error("The experiment is still running; continue monitoring it from Jobs.");
+  };
+
+  const run = async () => {
+    if (!researchEnabled) return;
+    setBusy(true);
+    setError("");
+    try {
+      const started = await platformPost<Job>("experiment", payload());
+      setJob(started);
+      await poll(started.jobId);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Experiment failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="research-builder">
+    <div className="quant-inline-warning" role="status">
+      <strong>{researchEnabled ? "Research V2 enabled" : "Research execution disabled"}</strong><br />
+      {researchEngine?.message ?? "The server-side Research V2 safety gate is being checked. New experiments remain disabled."}
+    </div>
+    <section className="quant-panel research-config">
+      <div className="quant-panel-heading"><div><FlaskConical size={18} /><div><h2>Experiment configuration</h2><p>Bounded search with chronological training, validation and untouched test periods.</p></div></div><StatusBadge tone={researchEnabled ? "good" : "warn"}>{researchEnabled ? "Research V2" : "Fail closed"}</StatusBadge></div>
+      <div className="research-form-grid">
+        <label><span>Mode</span><select value={mode} onChange={(event) => { const next = event.target.value as Mode; setMode(next); setSelected(initialSelection); setEstimate(null); }}><option value="EXACT">Exact configuration</option><option value="TOURNAMENT">Single-family tournament</option><option value="FORWARD_SELECTION">Forward selection</option></select></label>
+        <label><span>Market</span><select value={market} onChange={(event) => chooseMarket(event.target.value as PlatformMarket)}><option>NSE</option><option value="CRYPTO">Crypto</option></select></label>
+        <label><span>Provider</span><select value={provider} onChange={(event) => setProvider(event.target.value)}>{market === "NSE" ? <option>DHAN</option> : <><option>OKX</option><option>VALR</option></>}</select></label>
+        <label><span>Exact symbol</span><input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} /></label>
+        <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframe(event.target.value)}>{["1m", "5m", "15m", "30m", "1h", "6h", "1d"].map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label><span>Minimum trades</span><input type="number" min="5" max="10000" value={minimumTrades} onChange={(event) => setMinimumTrades(Number(event.target.value))} /></label>
+        {mode === "FORWARD_SELECTION" && <label><span>Beam width</span><input type="number" min="1" max="3" value={beamWidth} onChange={(event) => setBeamWidth(Number(event.target.value))} /></label>}
+      </div>
+      <details><summary>Factor selection · {selected.length} selected</summary><div className="research-factor-select">{available.map((factor) => <div key={factor.factor_id} className={selected.includes(factor.factor_id) ? "selected" : ""}><input id={`factor-${factor.factor_id}`} type="checkbox" checked={selected.includes(factor.factor_id)} onChange={() => toggle(factor)} /><label htmlFor={`factor-${factor.factor_id}`} aria-label={`Select ${factor.name}`}><span><strong>{factor.name}</strong><small>{factor.family.replaceAll("_", " ")}</small></span></label></div>)}</div></details>
+      {error && <ErrorState message={error} />}
+      <div className="research-actions"><button type="button" disabled={!researchEnabled || busy || selected.length === 0} onClick={() => void getEstimate()}><RefreshCw size={15} />Estimate search</button><button className="primary" type="button" disabled={!researchEnabled || busy || selected.length === 0 || !estimate?.bounded} onClick={() => void run()}><Play size={15} />{busy ? "Working…" : "Run experiment"}</button><span>{estimate ? `${estimate.possibleCombinations.toLocaleString()} possible · ${estimate.plannedEvaluations} planned` : researchEnabled ? "Estimate combinations before running" : "Research V2 acceptance is still in progress"}</span></div>
+    </section>
+    {job && <section className="quant-panel research-result"><div className="quant-panel-heading"><div><h2>Experiment job</h2><p className="mono">{job.jobId}</p></div><StatusBadge tone={job.status === "COMPLETE" ? "good" : job.status === "FAILED" ? "bad" : "warn"}>{job.status}</StatusBadge></div><div className="quant-progress"><span style={{ width: `${job.progress}%` }} /></div>{job.error && <div className="quant-inline-warning">{job.error.code}: {job.error.message}</div>}{job.result && <ExperimentResult result={job.result} />}</section>}
+  </div>;
 }
 
-function metric(value: number, percentage = false): string { if (!Number.isFinite(value)) return "∞"; return percentage ? `${(value * 100).toFixed(2)}%` : value.toFixed(4); }
-function ExperimentResult({ result }: { result: Experiment }) { const test = result.untouchedTestResult; return <div><div className="quant-kpi-grid"><article><span>Test status</span><strong>{test.status}</strong><small>{test.tradeCount} trades</small></article><article><span>Net return</span><strong>{metric(test.netProfit, true)}</strong><small>After configured costs</small></article><article><span>Expectancy</span><strong>{metric(test.expectancy, true)}</strong><small>Per observed trade</small></article><article><span>Max drawdown</span><strong>{metric(test.maximumDrawdown, true)}</strong><small>Compounded return series</small></article></div><dl className="research-result-detail"><div><dt>Selected factors</dt><dd>{result.selectedFactorIds.join(", ") || "Baseline only"}</dd></div><div><dt>Profit factor</dt><dd>{metric(test.profitFactor)}</dd></div><div><dt>Return / drawdown</dt><dd>{metric(test.returnToDrawdown)}</dd></div><div><dt>Win rate</dt><dd>{metric(test.winRate, true)}</dd></div></dl>{result.unsupported.map((item) => <p className="quant-inline-warning" key={item.factorId}>{item.factorId}: {item.reason}</p>)}{result.warnings.map((warning) => <p className="research-warning" key={warning}>{warning}</p>)}</div>; }
+function metric(value: number, percentage = false): string {
+  if (!Number.isFinite(value)) return "Undefined";
+  return percentage ? `${(value * 100).toFixed(2)}%` : value.toFixed(4);
+}
+
+function ExperimentResult({ result }: { result: Experiment }) {
+  const test = result.untouchedTestResult;
+  return <div><div className="quant-kpi-grid"><article><span>Test status</span><strong>{test.status}</strong><small>{test.tradeCount} trades</small></article><article><span>Net return</span><strong>{metric(test.netProfit, true)}</strong><small>After configured costs</small></article><article><span>Expectancy</span><strong>{metric(test.expectancy, true)}</strong><small>Per observed trade</small></article><article><span>Max drawdown</span><strong>{metric(test.maximumDrawdown, true)}</strong><small>Compounded return series</small></article></div><dl className="research-result-detail"><div><dt>Selected factors</dt><dd>{result.selectedFactorIds.join(", ") || "Baseline only"}</dd></div><div><dt>Profit factor</dt><dd>{metric(test.profitFactor)}</dd></div><div><dt>Return / drawdown</dt><dd>{metric(test.returnToDrawdown)}</dd></div><div><dt>Win rate</dt><dd>{metric(test.winRate, true)}</dd></div></dl>{result.unsupported.map((item) => <p className="quant-inline-warning" key={item.factorId}>{item.factorId}: {item.reason}</p>)}{result.warnings.map((warning) => <p className="research-warning" key={warning}>{warning}</p>)}</div>;
+}

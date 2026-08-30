@@ -43,8 +43,6 @@ function safeJobId(value: string | null): string | null {
 
 export async function GET(request: Request): Promise<Response> {
   if (!(await authorized(request))) return Response.json({ detail: "Authentication required" }, { status: 401 });
-  const service = serviceUrl();
-  if (!service) return Response.json({ detail: "Backtest service is not configured" }, { status: 503 });
   const url = new URL(request.url);
   const action = url.searchParams.get("action") ?? "overview";
   const market = url.searchParams.get("market");
@@ -67,6 +65,8 @@ export async function GET(request: Request): Promise<Response> {
     endpoint = `/platform/jobs/${encodeURIComponent(jobId)}`;
   }
   if (!endpoint) return Response.json({ detail: "Unknown platform action" }, { status: 404 });
+  const service = serviceUrl();
+  if (!service) return Response.json({ detail: "Backtest service is not configured" }, { status: 503 });
   try {
     const upstream = await fetch(`${service}${endpoint}`, {
       headers: proxyHeaders(),
@@ -81,8 +81,6 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   if (!(await authorized(request))) return Response.json({ detail: "Authentication required" }, { status: 401 });
-  const service = serviceUrl();
-  if (!service) return Response.json({ detail: "Backtest service is not configured" }, { status: 503 });
   const action = new URL(request.url).searchParams.get("action") ?? "";
   const endpoint = action === "estimate"
     ? "/platform/research/estimate"
@@ -90,6 +88,8 @@ export async function POST(request: Request): Promise<Response> {
       ? "/platform/research/experiments"
       : null;
   if (!endpoint) return Response.json({ detail: "Unknown platform operation" }, { status: 404 });
+  const service = serviceUrl();
+  if (!service) return Response.json({ detail: "Backtest service is not configured" }, { status: 503 });
   let body: string;
   try {
     body = JSON.stringify(await request.json());

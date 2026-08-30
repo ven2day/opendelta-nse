@@ -2,6 +2,16 @@
 
 Production quant-platform architecture, contracts, data flows, lifecycles, APIs, tests, deployment, and limitations are documented in [web/docs/quant-platform-v1.md](web/docs/quant-platform-v1.md). Provider, factor, and strategy extension guides are in [web/docs/extensions.md](web/docs/extensions.md).
 
+## Research safety status
+
+New Research experiments are disabled by default with the server-side
+`RESEARCH_ENGINE_V2_ENABLED=false` safety gate. Results created by the former
+one-bar next-open-to-next-close observation model are retained but labelled
+`LEGACY_INVALID_RESEARCH_MODEL`; their profitability metrics are hidden because
+that model was not a strategy backtest. The factor education catalogue remains
+available. Do not enable Research V2 until its deterministic trade-lifecycle,
+multi-timeframe, worker, browser, and production acceptance checks pass.
+
 Authenticated NSE market-research dashboard with RSI filters, signals,
 point-in-time backtesting, saved account history and auditable strategy
 diagnostics.

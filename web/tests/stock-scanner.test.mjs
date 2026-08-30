@@ -104,3 +104,13 @@ test("production backend image includes both scanner modules", async () => {
   assert.match(dockerfile, /stock_scanner\.py/);
   assert.match(dockerfile, /nse_signal_funnel\.py/);
 });
+
+test("production scanner smoke validates the signal-first contract", async () => {
+  const smoke = await source("deploy/smoke-stock-scanner.sh");
+  assert.match(smoke, /SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE/);
+  assert.match(smoke, /maximumTradesPerDay == 5/);
+  assert.match(smoke, /maximumConcurrent == 2/);
+  assert.match(smoke, /rsi_recovery_v1_1/);
+  assert.match(smoke, /market_aligned_vwap_pullback_scalper/);
+  assert.match(smoke, /strategyStatus != "ACTIVE"/);
+});

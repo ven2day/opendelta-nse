@@ -23,6 +23,9 @@ curl -fsS -b "${cookie_jar}" "${base_url}/scanner" > "${page}"
 grep -q 'Stock Scanner' "${page}"
 grep -q 'paper research' "${page}"
 
+curl -fsS -b "${cookie_jar}" "${base_url}/signals/funnel" > "${page}"
+grep -q 'NSE Signal Funnel' "${page}"
+
 anonymous_status="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/stock-scanner")"
 [[ "${anonymous_status}" == "401" ]]
 
@@ -34,14 +37,25 @@ jq -e '
   .metadata.rescanIntervalMinutes == 15 and
   .metadata.paperOnly == true and
   .metadata.liveOrdersEnabled == false and
-  .metadata.signalUniversePolicy == "FROZEN_AT_09_30" and
+  .metadata.signalUniversePolicy == "SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE" and
   (.metadata.symbolsRequested > 0) and
   (.metadata.symbolsLoaded > 0) and
   (.watchlist.topFive | length) == 5 and
   (.watchlist.primary | length) == 2 and
   (.watchlist.reserve | length) == 3 and
   (.opportunities | length) >= 5 and
-  (.opportunities | length) <= 20
+  (.opportunities | length) <= 20 and
+  .signalFunnel.metadata.paperOnly == true and
+  .signalFunnel.metadata.liveOrdersEnabled == false and
+  .signalFunnel.metadata.configuration.maximumTradeReady == 2 and
+  .signalFunnel.metadata.configuration.maximumWatch == 3 and
+  .signalFunnel.metadata.configuration.maximumTradesPerDay == 5 and
+  .signalFunnel.metadata.configuration.maximumConcurrent == 2 and
+  (.signalFunnel.tradeReady | length) <= 2 and
+  (.signalFunnel.watch | length) <= 3 and
+  ([.signalFunnel.tradeReady[] | select(.strategyStatus != "ACTIVE")] | length) == 0 and
+  ([.signalFunnel.metadata.strategies[] | select(.key == "rsi_recovery_v1_1" and .tradeReadyAllowed == true)] | length) == 1 and
+  ([.signalFunnel.metadata.strategies[] | select(.key == "market_aligned_vwap_pullback_scalper" and .tradeReadyAllowed == false)] | length) == 1
 ' "${response}" >/dev/null
 
 jq -c '{
@@ -52,5 +66,7 @@ jq -c '{
   loaded: .metadata.symbolsLoaded,
   scored: .metadata.symbolsScored,
   topFive: [.watchlist.topFive[] | {rank: .rankAfter, symbol, tier, score}],
+  tradeReady: [.signalFunnel.tradeReady[] | {rank, symbol, strategyKey, signalScore}],
+  watch: [.signalFunnel.watch[] | {rank, symbol, strategyKey, strategyStatus, signalScore}],
   liveOrdersEnabled: .metadata.liveOrdersEnabled
 }' "${response}"

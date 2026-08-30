@@ -3568,13 +3568,25 @@ def _platform_candles(request: ResearchExperimentRequest) -> pd.DataFrame:
             )
         now_ist = datetime.now(IST)
         analysis_start = now_ist - timedelta(days=366 * request.durationYears)
-        return get_store().candles(
+        frame = get_store().candles(
             request.symbol,
             request.timeframe,
             request.durationYears,
             analysis_start,
             now_ist,
             warmup_bars=500,
+        )
+        # HistoricalDataStore intentionally exposes the legacy backtest schema.
+        # Normalize only the Research boundary so existing strategy semantics and
+        # stored backtest results remain unchanged.
+        return frame.rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Volume": "volume",
+            }
         )
 
     service = get_crypto_market_service()

@@ -20,15 +20,29 @@ request can create a new experiment.
 
 TimescaleDB is the selected source of truth for completed NSE and crypto
 candles. The rollout is additive: existing readers remain active until
-dual-write reconciliation succeeds. Apply the schema with:
+dual-write reconciliation succeeds. Production can install the pinned,
+private TimescaleDB service and apply the schema with:
+
+```bash
+sudo /opt/vento-nse/current/web/deploy/install-timescale-service.sh
+```
+
+For local or already-provisioned databases, apply the schema directly with:
 
 ```bash
 python market_data_admin.py migrate
 ```
 
-Then load a versioned, holiday-aware NSE calendar:
+Build a versioned, holiday-aware calendar from an exact official NSE trading
+day export, then load it:
 
 ```bash
+python market_data_calendar.py \
+  --trading-days /secure/path/official-nse-trading-days.csv \
+  --output /secure/path/nse-sessions.csv \
+  --start 2024-09-01 --end 2026-09-01 \
+  --calendar-version NSE-2024-2026-v1 \
+  --source-url https://nsearchives.nseindia.com/path/to/source.csv
 python market_data_admin.py load-sessions --market NSE --file /secure/path/nse-sessions.csv
 ```
 
@@ -52,7 +66,8 @@ Each chunk is leased to one worker, checkpointed, retried with bounded backoff,
 and reconciled by row count and SHA-256 before the checkpoint advances. The
 completed range is gap-checked and repaired against the explicit NSE calendar
 or continuous crypto UTC timeline. See [market-data operations](web/docs/market-data-operations.md)
-and [ADR 0004](web/docs/adr/0004-timescaledb-canonical-market-data.md). Redis is
+and [TimescaleDB production bootstrap](web/docs/timescaledb-production-bootstrap.md),
+plus [ADR 0004](web/docs/adr/0004-timescaledb-canonical-market-data.md). Redis is
 not required for this phase, and existing readers are still unchanged.
 
 Authenticated NSE market-research dashboard with RSI filters, signals,

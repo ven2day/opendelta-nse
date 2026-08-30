@@ -78,7 +78,9 @@ def mark_legacy_research_job(job: dict[str, Any]) -> dict[str, Any]:
 
 def provider_rows(runtime: "PlatformRuntime") -> list[dict[str, Any]]:
     market_data = freshness(
-        runtime.settings.market_data_file, runtime.settings.data_stale_seconds
+        runtime.settings.market_data_file,
+        runtime.settings.data_stale_seconds,
+        market="NSE",
     )
     engine = runtime.provider_health()
     engine_providers = set(engine.get("providers") or [])
@@ -176,7 +178,11 @@ class PlatformRuntime:
         }
 
     def health(self) -> dict[str, Any]:
-        data = freshness(self.settings.market_data_file, self.settings.data_stale_seconds)
+        data = freshness(
+            self.settings.market_data_file,
+            self.settings.data_stale_seconds,
+            market="NSE",
+        )
         checks = {
             "database": {
                 "status": "HEALTHY",
@@ -256,7 +262,9 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
             "strategyCount": len(strategies),
             "jobStatus": runtime.jobs.health(),
             "dataFreshness": freshness(
-                runtime.settings.market_data_file, runtime.settings.data_stale_seconds
+                runtime.settings.market_data_file,
+                runtime.settings.data_stale_seconds,
+                market="NSE",
             ),
             "researchEngine": research_engine_status(runtime.settings),
             "paperOnly": True,
@@ -309,7 +317,9 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
         runtime = runtime_factory()
         return {
             "marketData": freshness(
-                runtime.settings.market_data_file, runtime.settings.data_stale_seconds
+                runtime.settings.market_data_file,
+                runtime.settings.data_stale_seconds,
+                market="NSE",
             ),
             "featureCache": runtime.feature_cache.health(),
             "providers": provider_rows(runtime),

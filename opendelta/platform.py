@@ -19,6 +19,7 @@ from .factors import FactorEngine
 from .instruments import InstrumentRepository, InstrumentService
 from .jobs import JobRepository, JobService
 from .market_data import FeatureCache, PROVIDER_CAPABILITIES, freshness
+from .timescale_market_data import timescale_health
 from .market_context import MarketContextService
 from .research import ResearchRequest, ResearchService
 from .risk import RiskService
@@ -309,6 +310,7 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
             "featureCache": runtime.feature_cache.health(),
             "providers": provider_rows(runtime),
             "providerEngine": runtime.provider_health(),
+            "canonicalStore": timescale_health(runtime.settings.market_data_database_url),
             "warnings": [
                 "Provider availability is evaluated independently per instrument and timeframe",
                 "Missing spread, sector, order-book, OI, or benchmark data is never manufactured",

@@ -16,6 +16,26 @@ The executable Research V1 code and request contract have been removed. Legacy
 results remain read-only for audit purposes; only the versioned Research V2
 request can create a new experiment.
 
+## Canonical market-data rollout
+
+TimescaleDB is the selected source of truth for completed NSE and crypto
+candles. The rollout is additive: existing readers remain active until
+dual-write reconciliation succeeds. Apply the schema with:
+
+```bash
+python market_data_admin.py migrate
+```
+
+Then load a versioned, holiday-aware NSE calendar:
+
+```bash
+python market_data_admin.py load-sessions --market NSE --file /secure/path/nse-sessions.csv
+```
+
+The CSV columns are `session_date,is_trading_day,open_time,close_time,calendar_version`.
+See [ADR 0004](web/docs/adr/0004-timescaledb-canonical-market-data.md). Redis is
+not required for this phase.
+
 Authenticated NSE market-research dashboard with RSI filters, signals,
 point-in-time backtesting, saved account history and auditable strategy
 diagnostics.

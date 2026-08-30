@@ -7,6 +7,7 @@ dependencies = [
     "numpy>=2.3,<3",
     "pandas>=3.0.5",
     "pyarrow>=21,<22",
+    "psycopg[binary,pool]>=3.2,<4",
     "uvicorn>=0.35,<1",
     "websockets>=15,<16",
 ]
@@ -19,3 +20,6 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["opendelta*"]
+
+[tool.setuptools.package-data]
+"opendelta.sql" = ["*.sql"]

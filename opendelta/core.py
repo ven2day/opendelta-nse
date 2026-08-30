@@ -58,6 +58,7 @@ class PlatformSettings:
     job_retry_limit: int = 2
     data_stale_seconds: int = 86_400
     research_engine_v2_enabled: bool = False
+    market_data_database_url: str | None = None
     environment: Literal["production", "development", "test"] = "production"
 
     @classmethod
@@ -110,6 +111,9 @@ class PlatformSettings:
             data_stale_seconds=int(os.environ.get("PLATFORM_DATA_STALE_SECONDS", "86400")),
             research_engine_v2_enabled=strict_environment_flag(
                 "RESEARCH_ENGINE_V2_ENABLED", False
+            ),
+            market_data_database_url=(
+                os.environ.get("MARKET_DATA_DATABASE_URL", "").strip() or None
             ),
             environment=environment,  # type: ignore[arg-type]
         )

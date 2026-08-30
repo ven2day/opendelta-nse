@@ -59,7 +59,7 @@ from opendelta.platform import (
     create_platform_router,
     install_platform_observability,
 )
-from opendelta.research import ResearchExperimentRequest, ResearchRequest
+from opendelta.research import ResearchRequest
 from opendelta.research_v2 import ResearchExperimentRequestV2
 from opendelta.strategy_adapters import rsi_range_entries
 from market_symbol_registry import (

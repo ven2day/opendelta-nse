@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -34,11 +34,7 @@ from opendelta.platform import (
     PlatformRuntime,
     create_platform_router,
 )
-from opendelta.research import (
-    ResearchExperimentRequest,
-    ResearchService,
-    chronological_split,
-)
+from opendelta.research_v2 import ResearchExperimentRequestV2
 from opendelta.risk import RiskService
 from opendelta.strategies import StrategyRegistry
 
@@ -284,47 +280,6 @@ def test_trade_ledger_reports_execution_and_stability_metrics() -> None:
     assert {"monthlyStability", "symbolStability", "sessionStability", "slippageSensitivity"}.issubset(result)
 
 
-def test_chronological_split_keeps_final_test_untouched() -> None:
-    split = chronological_split(100, 0.2, 0.2)
-    assert split.training == (0, 60)
-    assert split.validation == (60, 80)
-    assert split.test == (80, 100)
-    assert split.validation[1] == split.test[0]
-
-
-def test_research_modes_are_bounded_and_tournament_is_single_family() -> None:
-    service = ResearchService(lambda request: candle_frame())
-    exact = ResearchExperimentRequest(symbol="LUPIN", factorIds=["ema_alignment"])
-    assert service.estimate(exact)["plannedEvaluations"] == 1
-    invalid = ResearchExperimentRequest(
-        mode="TOURNAMENT", symbol="LUPIN", factorIds=["ema_alignment", "rvol"]
-    )
-    with pytest.raises(ValueError, match="one factor family"):
-        service.estimate(invalid)
-    forward = ResearchExperimentRequest(
-        mode="FORWARD_SELECTION", symbol="LUPIN", factorIds=["ema_alignment", "rvol", "roc"]
-    )
-    estimate = service.estimate(forward)
-    assert estimate["bounded"] is True
-    assert estimate["plannedEvaluations"] <= 100
-
-
-def test_small_research_experiment_stores_versions_split_and_safety() -> None:
-    service = ResearchService(lambda request: candle_frame())
-    result = service.run(
-        ResearchExperimentRequest(
-            symbol="LUPIN", factorIds=["ema_alignment"], minimumTrades=5
-        ).snapshot(),
-        lambda value: None,
-        lambda: None,
-    )
-    assert result["experimentId"].startswith("experiment-")
-    assert result["configurationId"].startswith("research-config-")
-    assert result["split"]["test"]["startIndex"] == result["split"]["validation"]["endIndexExclusive"]
-    assert result["paperOnly"] is True
-    assert result["liveOrdersEnabled"] is False
-
-
 def test_job_idempotency_retry_and_migration(tmp_path: Path) -> None:
     repository = JobRepository(tmp_path / "jobs.sqlite3")
     service = JobService(repository, maximum_workers=1, maximum_pending=3, retry_limit=1)
@@ -416,10 +371,34 @@ def test_research_execution_fails_closed_and_overview_exposes_server_gate(tmp_pa
     }
     blocked = client.post(
         "/platform/research/experiments",
-        json=ResearchExperimentRequest(symbol="LUPIN", factorIds=["ema_alignment"]).snapshot(),
+        json=ResearchExperimentRequestV2(
+            symbols=["LUPIN"], startDate=date(2026, 1, 1), endDate=date(2026, 2, 1)
+        ).snapshot(),
     )
     assert blocked.status_code == 503
     assert "RESEARCH_ENGINE_V2_DISABLED" in blocked.json()["detail"]
+    assert runtime.job_repository.list() == []
+    runtime.shutdown()
+
+
+def test_research_v1_request_is_no_longer_an_executable_api_contract(tmp_path: Path) -> None:
+    configured = settings(tmp_path)
+    configured = PlatformSettings(**{
+        **configured.__dict__, "research_engine_v2_enabled": True,
+    })
+    runtime = PlatformRuntime.build(configured, lambda request: candle_frame())
+    app = FastAPI()
+    app.include_router(create_platform_router(lambda: runtime))
+
+    response = TestClient(app).post(
+        "/platform/research/experiments",
+        json={
+            "researchVersion": "1", "market": "NSE", "provider": "DHAN",
+            "symbol": "LUPIN", "timeframe": "5m", "factorIds": ["ema_alignment"],
+        },
+    )
+
+    assert response.status_code == 422
     assert runtime.job_repository.list() == []
     runtime.shutdown()
 

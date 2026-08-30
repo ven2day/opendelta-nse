@@ -12,6 +12,10 @@ that model was not a strategy backtest. The factor education catalogue remains
 available. Do not enable Research V2 until its deterministic trade-lifecycle,
 multi-timeframe, worker, browser, and production acceptance checks pass.
 
+The executable Research V1 code and request contract have been removed. Legacy
+results remain read-only for audit purposes; only the versioned Research V2
+request can create a new experiment.
+
 Authenticated NSE market-research dashboard with RSI filters, signals,
 point-in-time backtesting, saved account history and auditable strategy
 diagnostics.

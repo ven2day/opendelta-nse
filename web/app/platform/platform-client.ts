@@ -10,12 +10,12 @@ export async function platformGet<T>(action: string, parameters?: Record<string,
   return payload;
 }
 
-export async function platformPost<T>(action: string, payload: unknown): Promise<T> {
+export async function platformPost<T>(action: string, payload: unknown, idempotencyKey?: string): Promise<T> {
   const response = await fetch(`/api/platform?action=${encodeURIComponent(action)}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-idempotency-key": crypto.randomUUID(),
+      "x-idempotency-key": idempotencyKey ?? crypto.randomUUID(),
     },
     body: JSON.stringify(payload),
   });

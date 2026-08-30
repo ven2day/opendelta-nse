@@ -10,6 +10,7 @@ cookie_jar="$(mktemp)"
 page="$(mktemp)"
 response="$(mktemp)"
 trap 'rm -f "${cookie_jar}" "${page}" "${response}"' EXIT
+research_payload='{"researchVersion":"2","mode":"EXACT","market":"NSE","provider":"DHAN","baseStrategyId":"neutral_research_trigger","symbols":["LUPIN"],"startDate":"2026-01-01","endDate":"2026-02-01","contextTimeframe":"15m","setupTimeframe":"5m","executionTimeframe":"1m","direction":"LONG","factorSelections":["ema_alignment"],"factorParameters":{},"minimumTrades":5,"beamWidth":1}'
 
 login_status="$(curl -sS -o /dev/null -w '%{http_code}' \
   -c "${cookie_jar}" \
@@ -92,13 +93,13 @@ jq -e '
 
 curl -fsS -b "${cookie_jar}" \
   -H 'Content-Type: application/json' \
-  --data '{"mode":"EXACT","market":"NSE","provider":"DHAN","symbol":"LUPIN","timeframe":"1d","durationYears":1,"durationDays":30,"factorIds":["ema_alignment"],"minimumTrades":5,"beamWidth":1}' \
+  --data "${research_payload}" \
   "${base_url}/api/platform?action=estimate" > "${response}"
-jq -e '.possibleCombinations == 1 and .plannedEvaluations == 1 and .bounded == true' "${response}" >/dev/null
+jq -e '.possibleCombinations == 1 and .plannedBacktests == 1 and .bounded == true' "${response}" >/dev/null
 
 research_status="$(curl -sS -o "${response}" -w '%{http_code}' -b "${cookie_jar}" \
   -H 'Content-Type: application/json' \
-  --data '{"mode":"EXACT","market":"NSE","provider":"DHAN","symbol":"LUPIN","timeframe":"5m","factorIds":["ema_alignment"]}' \
+  --data "${research_payload}" \
   "${base_url}/api/platform?action=experiment")"
 [[ "${research_status}" == "503" ]]
 jq -e '.detail | contains("RESEARCH_ENGINE_V2_DISABLED")' "${response}" >/dev/null

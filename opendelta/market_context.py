@@ -93,4 +93,3 @@ class MarketContextService:
             return {"status": UNSUPPORTED_DATA_REQUIREMENT, "reason": "BENCHMARK_ALIGNMENT_INVALID"}
         values = close.astype(float).pct_change(periods) - benchmark_close.astype(float).pct_change(periods)
         return {"status": "SUPPORTED", "values": values}
-

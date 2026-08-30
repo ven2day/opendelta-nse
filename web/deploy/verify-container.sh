@@ -60,6 +60,22 @@ grep -q '₹' "${dashboard_html}"
 ! grep -q '>4h volume<' "${dashboard_html}"
 echo "verified dashboard HTML"
 
+mapfile -t browser_assets < <(
+  grep -oE '(src|href)="[^"]+\.(js|css)(\?[^"]*)?"' "${dashboard_html}" \
+    | sed -E 's/^(src|href)="([^"]+)"$/\2/' \
+    | sort -u
+)
+[[ "${#browser_assets[@]}" -gt 0 ]]
+for asset in "${browser_assets[@]}"; do
+  if [[ "${asset}" == http* ]]; then
+    asset_url="${asset}"
+  else
+    asset_url="${base_url}${asset}"
+  fi
+  curl -fsS -o /dev/null "${asset_url}"
+done
+echo "verified browser JavaScript and stylesheet assets"
+
 curl -fsS -b "${cookie_jar}" "${base_url}/api/market-data?format=csv" > "${live_csv}"
 grep -q '^rank,symbol,company_name,trading_date,previous_date,previous_close,entry_price,change_percent,previous_rsi_14,rsi_14,volume_24h,support_1_price,support_1_time,support_2_price,support_2_time,resistance_1_price,resistance_1_time,resistance_2_price,resistance_2_time' "${live_csv}"
 registry_count="$(awk 'END { print NR - 1 }' /var/lib/vento-nse/data/symbols.csv)"

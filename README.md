@@ -1,5 +1,7 @@
 # OpenDelta Market Research
 
+Production quant-platform architecture, contracts, data flows, lifecycles, APIs, tests, deployment, and limitations are documented in [web/docs/quant-platform-v1.md](web/docs/quant-platform-v1.md). Provider, factor, and strategy extension guides are in [web/docs/extensions.md](web/docs/extensions.md).
+
 Authenticated NSE market-research dashboard with RSI filters, signals,
 point-in-time backtesting, saved account history and auditable strategy
 diagnostics.

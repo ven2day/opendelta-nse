@@ -4635,7 +4635,6 @@ footer {
 @media (max-width: 560px) {
   .platform-market-switch a { padding-inline: 9px; }
   .platform-identity > span { width: 33px; height: 33px; }
-  .platform-signout { display: none; }
   .quant-kpi-grid, .research-form-grid, .research-factor-select { grid-template-columns: 1fr; }
   .quant-market-tabs, .quant-section-tabs { width: 100%; }
   .quant-market-tabs button, .quant-section-tabs a { flex: 1; text-align: center; }

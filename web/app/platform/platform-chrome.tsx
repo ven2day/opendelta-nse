@@ -12,6 +12,8 @@ import {
   LogOut,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   Radio,
   ScanSearch,
   Settings2,
@@ -25,7 +27,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { platformGet, type PlatformMarket } from "./platform-client";
 
 type Overview = {
-  dataFreshness?: { status?: string; ageSeconds?: number };
+  dataFreshness?: { status?: string; ageSeconds?: number; reason?: string };
   jobStatus?: { status?: string; running?: number; queueDepth?: number };
   environment?: string;
 };
@@ -96,6 +98,10 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("opendelta-sidebar-collapsed") === "true";
+  });
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "dark";
     const saved = window.localStorage.getItem("opendelta-theme");
@@ -141,6 +147,15 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   if (!shellEnabled) return <>{children}</>;
   const freshness = overview?.dataFreshness?.status ?? "CHECKING";
   const worker = overview?.jobStatus?.status ?? "CHECKING";
+  const freshnessLabel = overview?.dataFreshness?.reason === "MARKET_CLOSED_LAST_SESSION_CURRENT" ? "current" : freshness.toLowerCase();
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("opendelta-sidebar-collapsed", String(next));
+      return next;
+    });
+  };
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -149,7 +164,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="platform-frame" data-theme={theme} data-ui-version="unified-v2" suppressHydrationWarning>
+    <div className="platform-frame" data-theme={theme} data-sidebar-collapsed={sidebarCollapsed ? "true" : "false"} data-ui-version="unified-v2" suppressHydrationWarning>
       <a className="platform-skip-link" href="#main-content">Skip to content</a>
       <div className="platform-shell" data-navigation-open={open ? "true" : "false"}>
         <header className="platform-topbar">
@@ -171,7 +186,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
           <div className="platform-live-strip">
             <span className="platform-clock" title="Market clock"><Activity size={14} /><b>{marketClock}</b><small>{market === "NSE" ? "IST" : "UTC"}</small></span>
-            <span className="platform-status" data-tone={statusTone(freshness)} title="Market-data freshness"><i />Data <b>{freshness.toLowerCase()}</b></span>
+            <span className="platform-status" data-tone={statusTone(freshness)} title="Market-data freshness"><i />Data <b>{freshnessLabel}</b></span>
             <span className="platform-status" data-tone={statusTone(worker)} title="Background worker"><i />Worker <b>{worker.toLowerCase()}</b></span>
             <span className="platform-environment">{overview?.environment ?? "Connecting"}</span>
             <button className="platform-icon-action" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
@@ -181,12 +196,15 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
         </header>
         <aside className="platform-sidebar" aria-label="Platform navigation">
+          <button className="platform-sidebar-toggle" type="button" onClick={toggleSidebar} aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"} title={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}>
+            {sidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
           <nav>
             {navigationGroups.map((group) => (
               <section key={group.label} className="platform-nav-group" aria-label={group.label}>
                 <span>{group.label}</span>
                 {group.items.map(({ href, label, icon: Icon, match }) => (
-                  <a key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={() => setOpen(false)}>
+                  <a key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} title={sidebarCollapsed ? label : undefined} onClick={() => setOpen(false)}>
                     <Icon size={17} /><span>{label}</span>
                   </a>
                 ))}

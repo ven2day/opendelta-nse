@@ -41,10 +41,28 @@ class FactorDefinition:
     supported_timeframes: tuple[str, ...]
     parameters: tuple[FactorParameter, ...]
     warmup_bars: int
+    output_type: Literal["BOOLEAN", "EVENT", "NUMERIC", "CATEGORY"] = "NUMERIC"
+    directionality: Literal[
+        "HIGHER_BETTER", "LOWER_BETTER", "BETWEEN", "CATEGORY_MATCH", "EVENT"
+    ] = "HIGHER_BETTER"
+    default_predicate: str = "MINIMUM"
+    threshold_parameters: tuple[dict[str, Any], ...] = ()
+    valid_range: tuple[Any, ...] | None = None
+    entry_role: Literal["CONTEXT", "FILTER", "TRIGGER", "EXECUTION"] = "FILTER"
     missing_data_behavior: str = UNSUPPORTED_DATA_REQUIREMENT
 
     def public(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload.update(
+            outputType=self.output_type,
+            directionality=self.directionality,
+            defaultPredicate=self.default_predicate,
+            thresholdParameters=list(self.threshold_parameters),
+            validRange=self.valid_range,
+            entryRole=self.entry_role,
+            warmupBars=self.warmup_bars,
+        )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -57,6 +75,38 @@ class FactorOutput:
 
 ALL_TIMEFRAMES = ("1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "1d")
 ALL_MARKETS = ("NSE", "CRYPTO")
+
+
+FACTOR_SEMANTICS: dict[str, dict[str, Any]] = {
+    "ema_alignment": {"output_type": "CATEGORY", "directionality": "CATEGORY_MATCH", "default_predicate": "POSITIVE", "valid_range": (-1, 0, 1), "entry_role": "CONTEXT"},
+    "vwap_slope": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "CONTEXT"},
+    "market_structure": {"output_type": "BOOLEAN", "directionality": "EVENT", "default_predicate": "TRUE", "valid_range": (0, 1), "entry_role": "CONTEXT"},
+    "adx": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 25.0, "minimum": 0.0, "maximum": 100.0},), "valid_range": (0.0, 100.0), "entry_role": "CONTEXT"},
+    "normalized_ema_slope": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "CONTEXT"},
+    "trend_efficiency": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.3, "minimum": 0.0, "maximum": 1.0},), "valid_range": (0.0, 1.0), "entry_role": "CONTEXT"},
+    "rsi_recovery": {"output_type": "EVENT", "directionality": "EVENT", "default_predicate": "TRUE", "valid_range": (0, 1), "entry_role": "TRIGGER"},
+    "roc": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "FILTER"},
+    "macd_histogram_acceleration": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "FILTER"},
+    "atr_percentile": {"directionality": "BETWEEN", "default_predicate": "BETWEEN", "threshold_parameters": ({"name": "minimum", "default": 0.2, "minimum": 0.0, "maximum": 1.0}, {"name": "maximum", "default": 0.8, "minimum": 0.0, "maximum": 1.0}), "valid_range": (0.0, 1.0), "entry_role": "FILTER"},
+    "bollinger_width_percentile": {"directionality": "BETWEEN", "default_predicate": "BETWEEN", "threshold_parameters": ({"name": "minimum", "default": 0.2, "minimum": 0.0, "maximum": 1.0}, {"name": "maximum", "default": 0.8, "minimum": 0.0, "maximum": 1.0}), "valid_range": (0.0, 1.0), "entry_role": "FILTER"},
+    "candle_range_percentile": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.8, "minimum": 0.0, "maximum": 1.0},), "valid_range": (0.0, 1.0), "entry_role": "FILTER"},
+    "rvol": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 1.2, "minimum": 0.0},), "entry_role": "FILTER"},
+    "volume_zscore": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 1.0},), "entry_role": "FILTER"},
+    "volume_breakout": {"output_type": "EVENT", "directionality": "EVENT", "default_predicate": "TRUE", "valid_range": (0, 1), "entry_role": "FILTER"},
+    "relative_nifty": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "CONTEXT"},
+    "relative_sector": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "CONTEXT"},
+    "relative_ratio_slope": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "CONTEXT"},
+    "opening_range_breakout": {"output_type": "EVENT", "directionality": "EVENT", "default_predicate": "TRUE", "valid_range": (0, 1), "entry_role": "TRIGGER"},
+    "swing_breakout": {"output_type": "EVENT", "directionality": "EVENT", "default_predicate": "TRUE", "valid_range": (0, 1), "entry_role": "TRIGGER"},
+    "room_to_resistance": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.5, "minimum": 0.0},), "entry_role": "FILTER"},
+    "room_to_support": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.5, "minimum": 0.0},), "entry_role": "FILTER"},
+    "average_traded_value": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0, "minimum": 0.0},), "entry_role": "EXECUTION"},
+    "average_volume": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0, "minimum": 0.0},), "entry_role": "EXECUTION"},
+    "historical_spread": {"directionality": "LOWER_BETTER", "default_predicate": "MAXIMUM", "threshold_parameters": ({"name": "maximum", "default": 10.0, "minimum": 0.0},), "entry_role": "EXECUTION"},
+    "slippage_sensitivity": {"default_predicate": "MINIMUM", "threshold_parameters": ({"name": "minimum", "default": 0.0},), "entry_role": "EXECUTION"},
+    "market_regime": {"output_type": "CATEGORY", "directionality": "CATEGORY_MATCH", "default_predicate": "CATEGORY_IN", "threshold_parameters": ({"name": "categories", "default": ["TREND", "EXPANSION"]},), "valid_range": ("TREND", "RANGE", "COMPRESSION", "EXPANSION", "EXTREME_CHAOTIC"), "entry_role": "CONTEXT"},
+    "session_bucket": {"output_type": "CATEGORY", "directionality": "CATEGORY_MATCH", "default_predicate": "CATEGORY_IN", "threshold_parameters": ({"name": "categories", "default": []},), "entry_role": "EXECUTION"},
+}
 
 
 def parameter(name: str, default: int | float, minimum: int | float, maximum: int | float, description: str) -> FactorParameter:
@@ -77,10 +127,12 @@ def definition(
     warmup: int,
     *,
     markets: tuple[str, ...] = ALL_MARKETS,
+    version: str = "1.0.0",
 ) -> FactorDefinition:
+    semantics = FACTOR_SEMANTICS[factor_id]
     return FactorDefinition(
         factor_id=factor_id,
-        version="1.0.0",
+        version=version,
         name=name,
         family=family,
         description=description,
@@ -93,6 +145,7 @@ def definition(
         supported_timeframes=ALL_TIMEFRAMES,
         parameters=parameters,
         warmup_bars=warmup,
+        **semantics,
     )
 
 
@@ -103,7 +156,7 @@ FACTOR_CATALOG: tuple[FactorDefinition, ...] = (
     definition("adx", "Average Directional Index", "TREND_STRENGTH", "Wilder ADX summarizes directional movement strength.", "Trend strength, never direction.", "Use to distinguish persistent movement from chop.", "Avoid before its warm-up period.", "ADX strength does not say whether trend direction is up or down.", ("high", "low", "close"), (parameter("length", 14, 2, 100, "Wilder smoothing length"),), 28),
     definition("normalized_ema_slope", "Normalized EMA slope", "TREND_STRENGTH", "Normalizes EMA change by price.", "Scale-independent trend slope.", "Use to compare instruments with different prices.", "Avoid with very short windows.", "A steep historical slope is not guaranteed to persist.", ("close",), (parameter("length", 20, 2, 200, "EMA length"), parameter("slopeBars", 5, 1, 50, "Slope comparison bars")), 25),
     definition("trend_efficiency", "Trend-efficiency ratio", "TREND_STRENGTH", "Net movement divided by total path movement.", "How efficiently price moved in one direction.", "Use to penalize noisy paths.", "Avoid when the lookback has no movement.", "Efficiency measures path quality, not direction by itself.", ("close",), (parameter("length", 20, 2, 500, "Efficiency window"),), 20),
-    definition("rsi_recovery", "RSI recovery", "MOMENTUM", "Detects RSI crossing up through a recovery level after weakness.", "Recovery in Wilder RSI momentum.", "Use with an explicit arm and recovery rule.", "Avoid interpreting one threshold in isolation.", "Oversold is not an automatic BUY and overbought is not an automatic SELL.", ("close",), (parameter("length", 14, 2, 100, "RSI length"), parameter("level", 40, 1, 99, "Recovery threshold")), 15),
+    definition("rsi_recovery", "RSI recovery", "MOMENTUM", "Detects RSI crossing up through a recovery level after an explicit armed state.", "Recovery in Wilder RSI momentum.", "Use with an explicit arm and recovery rule.", "Avoid interpreting one threshold in isolation.", "Oversold is not an automatic BUY and overbought is not an automatic SELL.", ("close",), (parameter("length", 14, 2, 100, "RSI length"), parameter("armLow", 30, 0, 99, "Arm-zone lower bound"), parameter("armHigh", 40, 1, 100, "Arm-zone upper bound"), parameter("recoveryLevel", 40, 1, 99, "Recovery threshold"), parameter("setupExpiryBars", 50, 0, 1000, "Maximum bars after arming; zero never expires")), 15, version="2.0.0"),
     definition("roc", "Rate of Change", "MOMENTUM", "Percentage price change over a fixed window.", "Directional price momentum.", "Use for comparable return horizons.", "Avoid across unadjusted corporate actions.", "Large ROC does not measure trend quality.", ("close",), (parameter("length", 12, 1, 500, "Return window"),), 12),
     definition("macd_histogram_acceleration", "MACD histogram acceleration", "MOMENTUM", "Change in MACD histogram rather than its absolute sign.", "Acceleration or deceleration of EMA momentum.", "Use after slow EMA and signal warm-up.", "Avoid as a standalone reversal forecast.", "A rising negative histogram is improving momentum, not necessarily bullish price.", ("close",), (parameter("fast", 12, 2, 100, "Fast EMA"), parameter("slow", 26, 3, 200, "Slow EMA"), parameter("signal", 9, 2, 100, "Signal EMA")), 35),
     definition("atr_percentile", "ATR percentile", "VOLATILITY", "Ranks ATR as a percentage of close within history.", "Relative movement size.", "Use to compare current and historical volatility.", "Avoid before percentile warm-up.", "Volatility measures movement size, not direction.", ("high", "low", "close"), (parameter("length", 14, 2, 100, "ATR length"), parameter("rankWindow", 100, 20, 1000, "Percentile history")), 114),
@@ -186,7 +239,26 @@ class FactorEngine:
             if not item.minimum <= numeric <= item.maximum:
                 raise ValueError(f"{item.name} must be between {item.minimum} and {item.maximum}")
             resolved[item.name] = int(value) if isinstance(item.default, int) else numeric
+        if definition.factor_id in {"ema_alignment", "macd_histogram_acceleration"}:
+            if int(resolved["fast"]) >= int(resolved["slow"]):
+                raise ValueError("fast must be less than slow")
+        if definition.factor_id == "rsi_recovery":
+            if float(resolved["armLow"]) > float(resolved["armHigh"]):
+                raise ValueError("armLow must be less than or equal to armHigh")
+            if float(resolved["recoveryLevel"]) < float(resolved["armHigh"]):
+                raise ValueError("recoveryLevel must be greater than or equal to armHigh")
         return resolved
+
+    def calculation_parameters(
+        self, factor_id: str, supplied: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        definition = self.registry.get(factor_id)
+        calculation_names = {item.name for item in definition.parameters}
+        return {
+            key: value
+            for key, value in (supplied or {}).items()
+            if key in calculation_names
+        }
 
     def calculate(
         self,
@@ -208,8 +280,19 @@ class FactorEngine:
             return FactorOutput(definition, UNSUPPORTED_DATA_REQUIREMENT, None, f"MISSING:{','.join(missing)}")
         p = self.parameters(definition, parameters)
         values = self._calculate(definition.factor_id, frame, p, context, market)
+        if definition.output_type == "CATEGORY":
+            values = values.astype("object")
+            values.iloc[: definition.warmup_bars] = None
+        else:
+            values = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan)
+            values.iloc[: definition.warmup_bars] = np.nan
         values.name = f"{definition.factor_id}@{definition.version}"
-        return FactorOutput(definition, "SUPPORTED", values)
+        warning = None
+        if market == "NSE" and factor_id in {
+            "roc", "market_structure", "swing_breakout", "room_to_resistance", "room_to_support"
+        } and "corporate_action_adjusted" not in frame:
+            warning = "CORPORATE_ACTION_ADJUSTMENT_UNVERIFIED"
+        return FactorOutput(definition, "SUPPORTED", values, warning)
 
     def _calculate(self, factor_id: str, frame: pd.DataFrame, p: dict[str, Any], context: dict[str, pd.Series], market: str) -> pd.Series:
         close = frame["close"].astype(float)
@@ -244,7 +327,19 @@ class FactorEngine:
             return close.diff(length).abs() / close.diff().abs().rolling(length).sum().replace(0, np.nan)
         if factor_id == "rsi_recovery":
             rsi = _rsi(close, p["length"])
-            return ((rsi > p["level"]) & (rsi.shift(1) <= p["level"])).astype(float)
+            armed_at: int | None = None
+            events = pd.Series(0.0, index=frame.index)
+            for index, value in enumerate(rsi.to_numpy(dtype=float, copy=False)):
+                if armed_at is not None and p["setupExpiryBars"] > 0 and index - armed_at > p["setupExpiryBars"]:
+                    armed_at = None
+                previous = float(rsi.iloc[index - 1]) if index else np.nan
+                if armed_at is not None and index > armed_at and np.isfinite(previous) and previous <= p["recoveryLevel"] < value:
+                    events.iloc[index] = 1.0
+                    armed_at = None
+                    continue
+                if armed_at is None and np.isfinite(value) and p["armLow"] <= value <= p["armHigh"]:
+                    armed_at = index
+            return events
         if factor_id == "roc":
             return close.pct_change(p["length"]) * 100
         if factor_id == "macd_histogram_acceleration":
@@ -269,18 +364,25 @@ class FactorEngine:
             return (volume > volume.shift(1).rolling(p["length"]).max()).astype(float)
         if factor_id in {"relative_nifty", "relative_sector"}:
             dependency_key = "benchmark_close" if factor_id == "relative_nifty" else "sector_close"
-            dependency = context.get(dependency_key, frame[dependency_key])
+            dependency = context[dependency_key] if dependency_key in context else frame[dependency_key]
             return close.pct_change(p["length"]) - dependency.astype(float).pct_change(p["length"])
         if factor_id == "relative_ratio_slope":
-            benchmark = context.get("benchmark_close", frame["benchmark_close"])
+            benchmark = context["benchmark_close"] if "benchmark_close" in context else frame["benchmark_close"]
             ratio = close / benchmark.astype(float).replace(0, np.nan)
             return ratio.pct_change(p["length"])
         if factor_id == "opening_range_breakout":
             bars = p["bars"]
             timestamp = pd.to_datetime(frame["timestamp"], utc=True)
-            session = timestamp.dt.date
-            prior_high = high.groupby(session).transform(lambda values: values.iloc[:bars].max()).where(frame.groupby(session).cumcount() >= bars)
-            return (close > prior_high).astype(float)
+            local = timestamp.dt.tz_convert("Asia/Kolkata")
+            minute = local.dt.hour * 60 + local.dt.minute
+            trading = (local.dt.dayofweek < 5) & minute.between(555, 930)
+            session = local.dt.date.where(trading)
+            order = high.groupby(session, dropna=True).cumcount()
+            opening_high = high.where(trading).groupby(session, dropna=True).transform(
+                lambda values: values.iloc[:bars].max()
+            )
+            above = trading & (order >= bars) & (close > opening_high)
+            return (above & ~above.groupby(session, dropna=False).shift(1, fill_value=False)).astype(float)
         if factor_id == "swing_breakout":
             return (close > high.shift(1).rolling(p["length"]).max()).astype(float)
         if factor_id == "room_to_resistance":
@@ -294,11 +396,11 @@ class FactorEngine:
         if factor_id == "average_volume":
             return volume.rolling(p["length"]).mean()
         if factor_id == "historical_spread":
-            ask = context.get("ask", frame["ask"])
-            bid = context.get("bid", frame["bid"])
+            ask = context["ask"] if "ask" in context else frame["ask"]
+            bid = context["bid"] if "bid" in context else frame["bid"]
             return (ask - bid) / ((ask + bid) / 2) * 10_000
         if factor_id == "slippage_sensitivity":
-            returns = context.get("trade_returns", frame["trade_returns"])
+            returns = context["trade_returns"] if "trade_returns" in context else frame["trade_returns"]
             return returns.astype(float) - p["bps"] / 10_000
         if factor_id == "market_regime":
             length = p["length"]
@@ -316,9 +418,77 @@ class FactorEngine:
             if market == "NSE":
                 local = timestamp.dt.tz_convert("Asia/Kolkata")
                 minute = local.dt.hour * 60 + local.dt.minute
-                return pd.Series(np.select([minute < 630, minute < 780], ["NSE_OPEN", "NSE_MID"], default="NSE_CLOSE"), index=frame.index)
+                weekday = local.dt.dayofweek < 5
+                open_session = weekday & minute.between(555, 930)
+                values = np.select(
+                    [open_session & (minute < 630), open_session & (minute < 780), open_session],
+                    ["NSE_OPEN", "NSE_MID", "NSE_CLOSE"],
+                    default="CLOSED_SESSION",
+                )
+                return pd.Series(values, index=frame.index)
             hour = timestamp.dt.hour
             weekday = timestamp.dt.dayofweek
             session = pd.Series(np.select([hour < 8, hour < 16], ["ASIA_UTC", "EUROPE_UTC"], default="AMERICAS_UTC"), index=frame.index)
             return session + np.where(weekday >= 5, "_WEEKEND", "_WEEKDAY")
         raise ValueError(f"Factor calculation is not implemented: {factor_id}")
+
+
+def factor_predicate_parameters(
+    definition: FactorDefinition, supplied: dict[str, Any] | None
+) -> dict[str, Any]:
+    supplied = supplied or {}
+    resolved: dict[str, Any] = {}
+    for item in definition.threshold_parameters:
+        name = str(item["name"])
+        value = supplied.get(name, item.get("default"))
+        if name == "categories":
+            if not isinstance(value, list) or not all(isinstance(row, str) for row in value):
+                raise ValueError("categories must be a list of category names")
+            unknown = sorted(set(value).difference(definition.valid_range or ()))
+            if unknown:
+                raise ValueError(f"Unsupported categories: {', '.join(unknown)}")
+            resolved[name] = value
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be numeric")
+        numeric = float(value)
+        if "minimum" in item and numeric < float(item["minimum"]):
+            raise ValueError(f"{name} must be at least {item['minimum']}")
+        if "maximum" in item and numeric > float(item["maximum"]):
+            raise ValueError(f"{name} must be at most {item['maximum']}")
+        resolved[name] = numeric
+    if "minimum" in resolved and "maximum" in resolved and resolved["minimum"] > resolved["maximum"]:
+        raise ValueError("minimum must be less than or equal to maximum")
+    return resolved
+
+
+def factor_pass_mask(
+    output: FactorOutput,
+    supplied: dict[str, Any] | None = None,
+    *,
+    target_pct: float | None = None,
+    stop_loss_pct: float | None = None,
+) -> pd.Series:
+    if output.status != "SUPPORTED" or output.values is None:
+        raise ValueError(output.reason or UNSUPPORTED_DATA_REQUIREMENT)
+    definition = output.definition
+    parameters = factor_predicate_parameters(definition, supplied)
+    values = output.values
+    predicate = definition.default_predicate
+    if definition.factor_id == "room_to_resistance" and target_pct is not None:
+        parameters["minimum"] = max(float(parameters.get("minimum", 0.0)), target_pct)
+    if definition.factor_id == "room_to_support" and stop_loss_pct is not None:
+        parameters["minimum"] = max(float(parameters.get("minimum", 0.0)), stop_loss_pct)
+    if predicate in {"TRUE", "POSITIVE"}:
+        return pd.to_numeric(values, errors="coerce") > 0
+    if predicate == "MINIMUM":
+        return pd.to_numeric(values, errors="coerce") >= float(parameters["minimum"])
+    if predicate == "MAXIMUM":
+        return pd.to_numeric(values, errors="coerce") <= float(parameters["maximum"])
+    if predicate == "BETWEEN":
+        numeric = pd.to_numeric(values, errors="coerce")
+        return numeric.between(float(parameters["minimum"]), float(parameters["maximum"]), inclusive="both")
+    if predicate == "CATEGORY_IN":
+        categories = parameters.get("categories") or list(definition.valid_range or ())
+        return values.isin(categories)
+    raise ValueError(f"Unsupported factor predicate: {predicate}")

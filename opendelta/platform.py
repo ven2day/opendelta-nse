@@ -20,14 +20,15 @@ from .instruments import InstrumentRepository, InstrumentService
 from .jobs import JobRepository, JobService
 from .market_data import FeatureCache, PROVIDER_CAPABILITIES, freshness
 from .market_context import MarketContextService
-from .research import ResearchExperimentRequest, ResearchService
+from .research import ResearchRequest, ResearchService
 from .risk import RiskService
 from .strategies import StrategyRegistry
 
 
-CandleLoader = Callable[[ResearchExperimentRequest], Any]
+CandleLoader = Callable[[ResearchRequest], Any]
 CryptoInstrumentLoader = Callable[[], list[dict[str, Any]]]
 ProviderStatusLoader = Callable[[], dict[str, Any]]
+UniverseResolver = Callable[[str], list[str]]
 LEGACY_INVALID_RESEARCH_MODEL = "LEGACY_INVALID_RESEARCH_MODEL"
 LEGACY_RESEARCH_EXPLANATION = (
     "This result used one-bar next-open-to-next-close observations, not a strategy "
@@ -122,9 +123,11 @@ class PlatformRuntime:
         candle_loader: CandleLoader,
         crypto_instrument_loader: CryptoInstrumentLoader | None = None,
         provider_status_loader: ProviderStatusLoader | None = None,
+        universe_resolver: UniverseResolver | None = None,
     ) -> "PlatformRuntime":
         job_repository = JobRepository(settings.database_path)
         factor_engine = FactorEngine()
+        feature_cache = FeatureCache(settings.database_path)
         return cls(
             settings=settings,
             instruments=InstrumentService(
@@ -132,7 +135,12 @@ class PlatformRuntime:
             ),
             factors=factor_engine,
             strategies=StrategyRegistry(),
-            research=ResearchService(candle_loader, factor_engine),
+            research=ResearchService(
+                candle_loader,
+                factor_engine,
+                feature_cache,
+                universe_resolver,
+            ),
             risk=RiskService(),
             jobs=JobService(
                 job_repository,
@@ -141,7 +149,7 @@ class PlatformRuntime:
                 retry_limit=settings.job_retry_limit,
             ),
             job_repository=job_repository,
-            feature_cache=FeatureCache(settings.database_path),
+            feature_cache=feature_cache,
             market_context=MarketContextService(
                 settings.market_data_file, settings.data_stale_seconds
             ),
@@ -328,7 +336,7 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
             raise HTTPException(status_code=404, detail="Job was not found") from error
 
     @router.post("/research/estimate")
-    def estimate_research(request: ResearchExperimentRequest) -> dict[str, Any]:
+    def estimate_research(request: ResearchRequest) -> dict[str, Any]:
         try:
             return runtime_factory().research.estimate(request)
         except ValueError as error:
@@ -336,7 +344,7 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
 
     @router.post("/research/experiments", status_code=202)
     def start_research(
-        request: ResearchExperimentRequest,
+        request: ResearchRequest,
         idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
     ) -> dict[str, Any]:
         runtime = runtime_factory()

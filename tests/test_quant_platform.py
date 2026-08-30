@@ -202,8 +202,8 @@ def test_session_factor_separates_nse_and_crypto_weekend() -> None:
     )
     crypto = FactorEngine().calculate("session_bucket", frame, market="CRYPTO", timeframe="5m")
     nse = FactorEngine().calculate("session_bucket", frame, market="NSE", timeframe="5m")
-    assert crypto.values is not None and all(value.endswith("_WEEKEND") for value in crypto.values)
-    assert nse.values is not None and all(value.startswith("NSE_") for value in nse.values)
+    assert crypto.values is not None and all(value.endswith("_WEEKEND") for value in crypto.values.dropna())
+    assert nse.values is not None and set(nse.values.dropna()) == {"CLOSED_SESSION"}
 
 
 def test_market_context_never_manufactures_benchmark_or_sector_data(tmp_path: Path) -> None:

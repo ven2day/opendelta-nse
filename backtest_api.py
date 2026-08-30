@@ -59,7 +59,9 @@ from opendelta.platform import (
     create_platform_router,
     install_platform_observability,
 )
-from opendelta.research import ResearchExperimentRequest
+from opendelta.research import ResearchExperimentRequest, ResearchRequest
+from opendelta.research_v2 import ResearchExperimentRequestV2
+from opendelta.strategy_adapters import rsi_range_entries
 from market_symbol_registry import (
     MarketSymbolRegistry,
     SymbolAlreadyExistsError,
@@ -220,6 +222,7 @@ class TimeframeSpec:
 
 
 TIMEFRAMES: dict[str, TimeframeSpec] = {
+    "1m": TimeframeSpec("intraday", "1", 1),
     "5m": TimeframeSpec("intraday", "5", 5),
     "15m": TimeframeSpec("intraday", "15", 15),
     "30m": TimeframeSpec("intraday", "15", 15, 30),
@@ -1152,8 +1155,7 @@ def _fee(turnover: float) -> float:
 
 
 def _entry_signal(rsi: pd.Series, low: float, high: float) -> pd.Series:
-    inside = rsi.between(low, high, inclusive="both").fillna(False)
-    return inside & ~inside.shift(1, fill_value=False)
+    return rsi_range_entries(rsi, low, high)
 
 
 def _resample_session(frame: pd.DataFrame, target_minutes: int, base_minutes: int) -> pd.DataFrame:
@@ -3560,17 +3562,28 @@ def _platform_crypto_instruments() -> list[dict[str, Any]]:
     return [item.public() for item in get_crypto_market_service().list_instruments()]
 
 
-def _platform_candles(request: ResearchExperimentRequest) -> pd.DataFrame:
+def _platform_candles(request: ResearchRequest) -> pd.DataFrame:
+    timeframe = (
+        str(request.executionTimeframe)
+        if isinstance(request, ResearchExperimentRequestV2)
+        else request.timeframe
+    )
+    symbol = request.symbol
     if request.market == "NSE":
-        if request.timeframe not in TIMEFRAMES:
+        if timeframe not in TIMEFRAMES:
             raise ValueError(
-                f"{request.timeframe} NSE candles are unavailable from the configured provider"
+                f"{timeframe} NSE candles are unavailable from the configured provider"
             )
-        now_ist = datetime.now(IST)
-        analysis_start = now_ist - timedelta(days=366 * request.durationYears)
+        if isinstance(request, ResearchExperimentRequestV2):
+            analysis_start = datetime.combine(request.startDate, datetime_time.min, tzinfo=IST)
+            requested_end = datetime.combine(request.endDate, datetime_time.max, tzinfo=IST)
+            now_ist = min(datetime.now(IST), requested_end)
+        else:
+            now_ist = datetime.now(IST)
+            analysis_start = now_ist - timedelta(days=366 * request.durationYears)
         frame = get_store().candles(
-            request.symbol,
-            request.timeframe,
+            symbol,
+            timeframe,
             request.durationYears,
             analysis_start,
             now_ist,
@@ -3590,7 +3603,7 @@ def _platform_candles(request: ResearchExperimentRequest) -> pd.DataFrame:
         )
 
     service = get_crypto_market_service()
-    exact_symbol = request.symbol.strip().upper()
+    exact_symbol = symbol.strip().upper()
     matches = [
         instrument
         for instrument in service.list_instruments()
@@ -3604,11 +3617,15 @@ def _platform_candles(request: ResearchExperimentRequest) -> pd.DataFrame:
     ]
     if len(matches) != 1:
         raise ValueError(
-            f"{request.provider} does not publish the exact configured instrument {request.symbol}"
+            f"{request.provider} does not publish the exact configured instrument {symbol}"
         )
-    end = datetime.now(UTC)
-    start = end - timedelta(days=request.durationDays)
-    candles = service.sync_candles(matches[0], request.timeframe, start, end)
+    if isinstance(request, ResearchExperimentRequestV2):
+        start = datetime.combine(request.startDate, datetime_time.min, tzinfo=UTC)
+        end = min(datetime.now(UTC), datetime.combine(request.endDate, datetime_time.max, tzinfo=UTC))
+    else:
+        end = datetime.now(UTC)
+        start = end - timedelta(days=request.durationDays)
+    candles = service.sync_candles(matches[0], timeframe, start, end)
     return pd.DataFrame(
         [
             {
@@ -3633,6 +3650,7 @@ def get_platform_runtime() -> PlatformRuntime:
             _platform_candles,
             _platform_crypto_instruments,
             lambda: get_crypto_market_service().status(),
+            lambda identifier: get_universe_service().get_frozen_universe(identifier)[0],
         )
     return _platform_runtime
 

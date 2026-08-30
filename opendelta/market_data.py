@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -73,6 +74,8 @@ def normalize_candles(
     timeframe: str,
     now: datetime | None = None,
     timestamp_column: str = "timestamp",
+    timestamp_represents: Literal["START", "CLOSE"] = "START",
+    market: Literal["NSE", "CRYPTO"] | None = None,
 ) -> tuple[pd.DataFrame, DataQualityReport]:
     required = {timestamp_column, "open", "high", "low", "close", "volume"}
     missing = sorted(required.difference(frame.columns))
@@ -102,12 +105,18 @@ def normalize_candles(
         current = current.tz_localize("UTC")
     else:
         current = current.tz_convert("UTC")
-    completed = normalized[timestamp_column] + interval <= current
+    available_at = normalized[timestamp_column]
+    if timestamp_represents == "START":
+        available_at = available_at + interval
+    completed = available_at <= current
     incomplete = int((~completed).sum())
     normalized = normalized.loc[completed].copy()
     missing_candles = 0
     if len(normalized) > 1:
         gaps = normalized[timestamp_column].diff().dropna()
+        if market == "NSE":
+            local_sessions = normalized[timestamp_column].dt.tz_convert("Asia/Kolkata").dt.date
+            gaps = gaps.loc[local_sessions.eq(local_sessions.shift(1)).iloc[1:].to_numpy()]
         missing_candles = int(sum(max(0, round(gap / interval) - 1) for gap in gaps))
     issues = []
     if duplicate_count:
@@ -145,6 +154,7 @@ def align_completed_timeframe(
     lower_timestamp: str = "timestamp",
     higher_close_timestamp: str = "timestamp",
     prefix: str = "context_",
+    market: Literal["NSE", "CRYPTO"] | None = None,
 ) -> pd.DataFrame:
     """Backward-as-of join; higher candles become visible only at their close timestamp."""
     left = lower.copy()
@@ -159,14 +169,21 @@ def align_completed_timeframe(
         if column != higher_close_timestamp
     }
     right = right.rename(columns=renamed).rename(columns={higher_close_timestamp: f"{prefix}available_at"})
-    return pd.merge_asof(
+    by = None
+    if market == "NSE":
+        left["_market_session"] = left[lower_timestamp].dt.tz_convert("Asia/Kolkata").dt.date
+        right["_market_session"] = right[f"{prefix}available_at"].dt.tz_convert("Asia/Kolkata").dt.date
+        by = "_market_session"
+    aligned = pd.merge_asof(
         left,
         right,
         left_on=lower_timestamp,
         right_on=f"{prefix}available_at",
+        by=by,
         direction="backward",
         allow_exact_matches=True,
     )
+    return aligned.drop(columns=["_market_session"], errors="ignore")
 
 
 @dataclass(frozen=True)
@@ -182,6 +199,7 @@ class FeatureCacheKey:
     parameters: dict[str, Any]
     benchmark_dependency: str | None
     sector_dependency: str | None
+    session_calendar_version: str = "UNSPECIFIED"
 
     @property
     def key(self) -> str:
@@ -192,6 +210,11 @@ class FeatureCache:
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._metrics_lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+        self._writes = 0
+        self._invalidations = 0
         self.migrate()
 
     def connect(self) -> sqlite3.Connection:
@@ -222,6 +245,11 @@ class FeatureCache:
             row = connection.execute(
                 "SELECT payload_json FROM feature_cache WHERE cache_key = ?", (key.key,)
             ).fetchone()
+        with self._metrics_lock:
+            if row:
+                self._hits += 1
+            else:
+                self._misses += 1
         return json.loads(row["payload_json"]) if row else None
 
     def put(self, key: FeatureCacheKey, payload: Any) -> None:
@@ -232,18 +260,36 @@ class FeatureCache:
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(cache_key) DO UPDATE SET payload_json=excluded.payload_json, created_at=excluded.created_at
                 """,
-                (key.key, key.factor_id, key.data_version, json.dumps(payload), utc_now_iso()),
+                (
+                    key.key,
+                    key.factor_id,
+                    key.data_version,
+                    json.dumps(payload, allow_nan=False, separators=(",", ":")),
+                    utc_now_iso(),
+                ),
             )
+        with self._metrics_lock:
+            self._writes += 1
 
     def invalidate_data_version(self, data_version: str) -> int:
         with self.connect() as connection:
             cursor = connection.execute("DELETE FROM feature_cache WHERE data_version = ?", (data_version,))
-            return int(cursor.rowcount)
+            removed = int(cursor.rowcount)
+        with self._metrics_lock:
+            self._invalidations += removed
+        return removed
 
     def health(self) -> dict[str, Any]:
         with self.connect() as connection:
             count = int(connection.execute("SELECT COUNT(*) FROM feature_cache").fetchone()[0])
-        return {"status": "ok", "entries": count}
+        with self._metrics_lock:
+            metrics = {
+                "hits": self._hits,
+                "misses": self._misses,
+                "writes": self._writes,
+                "invalidations": self._invalidations,
+            }
+        return {"status": "ok", "entries": count, **metrics}
 
 
 def file_data_version(path: Path) -> str:

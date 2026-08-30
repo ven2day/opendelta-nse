@@ -700,6 +700,30 @@ class UniverseRepository:
                 return None
             return json.loads(self.active_path.read_text(encoding="utf-8"))
 
+    def load_frozen(self, identifier: str) -> dict[str, Any] | None:
+        """Resolve a frozen snapshot by immutable ID or version without path input."""
+
+        lookup = identifier.strip()
+        if not lookup or len(lookup) > 120 or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-" for character in lookup):
+            raise ValueError("Universe identifier is invalid")
+        with self._lock:
+            candidates: list[Path] = []
+            if self.active_path.is_file():
+                candidates.append(self.active_path)
+            if self.versions.is_dir():
+                candidates.extend(sorted(self.versions.glob("LIVE-*.json"), reverse=True))
+            seen: set[Path] = set()
+            for path in candidates:
+                if path in seen:
+                    continue
+                seen.add(path)
+                record = json.loads(path.read_text(encoding="utf-8"))
+                if not record.get("frozen"):
+                    continue
+                if lookup in {"active", str(record.get("universeId")), str(record.get("universeVersion"))}:
+                    return record
+        return None
+
     def history(self) -> list[dict[str, Any]]:
         with self._lock:
             if not self.versions.is_dir():
@@ -798,3 +822,12 @@ class UniverseService:
     def get_active_live_universe(self) -> tuple[list[str], dict[str, Any] | None]:
         active = self.repository.load_active()
         return (list(active.get("selectedSymbols", [])), active) if active else ([], None)
+
+    def get_frozen_universe(self, identifier: str) -> tuple[list[str], dict[str, Any]]:
+        record = self.repository.load_frozen(identifier)
+        if record is None:
+            raise ValueError("Frozen universe is unavailable")
+        symbols = list(_normalize_symbols(record.get("selectedSymbols", [])))
+        if not symbols:
+            raise ValueError("Frozen universe contains no symbols")
+        return symbols, record

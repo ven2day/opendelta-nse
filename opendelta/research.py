@@ -13,9 +13,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .analytics import summarize_returns
 from .core import PLATFORM_VERSION, UNSUPPORTED_DATA_REQUIREMENT, stable_id, utc_now_iso
 from .factors import FactorEngine, FactorRegistry
+from .market_data import FeatureCache
+from .research_v2 import ResearchEngineV2, ResearchExperimentRequestV2
 
 
 class ResearchExperimentRequest(BaseModel):
+    researchVersion: Literal["1"] = "1"
     mode: Literal["EXACT", "TOURNAMENT", "FORWARD_SELECTION"] = "EXACT"
     market: Literal["NSE", "CRYPTO"] = "NSE"
     provider: Literal["DHAN", "OKX", "VALR"] = "DHAN"
@@ -100,16 +103,31 @@ def monthly_stability(timestamps: pd.Series, returns: pd.Series) -> dict[str, An
     }
 
 
-CandleLoader = Callable[[ResearchExperimentRequest], pd.DataFrame]
+ResearchRequest = ResearchExperimentRequest | ResearchExperimentRequestV2
+CandleLoader = Callable[[ResearchRequest], pd.DataFrame]
 
 
 class ResearchService:
-    def __init__(self, candle_loader: CandleLoader, factor_engine: FactorEngine | None = None) -> None:
+    def __init__(
+        self,
+        candle_loader: CandleLoader,
+        factor_engine: FactorEngine | None = None,
+        feature_cache: FeatureCache | None = None,
+        universe_resolver: Callable[[str], list[str]] | None = None,
+    ) -> None:
         self.candle_loader = candle_loader
         self.factor_engine = factor_engine or FactorEngine()
         self.registry = self.factor_engine.registry
+        self.v2 = ResearchEngineV2(
+            candle_loader,
+            self.factor_engine,
+            feature_cache,
+            universe_resolver,
+        )
 
-    def estimate(self, request: ResearchExperimentRequest) -> dict[str, Any]:
+    def estimate(self, request: ResearchRequest) -> dict[str, Any]:
+        if isinstance(request, ResearchExperimentRequestV2):
+            return self.v2.estimate(request)
         self._validate_factors(request)
         combinations = combination_count(request.factorIds, self.registry)
         evaluated = len(request.factorIds) if request.mode == "TOURNAMENT" else min(combinations, request.beamWidth * len(request.factorIds))
@@ -141,6 +159,10 @@ class ResearchService:
             raise ValueError("Tournament factors must belong to one factor family")
 
     def run(self, payload: dict[str, Any], progress: Callable[[float], None], cancel: Callable[[], None]) -> dict[str, Any]:
+        if str(payload.get("researchVersion", "1")) == "2":
+            return self.v2.run(
+                ResearchExperimentRequestV2.model_validate(payload), progress, cancel
+            )
         request = ResearchExperimentRequest.model_validate(payload)
         self._validate_factors(request)
         estimate = self.estimate(request)

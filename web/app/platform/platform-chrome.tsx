@@ -169,7 +169,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
       <a className="platform-skip-link" href="#main-content">Skip to content</a>
       <div className="platform-shell" data-navigation-open={open ? "true" : "false"}>
         <header className="platform-topbar">
-          <button className="platform-menu" type="button" onClick={toggleNavigation} aria-label={open ? "Hide navigation" : "Show navigation"} title={open ? "Hide navigation" : "Show navigation"} aria-expanded={open}>
+          <button className="platform-menu" type="button" onClick={toggleNavigation} aria-label="Toggle navigation" title={open ? "Hide navigation" : "Show navigation"} aria-expanded={open}>
             <Menu size={20} />
           </button>
           <a className="platform-identity" href="/" aria-label="OpenDelta overview" onClick={closeNavigationOnMobile}>

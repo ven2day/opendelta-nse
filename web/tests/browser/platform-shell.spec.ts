@@ -113,11 +113,11 @@ test("desktop hamburger fully hides, restores, and remembers the sidebar", async
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
 
-  const hideNavigation = page.getByRole("button", { name: "Hide navigation" });
-  await expect(hideNavigation).toBeVisible();
-  await hideNavigation.click();
+  const menu = page.getByRole("button", { name: "Toggle navigation" });
+  await expect(menu).toHaveAttribute("aria-expanded", "true");
+  await menu.click();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "false");
-  await expect(page.getByRole("button", { name: "Show navigation" })).toBeVisible();
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
 
   await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
   await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeLessThanOrEqual(1);
@@ -125,7 +125,7 @@ test("desktop hamburger fully hides, restores, and remembers the sidebar", async
 
   await page.reload();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "false");
-  await page.getByRole("button", { name: "Show navigation" }).click();
+  await page.getByRole("button", { name: "Toggle navigation" }).click();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "true");
   await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
   await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeGreaterThanOrEqual(247);
@@ -190,9 +190,9 @@ test("data-health provider values wrap inside their columns", async ({ page }) =
 test("mobile navigation, logout, and authentication redirects work", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/markets");
-  const menu = page.getByRole("button", { name: "Show navigation" });
+  const menu = page.getByRole("button", { name: "Toggle navigation" });
   await menu.click();
-  await expect(page.getByRole("button", { name: "Hide navigation" })).toHaveAttribute("aria-expanded", "true");
+  await expect(menu).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator(".platform-sidebar")).toBeVisible();
   await page.locator(".platform-signout").click();
   await expect(page).toHaveURL(/\/login$/);

@@ -118,14 +118,9 @@ test("desktop sidebar collapses, expands, and remembers its state", async ({ pag
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "true");
   await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
 
-  const collapsedLayout = await page.evaluate(() => ({
-    sidebarWidth: document.querySelector<HTMLElement>(".platform-sidebar")?.getBoundingClientRect().width ?? 0,
-    contentMargin: Number.parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".platform-content")!).marginLeft),
-    stored: window.localStorage.getItem("opendelta-sidebar-collapsed"),
-  }));
-  expect(collapsedLayout.sidebarWidth).toBeLessThanOrEqual(80);
-  expect(collapsedLayout.contentMargin).toBeLessThanOrEqual(80);
-  expect(collapsedLayout.stored).toBe("true");
+  await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().width)).toBeLessThanOrEqual(80);
+  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeLessThanOrEqual(80);
+  expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-collapsed"))).toBe("true");
 
   await page.reload();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "true");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import time
 import json
@@ -25,6 +26,7 @@ from opendelta.jobs import JobRepository, JobService
 from opendelta.market_data import (
     FeatureCache,
     FeatureCacheKey,
+    freshness,
     align_completed_timeframe,
     normalize_candles,
 )
@@ -69,6 +71,44 @@ def settings(tmp_path: Path) -> PlatformSettings:
         job_retry_limit=0,
         environment="test",
     )
+
+
+def test_nse_freshness_treats_last_session_as_current_before_monday_open(tmp_path: Path) -> None:
+    market_file = tmp_path / "market.csv"
+    market_file.write_text("symbol,trading_date\nLUPIN,2026-08-28\n", encoding="utf-8")
+    friday_refresh = datetime(2026, 8, 28, 13, 57, tzinfo=UTC)
+    os.utime(market_file, (friday_refresh.timestamp(), friday_refresh.timestamp()))
+
+    result = freshness(
+        market_file,
+        3_600,
+        market="NSE",
+        now=datetime(2026, 8, 30, 22, 53, tzinfo=UTC),
+    )
+
+    assert result["status"] == "FRESH"
+    assert result["marketStatus"] == "CLOSED"
+    assert result["reason"] == "MARKET_CLOSED_LAST_SESSION_CURRENT"
+    assert result["expectedSessionDate"] == "2026-08-28"
+    assert result["dataSessionDate"] == "2026-08-28"
+
+
+def test_nse_freshness_remains_stale_during_an_open_session(tmp_path: Path) -> None:
+    market_file = tmp_path / "market.csv"
+    market_file.write_text("symbol,trading_date\nLUPIN,2026-08-28\n", encoding="utf-8")
+    friday_refresh = datetime(2026, 8, 28, 13, 57, tzinfo=UTC)
+    os.utime(market_file, (friday_refresh.timestamp(), friday_refresh.timestamp()))
+
+    result = freshness(
+        market_file,
+        3_600,
+        market="NSE",
+        now=datetime(2026, 8, 31, 5, 0, tzinfo=UTC),
+    )
+
+    assert result["status"] == "STALE"
+    assert result["marketStatus"] == "OPEN"
+    assert result["expectedSessionDate"] == "2026-08-31"
 
 
 def test_candle_normalization_deduplicates_rejects_invalid_and_incomplete() -> None:

@@ -103,14 +103,21 @@ test("Research Lab teaches factors and bounds experiments before execution", asy
   assert.match(backend, /liveOrdersEnabled.*False/s);
 });
 
-test("production image and service include the modular runtime without enabling broker orders", async () => {
-  const [dockerfile, service, platform, strategies] = await Promise.all([
+test("production images and service include health checks without enabling broker orders", async () => {
+  const [dashboardImage, dockerfile, runContainer, promoteCandidate, service, platform, strategies] = await Promise.all([
+    source("deploy/Dockerfile"),
     source("deploy/backtest.Dockerfile"),
+    source("deploy/run-container.sh"),
+    source("deploy/promote-candidate.sh"),
     source("deploy/vento-nse-backtest.service"),
     source("../opendelta/platform.py"),
     source("../opendelta/strategies.py"),
   ]);
+  assert.match(dashboardImage, /HEALTHCHECK[\s\S]*127\.0\.0\.1:3000\/login/);
   assert.match(dockerfile, /COPY opendelta \.\/opendelta/);
+  assert.match(dockerfile, /HEALTHCHECK[\s\S]*127\.0\.0\.1:8000\/health/);
+  assert.match(runContainer, /candidate_health[\s\S]*healthy/);
+  assert.match(promoteCandidate, /candidate_health[\s\S]*healthy/);
   assert.match(service, /PLATFORM_DATA_DIR=\/var\/lib\/vento-nse\/backtest\/platform/);
   assert.match(platform, /"paperOnly": True/);
   assert.match(platform, /"liveOrdersEnabled": False/);

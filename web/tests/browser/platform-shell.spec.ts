@@ -48,8 +48,12 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("route-aware shell has no duplicate navigation or viewport overflow", async ({ page }) => {
-  const platformRoutes = ["/markets", "/research", "/research/experiments", "/research/results", "/strategies", "/risk", "/data-health", "/jobs", "/settings"];
-  const legacyRoutes = ["/", "/scanner", "/backtest", "/backtest/crypto", "/signals", "/signals/funnel", "/signals/crypto", "/admin"];
+  const authenticatedRoutes = [
+    "/", "/markets", "/scanner", "/signals", "/signals/funnel", "/signals/crypto",
+    "/strategies", "/backtest", "/backtest/crypto", "/research", "/research/experiments",
+    "/research/results", "/risk", "/data-health", "/jobs", "/settings", "/admin",
+  ];
+  const routesWithEmbeddedHeader = new Set(["/", "/scanner", "/signals", "/signals/funnel", "/signals/crypto", "/backtest", "/backtest/crypto", "/admin"]);
   const viewports = [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -59,23 +63,36 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    for (const route of platformRoutes) {
+    for (const route of authenticatedRoutes) {
       await page.goto(route);
       await expect(page.locator(".platform-topbar")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar")).toHaveCount(1);
       await expect(page.locator('[aria-label="Toggle navigation"]')).toHaveCount(1);
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-      expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);
-    }
-    for (const route of legacyRoutes) {
-      await page.goto(route);
-      await expect(page.locator(".platform-topbar")).toHaveCount(0);
-      await expect(page.locator(".platform-sidebar")).toHaveCount(0);
-      await expect(page.locator('[aria-label="Toggle navigation"]')).toHaveCount(0);
+      await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
+      if (routesWithEmbeddedHeader.has(route)) {
+        await expect(page.locator(".global-header .brand")).not.toBeVisible();
+        await expect(page.locator(".global-header .top-nav")).not.toBeVisible();
+      }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);
     }
   }
+});
+
+test("theme preference persists while navigating between product areas", async ({ page }) => {
+  await page.goto("/");
+  const themeToggle = page.getByRole("button", { name: "Switch to light theme" });
+  await themeToggle.click();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
+
+  await page.goto("/backtest");
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
+  await expect(page.getByRole("button", { name: "Switch to dark theme" })).toBeVisible();
+
+  await page.goto("/markets");
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
 });
 
 test("research remains disabled and provider badges reflect status", async ({ page }) => {

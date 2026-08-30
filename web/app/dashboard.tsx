@@ -107,7 +107,7 @@ function formatPriceChange(value: number | null) {
 function formatIstDate(value: string | null) {
   if (!value) return "Awaiting session";
   const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return `${value} · IST`;
+  if (!year || !month || !day) return value;
 
   const date = new Date(Date.UTC(year, month - 1, day, 6, 30));
   const formatted = new Intl.DateTimeFormat("en-IN", {
@@ -117,7 +117,7 @@ function formatIstDate(value: string | null) {
     timeZone: "Asia/Kolkata",
   }).format(date);
 
-  return `${formatted} · IST`;
+  return formatted;
 }
 
 function formatDhanTimestamp(value: string | null) {
@@ -899,7 +899,7 @@ export function Dashboard({
                   <SortableHeader label="Current close" field="entry_price" activeKey={sortKey} direction={sortDirection} onSort={handleSort} />
                   <SortableHeader label="Change (₹)" field="change_price" activeKey={sortKey} direction={sortDirection} onSort={handleSort} />
                   <SortableHeader label="24h volume" field="volume_24h" activeKey={sortKey} direction={sortDirection} onSort={handleSort} />
-                  <th>Session</th>
+                  <th>Session (IST)</th>
                 </tr>
               </thead>
               <tbody>

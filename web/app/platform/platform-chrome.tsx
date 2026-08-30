@@ -1,4 +1,5 @@
 "use client";
+/* eslint-disable @next/next/no-html-link-for-pages -- Native navigation avoids stalled production transitions. */
 
 import {
   Activity,
@@ -20,7 +21,6 @@ import {
   X,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { platformGet, type PlatformMarket } from "./platform-client";
 
@@ -156,17 +156,17 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           <button className="platform-menu" type="button" onClick={() => setOpen((current) => !current)} aria-label="Toggle navigation" aria-expanded={open}>
             {open ? <X size={20} /> : <Menu size={20} />}
           </button>
-          <Link className="platform-identity" href="/" aria-label="OpenDelta overview" onClick={() => setOpen(false)}>
+          <a className="platform-identity" href="/" aria-label="OpenDelta overview" onClick={() => setOpen(false)}>
             <span aria-hidden="true">Δ</span>
             <div><strong>OpenDelta</strong><small>Quant research</small></div>
-          </Link>
+          </a>
           <div className="platform-route-context" aria-label="Current workspace">
             <span>Workspace</span>
             <strong>{activeItem.label}</strong>
           </div>
           <div className="platform-market-switch" role="group" aria-label="Active market">
             {(["NSE", "CRYPTO"] as PlatformMarket[]).map((item) => (
-              <Link key={item} className={market === item ? "active" : ""} href={marketHref(pathname, item)} aria-current={market === item ? "true" : undefined} onClick={() => setOpen(false)}>{item === "CRYPTO" ? "Crypto" : "NSE"}</Link>
+              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, item)} aria-current={market === item ? "true" : undefined} onClick={() => setOpen(false)}>{item === "CRYPTO" ? "Crypto" : "NSE"}</a>
             ))}
           </div>
           <div className="platform-live-strip">
@@ -186,9 +186,9 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
               <section key={group.label} className="platform-nav-group" aria-label={group.label}>
                 <span>{group.label}</span>
                 {group.items.map(({ href, label, icon: Icon, match }) => (
-                  <Link key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={() => setOpen(false)}>
+                  <a key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={() => setOpen(false)}>
                     <Icon size={17} /><span>{label}</span>
-                  </Link>
+                  </a>
                 ))}
               </section>
             ))}

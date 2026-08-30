@@ -79,6 +79,36 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
   }
 });
 
+test("sidebar links perform full document navigation in production", async ({ page }) => {
+  await page.goto("/");
+
+  const scannerLink = page.getByRole("link", { name: "Scanner", exact: true });
+  await expect(scannerLink).toHaveAttribute("href", "/scanner");
+  await page.evaluate(() => {
+    (window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe = true;
+  });
+  await Promise.all([
+    page.waitForURL("**/scanner"),
+    scannerLink.click(),
+  ]);
+  await expect(page).toHaveURL(/\/scanner$/);
+  expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
+  await expect(page.locator(".platform-route-context strong")).toHaveText("Scanner");
+
+  const backtestsLink = page.getByRole("link", { name: "Backtests", exact: true });
+  await expect(backtestsLink).toHaveAttribute("href", "/backtest");
+  await page.evaluate(() => {
+    (window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe = true;
+  });
+  await Promise.all([
+    page.waitForURL("**/backtest"),
+    backtestsLink.click(),
+  ]);
+  await expect(page).toHaveURL(/\/backtest$/);
+  expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
+  await expect(page.locator(".platform-route-context strong")).toHaveText("Backtests");
+});
+
 test("theme preference persists while navigating between product areas", async ({ page }) => {
   await page.goto("/");
   const themeToggle = page.getByRole("button", { name: "Switch to light theme" });

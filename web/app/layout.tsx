@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Manrope } from "next/font/google";
 import { headers } from "next/headers";
+import { PlatformChrome } from "./platform/platform-chrome";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -21,9 +22,9 @@ export async function generateMetadata(): Promise<Metadata> {
     "nse.ventoday.com";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
   const origin = `${protocol}://${host}`;
-  const title = "OpenDelta · RSI Market Dashboard";
+  const title = "OpenDelta · Quant Research Platform";
   const description =
-    "OpenDelta is a private NSE dashboard for RSI screening, historical backtesting, and traded-volume analysis.";
+    "OpenDelta is a private modular research platform for NSE and crypto market analysis, factors, backtests, signals, risk, and data quality.";
   const socialImage = new URL("/og.png", origin).toString();
 
   return {
@@ -56,7 +57,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${manrope.variable} ${jetBrainsMono.variable}`}>
-        {children}
+        <PlatformChrome />
+        <div className="platform-content">{children}</div>
       </body>
     </html>
   );

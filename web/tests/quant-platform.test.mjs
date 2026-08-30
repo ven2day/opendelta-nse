@@ -60,7 +60,7 @@ test("quant routes authenticate and render exactly one platform shell", async ()
   }
 });
 
-test("legacy routes retain only their existing shell", async () => {
+test("existing product routes render inside the unified platform shell", async () => {
   const worker = await loadWorker();
   const cookie = await login(worker);
   const routes = [
@@ -78,9 +78,10 @@ test("legacy routes retain only their existing shell", async () => {
     assert.equal(response.status, 200, `${path} should render`);
     const html = await response.text();
     assert.match(html, marker);
-    assert.equal(occurrences(html, /class="platform-topbar"/g), 0, `${path} must not render platform top bar`);
-    assert.equal(occurrences(html, /class="platform-sidebar"/g), 0, `${path} must not render platform sidebar`);
-    assert.equal(occurrences(html, /aria-label="Toggle navigation"/g), 0, `${path} must not render platform mobile menu`);
+    assert.equal(occurrences(html, /class="platform-topbar"/g), 1, `${path} should have one top bar`);
+    assert.equal(occurrences(html, /class="platform-sidebar"/g), 1, `${path} should have one sidebar`);
+    assert.equal(occurrences(html, /aria-label="Toggle navigation"/g), 1, `${path} should have one mobile menu`);
+    assert.equal(occurrences(html, /data-ui-version="unified-v2"/g), 1, `${path} should use the unified UI`);
   }
 });
 

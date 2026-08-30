@@ -109,6 +109,46 @@ test("sidebar links perform full document navigation in production", async ({ pa
   await expect(page.locator(".platform-route-context strong")).toHaveText("Backtests");
 });
 
+test("desktop sidebar collapses, expands, and remembers its state", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const collapse = page.getByRole("button", { name: "Collapse navigation" });
+  await collapse.click();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "true");
+  await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
+
+  const collapsedLayout = await page.evaluate(() => ({
+    sidebarWidth: document.querySelector<HTMLElement>(".platform-sidebar")?.getBoundingClientRect().width ?? 0,
+    contentMargin: Number.parseFloat(getComputedStyle(document.querySelector<HTMLElement>(".platform-content")!).marginLeft),
+    stored: window.localStorage.getItem("opendelta-sidebar-collapsed"),
+  }));
+  expect(collapsedLayout.sidebarWidth).toBeLessThanOrEqual(80);
+  expect(collapsedLayout.contentMargin).toBeLessThanOrEqual(80);
+  expect(collapsedLayout.stored).toBe("true");
+
+  await page.reload();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "true");
+  await page.getByRole("button", { name: "Expand navigation" }).click();
+  await expect(page.locator(".platform-frame")).toHaveAttribute("data-sidebar-collapsed", "false");
+});
+
+test("overview session values remain inside the table", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.getByRole("columnheader", { name: "Session (IST)" })).toBeVisible();
+
+  const sessions = page.locator(".session-cell");
+  expect(await sessions.count()).toBeGreaterThan(0);
+  const labels = await sessions.allTextContents();
+  for (const label of labels) expect(label).not.toContain("· IST");
+
+  const overflow = await sessions.evaluateAll((elements) =>
+    elements.map((element) => element.scrollWidth - element.clientWidth),
+  );
+  for (const pixels of overflow) expect(pixels).toBeLessThanOrEqual(1);
+});
+
 test("theme preference persists while navigating between product areas", async ({ page }) => {
   await page.goto("/");
   const themeToggle = page.getByRole("button", { name: "Switch to light theme" });

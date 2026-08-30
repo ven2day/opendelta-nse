@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import threading
 import time
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from opendelta.analytics import maximum_drawdown, summarize_returns, summarize_trade_ledger
 from opendelta.backtests import (
     ExecutionPolicy,
@@ -27,6 +30,7 @@ from opendelta.market_data import (
 )
 from opendelta.market_context import MarketContextService
 from opendelta.platform import (
+    LEGACY_INVALID_RESEARCH_MODEL,
     PlatformRuntime,
     create_platform_router,
 )
@@ -392,4 +396,82 @@ def test_platform_api_health_catalog_and_safety(tmp_path: Path) -> None:
     assert len(runtime.factors.registry.list()) >= 20
     assert any(row.key == "rsi_recovery" for row in runtime.strategies.list("NSE"))
     assert runtime.instruments.list("NSE", 0, 10)["rows"][0]["symbol"] == "LUPIN"
+    runtime.shutdown()
+
+
+def test_research_execution_fails_closed_and_overview_exposes_server_gate(tmp_path: Path) -> None:
+    runtime = PlatformRuntime.build(settings(tmp_path), lambda request: candle_frame())
+    app = FastAPI()
+    app.include_router(create_platform_router(lambda: runtime))
+    client = TestClient(app)
+
+    overview = client.get("/platform/overview")
+    assert overview.status_code == 200
+    assert overview.json()["researchEngine"] == {
+        "version": "2",
+        "enabled": False,
+        "status": "DISABLED_FAIL_CLOSED",
+        "legacyResultStatus": LEGACY_INVALID_RESEARCH_MODEL,
+        "message": "New Research experiments are disabled while Research V2 correctness is validated.",
+    }
+    blocked = client.post(
+        "/platform/research/experiments",
+        json=ResearchExperimentRequest(symbol="LUPIN", factorIds=["ema_alignment"]).snapshot(),
+    )
+    assert blocked.status_code == 503
+    assert "RESEARCH_ENGINE_V2_DISABLED" in blocked.json()["detail"]
+    assert runtime.job_repository.list() == []
+    runtime.shutdown()
+
+
+def test_legacy_research_results_are_annotated_without_deleting_payload(tmp_path: Path) -> None:
+    runtime = PlatformRuntime.build(settings(tmp_path), lambda request: candle_frame())
+    job, _ = runtime.job_repository.create(
+        "RESEARCH_EXPERIMENT", {"symbol": "LUPIN"}, "legacy-result", 1
+    )
+    runtime.job_repository.update(
+        job["jobId"],
+        status="COMPLETE",
+        result_json=json.dumps(
+            {
+                "experimentId": "experiment-legacy",
+                "untouchedTestResult": {"netProfit": 0.42},
+            }
+        ),
+    )
+    app = FastAPI()
+    app.include_router(create_platform_router(lambda: runtime))
+    result = TestClient(app).get(f"/platform/jobs/{job['jobId']}")
+
+    assert result.status_code == 200
+    body = result.json()
+    assert body["researchValidity"] == LEGACY_INVALID_RESEARCH_MODEL
+    assert body["result"]["researchValidity"] == LEGACY_INVALID_RESEARCH_MODEL
+    assert body["result"]["experimentId"] == "experiment-legacy"
+    assert body["result"]["untouchedTestResult"] == {"netProfit": 0.42}
+    assert runtime.job_repository.get(job["jobId"])["result"].get("researchValidity") is None
+    runtime.shutdown()
+
+
+def test_data_health_reports_actual_provider_engine_state(tmp_path: Path) -> None:
+    configured = settings(tmp_path)
+    runtime = PlatformRuntime.build(
+        configured,
+        lambda request: candle_frame(),
+        provider_status_loader=lambda: {
+            "engineStatus": "STOPPED",
+            "providers": ["OKX", "VALR"],
+            "lastError": None,
+        },
+    )
+    app = FastAPI()
+    app.include_router(create_platform_router(lambda: runtime))
+    response = TestClient(app).get("/platform/data-health")
+
+    assert response.status_code == 200
+    rows = {row["provider"]: row for row in response.json()["providers"]}
+    assert rows["DHAN"]["status"] == "FRESH"
+    assert rows["OKX"]["status"] == "STOPPED"
+    assert rows["VALR"]["status"] == "STOPPED"
+    assert all(row["privateTradingEndpoints"] is False for row in rows.values())
     runtime.shutdown()

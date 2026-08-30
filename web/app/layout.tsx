@@ -57,8 +57,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${manrope.variable} ${jetBrainsMono.variable}`}>
-        <PlatformChrome />
-        <div className="platform-content">{children}</div>
+        <PlatformChrome>{children}</PlatformChrome>
       </body>
     </html>
   );

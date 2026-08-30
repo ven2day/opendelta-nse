@@ -48,7 +48,11 @@ jq -e '
   .liveOrdersEnabled == false and
   (.factorCount >= 20) and
   (.factorFamilies | length) == 10 and
-  (.strategyCount >= 6)
+  (.strategyCount >= 6) and
+  .researchEngine.version == "2" and
+  .researchEngine.enabled == false and
+  .researchEngine.status == "DISABLED_FAIL_CLOSED" and
+  .researchEngine.legacyResultStatus == "LEGACY_INVALID_RESEARCH_MODEL"
 ' "${response}" >/dev/null
 
 curl -fsS -b "${cookie_jar}" "${base_url}/api/platform?action=factors" > "${response}"
@@ -91,5 +95,12 @@ curl -fsS -b "${cookie_jar}" \
   --data '{"mode":"EXACT","market":"NSE","provider":"DHAN","symbol":"LUPIN","timeframe":"1d","durationYears":1,"durationDays":30,"factorIds":["ema_alignment"],"minimumTrades":5,"beamWidth":1}' \
   "${base_url}/api/platform?action=estimate" > "${response}"
 jq -e '.possibleCombinations == 1 and .plannedEvaluations == 1 and .bounded == true' "${response}" >/dev/null
+
+research_status="$(curl -sS -o "${response}" -w '%{http_code}' -b "${cookie_jar}" \
+  -H 'Content-Type: application/json' \
+  --data '{"mode":"EXACT","market":"NSE","provider":"DHAN","symbol":"LUPIN","timeframe":"5m","factorIds":["ema_alignment"]}' \
+  "${base_url}/api/platform?action=experiment")"
+[[ "${research_status}" == "503" ]]
+jq -e '.detail | contains("RESEARCH_ENGINE_V2_DISABLED")' "${response}" >/dev/null
 
 echo "quant platform smoke passed"

@@ -16,6 +16,20 @@ PLATFORM_VERSION = "1.0.0"
 UNSUPPORTED_DATA_REQUIREMENT = "UNSUPPORTED_DATA_REQUIREMENT"
 
 
+def strict_environment_flag(name: str, default: bool = False) -> bool:
+    """Read a feature flag without allowing an ambiguous value to enable it."""
+
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise RuntimeError(f"{name} must be either true or false")
+
+
 def canonical_json(value: Any) -> str:
     if is_dataclass(value):
         value = asdict(value)
@@ -43,6 +57,7 @@ class PlatformSettings:
     maximum_pending_jobs: int = 20
     job_retry_limit: int = 2
     data_stale_seconds: int = 86_400
+    research_engine_v2_enabled: bool = False
     environment: Literal["production", "development", "test"] = "production"
 
     @classmethod
@@ -93,6 +108,9 @@ class PlatformSettings:
             maximum_pending_jobs=maximum_pending_jobs,
             job_retry_limit=retry_limit,
             data_stale_seconds=int(os.environ.get("PLATFORM_DATA_STALE_SECONDS", "86400")),
+            research_engine_v2_enabled=strict_environment_flag(
+                "RESEARCH_ENGINE_V2_ENABLED", False
+            ),
             environment=environment,  # type: ignore[arg-type]
         )
 

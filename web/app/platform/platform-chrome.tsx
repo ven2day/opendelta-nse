@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { platformGet, type PlatformMarket } from "./platform-client";
 
 type Overview = {
@@ -42,6 +42,22 @@ const navigation = [
   { href: "/settings", label: "Settings", icon: Settings2, match: (path: string) => path.startsWith("/settings") || path.startsWith("/admin") },
 ];
 
+const platformRoutePrefixes = [
+  "/markets",
+  "/research",
+  "/strategies",
+  "/risk",
+  "/data-health",
+  "/jobs",
+  "/settings",
+];
+
+export function usesPlatformShell(pathname: string): boolean {
+  return platformRoutePrefixes.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
 function marketFor(path: string, selected?: string | null): PlatformMarket {
   if (path.startsWith("/markets") && selected === "CRYPTO") return "CRYPTO";
   return path.includes("crypto") ? "CRYPTO" : "NSE";
@@ -53,21 +69,23 @@ function marketHref(path: string, market: PlatformMarket): string {
   return market === "CRYPTO" ? "/markets?market=CRYPTO" : "/markets?market=NSE";
 }
 
-export function PlatformChrome() {
+export function PlatformChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const [clock, setClock] = useState(() => new Date());
   const [overview, setOverview] = useState<Overview | null>(null);
+  const shellEnabled = usesPlatformShell(pathname);
   const market = marketFor(pathname, searchParams.get("market"));
 
   useEffect(() => {
+    if (!shellEnabled) return;
     const timer = window.setInterval(() => setClock(new Date()), 1_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [shellEnabled]);
 
   useEffect(() => {
-    if (pathname === "/login") return;
+    if (!shellEnabled) return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -83,7 +101,7 @@ export function PlatformChrome() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [pathname]);
+  }, [pathname, shellEnabled]);
 
   const marketClock = useMemo(() => new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
@@ -93,11 +111,12 @@ export function PlatformChrome() {
     timeZone: market === "NSE" ? "Asia/Kolkata" : "UTC",
   }).format(clock), [clock, market]);
 
-  if (pathname === "/login") return null;
+  if (!shellEnabled) return <>{children}</>;
   const freshness = overview?.dataFreshness?.status ?? "CHECKING";
   const worker = overview?.jobStatus?.status ?? "CHECKING";
 
   return (
+    <>
     <div className="platform-shell" data-navigation-open={open ? "true" : "false"}>
       <header className="platform-topbar">
         <button className="platform-menu" type="button" onClick={() => setOpen((current) => !current)} aria-label="Toggle navigation" aria-expanded={open}>
@@ -132,5 +151,7 @@ export function PlatformChrome() {
       </aside>
       {open && <button className="platform-backdrop" type="button" onClick={() => setOpen(false)} aria-label="Close navigation" />}
     </div>
+    <div className="platform-content">{children}</div>
+    </>
   );
 }

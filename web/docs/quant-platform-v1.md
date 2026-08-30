@@ -104,7 +104,14 @@ Existing production engines remain active for existing strategies. The modular c
 
 Existing RSI Recovery evaluation remains unchanged. The signal-first scanner prevents duplicates, records rejection reasons, limits trade-ready/watch candidates, and remains paper-only. Research is not connected to broker execution.
 
-Research modes use chronological training, validation, and untouched test splits:
+The original Research implementation is disabled because it used one-bar
+next-open-to-next-close observations rather than an actual base strategy and
+complete trade lifecycle. Retained results are read-only and labelled
+`LEGACY_INVALID_RESEARCH_MODEL`. The server-side
+`RESEARCH_ENGINE_V2_ENABLED` flag defaults to false and cannot be overridden by
+the browser.
+
+Research V2 will use chronological training, validation, and untouched test splits:
 
 - Exact evaluates one configuration.
 - Tournament compares one family against a fixed baseline.
@@ -189,5 +196,5 @@ Rollback restores the recorded release symlink, dashboard/backtest images and se
 - Historical spread requires synchronized bid/ask quotes.
 - Dhan 1-minute research remains unavailable when the configured store does not expose it.
 - OKX/VALR coverage and rate limits differ; exact provider instruments only.
-- Research V1 uses a causal one-bar next-open/next-close outcome. It is not a profitability claim.
+- Research V2 remains disabled until its deterministic strategy-backtest and production acceptance gates pass.
 - Jobs use bounded in-process threads. A durable external queue is an extension point only if future measured workload requires multi-host workers.

@@ -28,6 +28,75 @@ from .strategies import StrategyRegistry
 CandleLoader = Callable[[ResearchExperimentRequest], Any]
 CryptoInstrumentLoader = Callable[[], list[dict[str, Any]]]
 ProviderStatusLoader = Callable[[], dict[str, Any]]
+LEGACY_INVALID_RESEARCH_MODEL = "LEGACY_INVALID_RESEARCH_MODEL"
+LEGACY_RESEARCH_EXPLANATION = (
+    "This result used one-bar next-open-to-next-close observations, not a strategy "
+    "backtest with a complete position lifecycle. It must not be interpreted as "
+    "strategy profitability."
+)
+
+
+def research_engine_status(settings: PlatformSettings) -> dict[str, Any]:
+    enabled = settings.research_engine_v2_enabled
+    return {
+        "version": "2",
+        "enabled": enabled,
+        "status": "ENABLED" if enabled else "DISABLED_FAIL_CLOSED",
+        "legacyResultStatus": LEGACY_INVALID_RESEARCH_MODEL,
+        "message": (
+            "Research V2 is enabled after server-side acceptance gates."
+            if enabled
+            else "New Research experiments are disabled while Research V2 correctness is validated."
+        ),
+    }
+
+
+def mark_legacy_research_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Annotate old research jobs at read time without mutating retained history."""
+
+    if job.get("jobType") != "RESEARCH_EXPERIMENT":
+        return job
+    result = job.get("result")
+    if isinstance(result, dict) and result.get("researchVersion") == "2":
+        return job
+    marked = {
+        **job,
+        "researchValidity": LEGACY_INVALID_RESEARCH_MODEL,
+        "researchWarning": LEGACY_RESEARCH_EXPLANATION,
+    }
+    if isinstance(result, dict):
+        marked["result"] = {
+            **result,
+            "researchValidity": LEGACY_INVALID_RESEARCH_MODEL,
+            "researchWarning": LEGACY_RESEARCH_EXPLANATION,
+        }
+    return marked
+
+
+def provider_rows(runtime: "PlatformRuntime") -> list[dict[str, Any]]:
+    market_data = freshness(
+        runtime.settings.market_data_file, runtime.settings.data_stale_seconds
+    )
+    engine = runtime.provider_health()
+    engine_providers = set(engine.get("providers") or [])
+    rows: list[dict[str, Any]] = []
+    for capability in PROVIDER_CAPABILITIES.values():
+        if capability.provider == "DHAN":
+            status = market_data.get("status", "NOT_PROBED")
+        elif engine.get("status") == "DEGRADED":
+            status = "DEGRADED"
+        elif capability.provider not in engine_providers:
+            status = "UNAVAILABLE"
+        else:
+            status = str(engine.get("engineStatus") or "NOT_PROBED")
+        rows.append(
+            {
+                **capability.__dict__,
+                "status": status,
+                "privateTradingEndpoints": False,
+            }
+        )
+    return rows
 
 
 @dataclass
@@ -176,6 +245,7 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
             "dataFreshness": freshness(
                 runtime.settings.market_data_file, runtime.settings.data_stale_seconds
             ),
+            "researchEngine": research_engine_status(runtime.settings),
             "paperOnly": True,
             "liveOrdersEnabled": False,
         }
@@ -229,14 +299,7 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
                 runtime.settings.market_data_file, runtime.settings.data_stale_seconds
             ),
             "featureCache": runtime.feature_cache.health(),
-            "providers": [
-                {
-                    **capability.__dict__,
-                    "status": "CONFIGURED",
-                    "privateTradingEndpoints": False,
-                }
-                for capability in PROVIDER_CAPABILITIES.values()
-            ],
+            "providers": provider_rows(runtime),
             "providerEngine": runtime.provider_health(),
             "warnings": [
                 "Provider availability is evaluated independently per instrument and timeframe",
@@ -247,13 +310,13 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
     @router.get("/jobs")
     def jobs(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
         runtime = runtime_factory()
-        rows = runtime.job_repository.list(limit)
+        rows = [mark_legacy_research_job(row) for row in runtime.job_repository.list(limit)]
         return {"rows": rows, "count": len(rows), "worker": runtime.jobs.health()}
 
     @router.get("/jobs/{job_id}")
     def job(job_id: str) -> dict[str, Any]:
         try:
-            return runtime_factory().job_repository.get(job_id)
+            return mark_legacy_research_job(runtime_factory().job_repository.get(job_id))
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Job was not found") from error
 
@@ -277,6 +340,14 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
         idempotency_key: str | None = Header(default=None, alias="X-Idempotency-Key"),
     ) -> dict[str, Any]:
         runtime = runtime_factory()
+        if not runtime.settings.research_engine_v2_enabled:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "RESEARCH_ENGINE_V2_DISABLED: new experiments are blocked by the "
+                    "server-side fail-closed safety gate"
+                ),
+            )
         try:
             runtime.research.estimate(request)
             result = runtime.jobs.submit(

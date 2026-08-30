@@ -22,7 +22,7 @@ async function mockPlatform(page: Page) {
       marketData: { status: "HEALTHY", ageSeconds: 60 },
       featureCache: { status: "HEALTHY", entries: 2 },
       providers: [
-        { provider: "DHAN", markets: ["NSE"], timeframes: ["5m"], data_types: ["candles"], timezone: "Asia/Kolkata", public_only: false, status: "HEALTHY", privateTradingEndpoints: false },
+        { provider: "DHAN", markets: ["NSE"], timeframes: ["1m", "5m", "15m", "30m", "1h", "6h", "1d"], data_types: ["historical_candles", "live_quotes"], timezone: "Asia/Kolkata", public_only: false, status: "HEALTHY", privateTradingEndpoints: false },
         { provider: "OKX", markets: ["CRYPTO"], timeframes: ["5m"], data_types: ["candles"], timezone: "UTC", public_only: true, status: "DEGRADED", privateTradingEndpoints: false },
         { provider: "VALR", markets: ["CRYPTO"], timeframes: ["5m"], data_types: ["candles"], timezone: "UTC", public_only: true, status: "UNAVAILABLE", privateTradingEndpoints: false },
       ],
@@ -135,6 +135,18 @@ test("research remains disabled and provider badges reflect status", async ({ pa
   await expect(page.getByRole("cell", { name: "HEALTHY" }).locator(".quant-badge")).toHaveClass(/good/);
   await expect(page.getByRole("cell", { name: "DEGRADED" }).locator(".quant-badge")).toHaveClass(/warn/);
   await expect(page.getByRole("cell", { name: "UNAVAILABLE" }).locator(".quant-badge")).toHaveClass(/bad/);
+});
+
+test("data-health provider values wrap inside their columns", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/data-health");
+  await expect(page.locator(".data-health-table")).toBeVisible();
+
+  const overflow = await page.locator(".data-health-values").evaluateAll((elements) =>
+    elements.map((element) => element.scrollWidth - element.clientWidth),
+  );
+  expect(overflow.length).toBeGreaterThan(0);
+  for (const pixels of overflow) expect(pixels).toBeLessThanOrEqual(1);
 });
 
 test("mobile navigation, logout, and authentication redirects work", async ({ page }) => {

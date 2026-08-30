@@ -33,8 +33,27 @@ python market_data_admin.py load-sessions --market NSE --file /secure/path/nse-s
 ```
 
 The CSV columns are `session_date,is_trading_day,open_time,close_time,calendar_version`.
-See [ADR 0004](web/docs/adr/0004-timescaledb-canonical-market-data.md). Redis is
-not required for this phase.
+Fresh Dhan cache fetches and OKX SQLite syncs then dual-write completed candles
+to TimescaleDB. A failed canonical write never replaces or corrupts the legacy
+copy; the failure is exposed by `/platform/data-health` for repair.
+
+Queue resumable historical work with one command or a CSV manifest:
+
+```bash
+python market_data_admin.py enqueue-nse-universe \
+  --timeframe 5m --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z
+python market_data_admin.py enqueue-okx-configured \
+  --timeframe 5m --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z
+python market_data_worker.py --providers DHAN,OKX --maximum-chunks 100
+python market_data_admin.py health
+```
+
+Each chunk is leased to one worker, checkpointed, retried with bounded backoff,
+and reconciled by row count and SHA-256 before the checkpoint advances. The
+completed range is gap-checked and repaired against the explicit NSE calendar
+or continuous crypto UTC timeline. See [market-data operations](web/docs/market-data-operations.md)
+and [ADR 0004](web/docs/adr/0004-timescaledb-canonical-market-data.md). Redis is
+not required for this phase, and existing readers are still unchanged.
 
 Authenticated NSE market-research dashboard with RSI filters, signals,
 point-in-time backtesting, saved account history and auditable strategy

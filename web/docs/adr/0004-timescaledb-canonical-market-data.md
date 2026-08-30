@@ -16,9 +16,13 @@ state before measurements show it is needed.
 
 ## Safety and rollout
 
-Existing file and SQLite readers are not removed in this change. Provision
-TimescaleDB, apply the migration, load an authoritative NSE session calendar,
-run dual writes and reconcile counts/checksums before changing readers.
+Existing file and SQLite readers are not removed in this change. Fresh Dhan
+provider fetches and OKX syncs retain their legacy persistence and additionally
+write completed candles through one best-effort canonical writer. Persistent
+backfill jobs use leases, checkpoints, bounded retries, count/SHA-256
+reconciliation, and final gap repair. Provision TimescaleDB, apply the
+migration, and load an authoritative NSE session calendar before starting the
+worker. Readers may change only after production reconciliation passes.
 Research V2 remains fail-closed.
 
 NSE gaps are derived only from explicit `market_sessions` rows. The repair

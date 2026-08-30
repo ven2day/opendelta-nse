@@ -27,11 +27,16 @@ from daily_scalping_watchlist import (
     stable_fingerprint,
 )
 from main import IST
+from nse_signal_funnel import (
+    NseSignalFunnelRepository,
+    build_nse_signal_funnel,
+)
 
 SCANNER_VERSION = "stock-scanner-1.1.0"
-SCANNER_FEATURE_CACHE_VERSION = "stock-scanner-features-1.0.0"
+SCANNER_FEATURE_CACHE_VERSION = "stock-scanner-features-2.0.0"
 SCANNER_TIMEFRAME = "5m"
 SCANNER_MAX_SOURCE_ROWS = 12_000
+SCANNER_SIGNAL_WARMUP_ROWS = 160
 SCANNER_CONFIG = DailyWatchlistConfig(
     mode="ROLLING",
     selection_time="09:30",
@@ -157,13 +162,12 @@ def prepare_scanner_feature_task(task: Mapping[str, Any]) -> dict[str, Any]:
                 "cacheHit": False,
             }
         features = calculate_watchlist_features(candles, SCANNER_CONFIG)
-        latest_day = pd.Timestamp(features.index.max()).date()
-        latest_session = features[pd.DatetimeIndex(features.index).date == latest_day].copy()
+        latest_window = features.tail(SCANNER_SIGNAL_WARMUP_ROWS).copy()
         feature_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = feature_path.with_suffix(f".{os.getpid()}.tmp.parquet")
-        latest_session.to_parquet(temporary, index=True)
+        latest_window.to_parquet(temporary, index=True)
         os.replace(temporary, feature_path)
-        return {"symbol": symbol, "frame": latest_session, "error": None, "cacheHit": False}
+        return {"symbol": symbol, "frame": latest_window, "error": None, "cacheHit": False}
     except (EOFError, OSError, RuntimeError, StopIteration, ValueError, KeyError) as error:
         return {
             "symbol": symbol,
@@ -203,7 +207,7 @@ def _empty_snapshot(
             "completedCandlesOnly": True,
             "paperOnly": True,
             "liveOrdersEnabled": False,
-            "signalUniversePolicy": "FROZEN_AT_09_30",
+            "signalUniversePolicy": "SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE",
         },
         "watchlist": {
             "topFive": [],
@@ -215,10 +219,11 @@ def _empty_snapshot(
         },
         "opportunities": [],
         "eligibility": {"eligible": 0, "rejected": 0, "rejectionCounts": {}},
+        "signalFunnel": build_nse_signal_funnel({}, [], as_of=now_ist),
         "errors": list(errors),
         "warnings": [
             "Research and paper-signal only. The scanner has no broker-order path.",
-            "RSI Recovery signals continue to use their separately frozen signal universe.",
+            "The signal-first funnel evaluates every eligible symbol; it does not force a minimum number of trades.",
         ],
     }
 
@@ -334,6 +339,10 @@ def build_stock_scanner_snapshot(
         maximum_spread_pct=effective_config.live_maximum_spread_pct,
     )
     eligible = [row for row in ranked if bool(row.get("eligible"))]
+    ranked_for_funnel = [
+        {**row, "rank": rank}
+        for rank, row in enumerate(eligible, start=1)
+    ]
     opportunities = [
         _entry_with_name({**row, "rank": rank}, company_names)
         for rank, row in enumerate(eligible[:20], start=1)
@@ -370,7 +379,8 @@ def build_stock_scanner_snapshot(
     freshness = max(0.0, (pd.Timestamp(now) - latest_source).total_seconds() / 60.0)
     warnings = [
         "Research and paper-signal only. The scanner has no broker-order path.",
-        "RSI Recovery signals continue to use their separately frozen 09:30 signal universe.",
+        "The signal-first funnel evaluates active RSI Recovery across every eligible symbol; retired VWAP Pullback candidates remain WATCH-only research context.",
+        "The original RSI Recovery live workspace remains unchanged and separately auditable.",
         "Historical bid/ask spread is advisory when unavailable and is never fabricated.",
     ]
     if nifty_row is None:
@@ -402,7 +412,7 @@ def build_stock_scanner_snapshot(
             "completedCandlesOnly": True,
             "paperOnly": True,
             "liveOrdersEnabled": False,
-            "signalUniversePolicy": "FROZEN_AT_09_30",
+            "signalUniversePolicy": "SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE",
         },
         "watchlist": {
             "topFive": top_five,
@@ -413,6 +423,11 @@ def build_stock_scanner_snapshot(
             "history": history_payload,
         },
         "opportunities": opportunities,
+        "signalFunnel": build_nse_signal_funnel(
+            feature_frames,
+            ranked_for_funnel,
+            as_of=final_rescan,
+        ),
         "eligibility": {
             "eligible": len(eligible),
             "rejected": len(ranked) - len(eligible),
@@ -426,13 +441,24 @@ def build_stock_scanner_snapshot(
 class StockScannerService:
     """Short-lived cache around local-only scanner calculation."""
 
-    def __init__(self, store: CachedCandleStore, cache_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        store: CachedCandleStore,
+        cache_seconds: int = 60,
+        funnel_repository: NseSignalFunnelRepository | None = None,
+    ) -> None:
         self.store = store
         self.cache_seconds = max(1, int(cache_seconds))
         self._lock = threading.Lock()
         self._cache_key: tuple[Any, ...] | None = None
         self._cache_expires = 0.0
         self._cache_value: dict[str, Any] | None = None
+        cache_directory = getattr(store, "cache_directory", None)
+        self.funnel_repository = funnel_repository
+        if self.funnel_repository is None and isinstance(cache_directory, Path) and cache_directory.is_absolute():
+            self.funnel_repository = NseSignalFunnelRepository(
+                cache_directory / "nse-signal-funnel" / "events.sqlite3"
+            )
 
     def _feature_cache_path(
         self,
@@ -473,7 +499,7 @@ class StockScannerService:
         safe_symbol = "".join(
             character for character in symbol if character.isalnum() or character in "-&"
         )
-        return Path(cache_directory) / "stock-scanner-features-v1" / safe_symbol / f"{feature_key}.parquet"
+        return Path(cache_directory) / "stock-scanner-features-v2" / safe_symbol / f"{feature_key}.parquet"
 
     def _load_features(
         self,
@@ -505,14 +531,13 @@ class StockScannerService:
         if candles.empty:
             return None, False
         features = calculate_watchlist_features(candles, SCANNER_CONFIG)
-        latest_day = pd.Timestamp(features.index.max()).date()
-        latest_session = features[pd.DatetimeIndex(features.index).date == latest_day].copy()
+        latest_window = features.tail(SCANNER_SIGNAL_WARMUP_ROWS).copy()
         if feature_path is not None:
             feature_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = feature_path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp.parquet")
-            latest_session.to_parquet(temporary, index=True)
+            latest_window.to_parquet(temporary, index=True)
             os.replace(temporary, feature_path)
-        return latest_session, False
+        return latest_window, False
 
     def _process_task(
         self,
@@ -655,6 +680,12 @@ class StockScannerService:
                 "runtimeSeconds": round(time.perf_counter() - calculation_started, 3),
                 "resultSource": "FRESH_CALCULATION",
             }
+            if self.funnel_repository is not None:
+                controlled_funnel, persisted = self.funnel_repository.enforce_daily_controls_and_persist(
+                    result["signalFunnel"]
+                )
+                controlled_funnel["metadata"]["persistedEvents"] = persisted
+                result["signalFunnel"] = controlled_funnel
             self._cache_key = cache_key
             self._cache_expires = time.monotonic() + self.cache_seconds
             self._cache_value = result

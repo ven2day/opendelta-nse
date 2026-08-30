@@ -3904,7 +3904,7 @@ def _stock_scanner_company_names(path: Path) -> dict[str, str]:
 
 @app.get("/stock-scanner")
 def stock_scanner(refresh: bool = Query(default=False)) -> dict[str, Any]:
-    """Return the causal, paper-only 15-minute Top-5 scanner snapshot."""
+    """Return the causal, paper-only NSE signal funnel and activity context."""
     try:
         market_symbols = list_market_symbols()
         settings = get_application_settings_repository().get()

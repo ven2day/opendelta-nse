@@ -13,6 +13,7 @@ from main import IST
 from daily_scalping_watchlist import calculate_watchlist_features
 from stock_scanner import (
     SCANNER_CONFIG,
+    SCANNER_SIGNAL_WARMUP_ROWS,
     StockScannerService,
     build_stock_scanner_snapshot,
     prepare_scanner_feature_task,
@@ -120,11 +121,14 @@ def test_minimum_residence_prevents_first_rescan_churn() -> None:
     assert result["watchlist"]["history"][1]["replacements"] == 0
 
 
-def test_scanner_is_paper_only_and_keeps_signal_universe_frozen() -> None:
+def test_scanner_is_paper_only_and_uses_the_full_eligible_signal_funnel() -> None:
     result = _snapshot("2026-08-28T09:47:00+05:30")
     assert result["metadata"]["paperOnly"] is True
     assert result["metadata"]["liveOrdersEnabled"] is False
-    assert result["metadata"]["signalUniversePolicy"] == "FROZEN_AT_09_30"
+    assert result["metadata"]["signalUniversePolicy"] == "SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE"
+    assert result["signalFunnel"]["metadata"]["paperOnly"] is True
+    assert result["signalFunnel"]["metadata"]["liveOrdersEnabled"] is False
+    assert result["signalFunnel"]["counts"]["strategyEvaluations"] == 12
 
 
 class _CachedStore:
@@ -272,8 +276,7 @@ def test_process_feature_task_matches_full_local_reader(tmp_path: Path) -> None:
     store.cache_directory = tmp_path
     full_candles = store.cached_candles("TEST", "5m", 1, analysis_start, now)
     full_features = calculate_watchlist_features(full_candles, SCANNER_CONFIG)
-    latest_day = full_features.index.max().date()
-    expected = full_features[full_features.index.date == latest_day]
+    expected = full_features.tail(SCANNER_SIGNAL_WARMUP_ROWS)
 
     prepared = prepare_scanner_feature_task({
         "symbol": "TEST",

@@ -53,6 +53,45 @@ type ScannerHistory = {
   evaluatedSymbols: number;
 };
 
+type FunnelSignal = {
+  eventId: string;
+  signalId?: string;
+  symbol: string;
+  strategyKey: string;
+  strategyName: string;
+  strategyStatus?: string;
+  signalTimestamp: string;
+  status: "TRADE_READY" | "WATCH" | "REJECTED";
+  rank?: number;
+  signalScore?: number;
+  activityScore?: number;
+  signalClose?: number;
+  estimatedEntry?: number;
+  estimatedStop?: number;
+  estimatedTarget?: number;
+  riskPerShare?: number;
+  rewardRisk?: number;
+  quantity?: number;
+  executionModel?: string;
+  reasons?: string[];
+};
+
+type SignalFunnel = {
+  metadata: {
+    funnelVersion: string;
+    generatedAt: string;
+    paperOnly: boolean;
+    liveOrdersEnabled: boolean;
+    configuration: { maximumTradesPerDay: number; maximumConcurrent: number; quantityPerTrade: number };
+    strategies: Array<{ key: string; name: string; version: string; tradeReadyAllowed?: boolean }>;
+  };
+  counts: { tradeable: number; strategyEvaluations: number; validSetups: number; tradeReady: number; watch: number; rejected: number };
+  tradeReady: FunnelSignal[];
+  watch: FunnelSignal[];
+  rejected: FunnelSignal[];
+  rejectionCounts: Record<string, number>;
+};
+
 type ScannerResponse = {
   metadata: {
     status: string;
@@ -83,6 +122,7 @@ type ScannerResponse = {
   };
   opportunities: ScannerEntry[];
   eligibility: { eligible: number; rejected: number; rejectionCounts: Record<string, number> };
+  signalFunnel: SignalFunnel;
   errors: Array<{ symbol: string; reason: string }>;
   warnings: string[];
   detail?: string;
@@ -94,6 +134,10 @@ function number(value: number | null | undefined, digits = 2): string {
 
 function money(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? "—" : `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
+function price(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? "—" : `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatIst(value: string | null | undefined): string {
@@ -114,7 +158,7 @@ function initials(name: string): string {
   return name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 }
 
-export function StockScanner({ userName, signOutHref }: { userName: string; signOutHref: string }) {
+export function StockScanner({ userName, signOutHref, focusSignals = false }: { userName: string; signOutHref: string; focusSignals?: boolean }) {
   const [response, setResponse] = useState<ScannerResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -153,9 +197,9 @@ export function StockScanner({ userName, signOutHref }: { userName: string; sign
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
       <nav className="top-nav" aria-label="Main navigation">
         <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
-        <a className="nav-item active" href="/scanner" aria-current="page"><ScanSearch size={16} />Stock Scanner</a>
+        <a className={`nav-item ${focusSignals ? "" : "active"}`} href="/scanner" aria-current={focusSignals ? undefined : "page"}><ScanSearch size={16} />Stock Scanner</a>
         <a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a>
-        <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
+        <a className={`nav-item ${focusSignals ? "active" : ""}`} href="/signals" aria-current={focusSignals ? "page" : undefined}><Radio size={16} />Signals</a>
         <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>
       </nav>
       <div className="header-actions"><div className="user-chip"><div className="avatar">{initials(userName)}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
@@ -163,7 +207,7 @@ export function StockScanner({ userName, signOutHref }: { userName: string; sign
 
     <main className="main-content scanner-main">
       <section className="scanner-hero backtest-panel">
-        <div><span className="section-kicker">Completed five-minute candles · paper research</span><h1>Stock Scanner</h1><p>Ranks the globally price-filtered NSE universe with the causal Top-5 engine. It never places broker orders or expands the frozen RSI Recovery signal universe.</p></div>
+        <div><span className="section-kicker">Completed five-minute candles · paper research</span><h1>{focusSignals ? "NSE Signal Funnel" : "Stock Scanner & Signal Funnel"}</h1><p>Evaluates active RSI Recovery across every eligible stock and shows retired VWAP Pullback candidates as WATCH-only research. The activity Top-5 remains context and never forces a trade.</p></div>
         <button className="secondary-action" disabled={refreshing} onClick={() => void load(true)}>{refreshing ? <><LoaderCircle className="spin" size={15} />Refreshing…</> : <><RefreshCw size={15} />Refresh scanner</>}</button>
       </section>
 
@@ -178,10 +222,19 @@ export function StockScanner({ userName, signOutHref }: { userName: string; sign
           <div><RefreshCw size={17} /><span>Data freshness</span><strong>{number(response.metadata.dataFreshnessMinutes, 0)} min</strong></div>
         </section>
 
-        <section className="scanner-safety backtest-panel"><div><strong>Research only</strong><span>Live orders disabled · signal universe {response.metadata.signalUniversePolicy.replaceAll("_", " ")}</span></div><div><strong>Global price range</strong><span>{money(response.metadata.globalPriceRange.minimumPrice)} to {money(response.metadata.globalPriceRange.maximumPrice)}</span></div><div><strong>Source</strong><span>{formatIst(response.metadata.latestSourceTimestamp)} · {response.metadata.resultSource?.replaceAll("_", " ")}</span></div></section>
+        <section className="scanner-safety backtest-panel"><div><strong>Research only</strong><span>Live orders disabled · {response.metadata.signalUniversePolicy.replaceAll("_", " ")}</span></div><div><strong>Global price range</strong><span>{money(response.metadata.globalPriceRange.minimumPrice)} to {money(response.metadata.globalPriceRange.maximumPrice)}</span></div><div><strong>Source</strong><span>{formatIst(response.metadata.latestSourceTimestamp)} · {response.metadata.resultSource?.replaceAll("_", " ")}</span></div></section>
+
+        <section className="backtest-panel scanner-funnel" id="trade-ready">
+          <div className="panel-title"><div><span className="section-kicker">Signal-first selection</span><h2>Actual strategy setups</h2></div><span className="date-window">Maximum {response.signalFunnel.metadata.configuration.maximumConcurrent} concurrent · {response.signalFunnel.metadata.configuration.maximumTradesPerDay} trades/day</span></div>
+          <div className="scanner-funnel-counts"><div><span>Universe requested</span><strong>{response.metadata.symbolsRequested}</strong></div><div><span>Tradeable</span><strong>{response.signalFunnel.counts.tradeable}</strong></div><div><span>Strategy checks</span><strong>{response.signalFunnel.counts.strategyEvaluations}</strong></div><div><span>Valid setups</span><strong>{response.signalFunnel.counts.validSetups}</strong></div><div className="ready"><span>Trade ready</span><strong>{response.signalFunnel.counts.tradeReady}</strong></div><div><span>Watch</span><strong>{response.signalFunnel.counts.watch}</strong></div></div>
+          <div className="scanner-signal-heading"><div><h3>TRADE_READY</h3><p>Only completed-candle setups that passed a registered strategy and the signal score threshold.</p></div><a href="/signals">Open RSI Recovery history</a></div>
+          {response.signalFunnel.tradeReady.length ? <div className="scanner-signal-grid">{response.signalFunnel.tradeReady.map((signal) => <article className="trade-ready" key={signal.eventId}><div className="scanner-signal-title"><span>#{signal.rank}</span><div><strong>{signal.symbol}</strong><small>{signal.strategyName}</small></div><b>BUY</b></div><div className="scanner-signal-score"><span>Signal score</span><strong>{number(signal.signalScore)}</strong></div><div className="scanner-signal-prices"><div><span>Estimated entry</span><strong>{price(signal.estimatedEntry)}</strong></div><div><span>Stop</span><strong>{price(signal.estimatedStop)}</strong></div><div><span>Target</span><strong>{price(signal.estimatedTarget)}</strong></div><div><span>Risk / share</span><strong>{price(signal.riskPerShare)}</strong></div></div><footer><span>{signal.executionModel?.replaceAll("_", " ")}</span><strong>{number(signal.rewardRisk)}R · {signal.quantity} shares</strong></footer></article>)}</div> : <div className="scanner-no-trade"><strong>NO TRADE</strong><span>No strategy setup passed at {formatIst(response.signalFunnel.metadata.generatedAt)}. The system will not manufacture two entries.</span></div>}
+          {response.signalFunnel.watch.length > 0 && <><div className="scanner-signal-heading"><div><h3>WATCH</h3><p>Research-only or lower-ranked setups. Retired strategies can never become trade-ready.</p></div></div><div className="scanner-watch-signal-grid">{response.signalFunnel.watch.map((signal) => <article key={signal.eventId}><div><strong>{signal.symbol}</strong><span>{signal.strategyName}</span></div><b>{number(signal.signalScore)}</b><small>{signal.strategyStatus?.replaceAll("_", " ")} · {price(signal.estimatedEntry)} → {price(signal.estimatedTarget)}</small></article>)}</div></>}
+          <details className="scanner-funnel-rejections"><summary>Why setups were rejected ({response.signalFunnel.counts.rejected})</summary><div>{Object.entries(response.signalFunnel.rejectionCounts).slice(0, 12).map(([reason, count]) => <p key={reason}><strong>{count}</strong><span>{reason.replaceAll("_", " ")}</span></p>)}</div></details>
+        </section>
 
         <section className="backtest-panel scanner-watchlist">
-          <div className="panel-title"><div><span className="section-kicker">Current 5-symbol watchlist</span><h2>Top 2 PRIMARY · ranks 3–5 RESERVE</h2></div><span className="date-window">15-minute rescans · 09:30–14:30 IST</span></div>
+          <div className="panel-title"><div><span className="section-kicker">Activity context—not entry signals</span><h2>Top 2 activity leaders · ranks 3–5 watchlist</h2></div><span className="date-window">15-minute rescans · 09:30–14:30 IST</span></div>
           {response.watchlist.topFive.length ? <div className="scanner-watchlist-grid">{response.watchlist.topFive.map((entry) => <article key={entry.symbol} className={entry.tier === "PRIMARY" ? "primary" : "reserve"}>
             <span className="scanner-rank">#{entry.rankAfter}</span><div><strong title={entry.companyName}>{entry.symbol}</strong><small>{entry.companyName}</small></div><b>{entry.tier}</b><div><span>Score</span><strong>{number(entry.score)}</strong></div><div><span>Selected</span><strong>{formatIst(entry.selectedAt)}</strong></div><p>{entry.promotionReason?.replaceAll("_", " ")}</p>
           </article>)}</div> : <p className="scanner-empty">No five-symbol watchlist is available for this rescan. Eligibility thresholds remain unchanged.</p>}

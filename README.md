@@ -6,6 +6,7 @@ diagnostics.
 
 - Website: <https://nse.ventoday.com>
 - Backtest: <https://nse.ventoday.com/backtest>
+- NSE signal funnel: `/signals/funnel`
 - Crypto/Metals backtest: `/backtest/crypto`
 - Crypto/Metals signals: `/signals/crypto`
 
@@ -24,20 +25,27 @@ No strategy in this repository is represented as guaranteed profitable.
 
 ## Stock Scanner
 
-The authenticated `/scanner` page is a paper/research opportunity scanner built
-on the same causal ranking functions used by the Top-5 Opening Range Breakout
-backtest. It reads locally cached completed five-minute candles for the saved
-global price-filtered NSE universe and rescans every 15 minutes from 09:30
-through 14:30 IST. Ranks 1-2 are `PRIMARY`, ranks 3-5 are `RESERVE`, and the UI
-also displays the top 20 eligible opportunities plus the complete intraday
-promotion/removal history.
+The authenticated `/scanner` page now leads with a signal-first funnel; the
+same view is available under Signals at `/signals/funnel`. It reads locally
+cached completed five-minute candles for the saved global price-filtered NSE
+universe and rescans every 15 minutes from 09:30 through 14:30 IST. Every
+eligible symbol is evaluated before any setup is ranked. At most two active,
+trade-ready paper setups and three watch setups are displayed. Zero passing
+setups produces an explicit `NO TRADE` result.
 
-The scanner applies the existing same-clock 30-minute RVOL, traded-value,
-NIFTY/sector relative-strength, session VWAP/EMA trend, acceleration and candle
-quality score. The 30-minute residence rule and 10-point promotion advantage
-remain active. It never fetches missing historical candles during an HTTP
-request, never creates a broker order, and never expands the separately frozen
-RSI Recovery signal universe.
+The active trade-ready detector reuses the exact RSI Recovery v1.1 evaluator;
+its existing live workspace, frozen universe and historical behavior are not
+modified. The retired Market-Aligned VWAP Pullback detector is visible only as
+research `WATCH` context and can never become `TRADE_READY`. The former Top-5
+and Top-20 activity rankings remain below the funnel as context, not entry
+signals. The durable audit repository deduplicates rescans, limits new accepted
+paper signals to five per day and one per symbol per day, and retains rejected
+reason codes. Scanner feature caches retain 160 completed bars so the RSI
+warmup does not disappear near the open.
+
+The scanner never fetches missing historical candles during an HTTP request,
+never creates a broker order, and never enables live execution. The main NSE
+Dashboard is unchanged.
 
 ## Crypto and metals research
 

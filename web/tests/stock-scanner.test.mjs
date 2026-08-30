@@ -116,9 +116,18 @@ test("production scanner smoke validates the signal-first contract", async () =>
 });
 
 test("candidate deployment supports an isolated validated host port", async () => {
-  const runner = await source("deploy/run-container.sh");
+  const [runner, promoter] = await Promise.all([
+    source("deploy/run-container.sh"),
+    source("deploy/promote-candidate.sh"),
+  ]);
   assert.match(runner, /candidate_port="\$\{2:-3100\}"/);
   assert.match(runner, /candidate port must be an integer between 1024 and 65535/);
   assert.match(runner, /--publish "127\.0\.0\.1:\$\{candidate_port\}:3000"/);
   assert.match(runner, /http:\/\/127\.0\.0\.1:\$\{candidate_port\}\/login/);
+  assert.match(promoter, /candidate_port="\$\{2:-3100\}"/);
+  assert.match(promoter, /docker port vento-nse-candidate 3000\/tcp/);
+  assert.match(promoter, /http:\/\/127\.0\.0\.1:\$\{candidate_port\}/);
+  assert.match(promoter, /sed "s#http:\/\/127\.0\.0\.1:3100#http:\/\/127\.0\.0\.1:\$\{candidate_port\}#g"/);
+  assert.match(promoter, /docker stop "\$previous_container"/);
+  assert.doesNotMatch(promoter, /docker rm "\$previous_container"/);
 });

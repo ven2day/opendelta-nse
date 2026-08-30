@@ -111,13 +111,32 @@ complete trade lifecycle. Retained results are read-only and labelled
 `RESEARCH_ENGINE_V2_ENABLED` flag defaults to false and cannot be overridden by
 the browser.
 
-Research V2 will use chronological training, validation, and untouched test splits:
+Research V2 is implemented behind that disabled gate. It starts with a
+versioned base-strategy adapter, filters only causal strategy signals, and then
+uses a deterministic trade lifecycle: next-execution-bar open, per-side
+slippage, actual-entry target/stop, conservative `STOP_FIRST` collision,
+gap-at-open handling, bounded holding, costs, capital/position/daily controls,
+MAE/MFE, rejected signals, and a separate unresolved-trade list. The result is
+finite JSON; an undefined profit factor is `null` with an explanatory state.
+
+The engine uses chronological training, validation, and untouched test splits:
 
 - Exact evaluates one configuration.
 - Tournament compares one family against a fixed baseline.
 - Forward selection keeps at most one factor per family only when validation expectancy and minimum-trade requirements improve; beam width is 1–3.
 
-The API reports possible combinations before dispatch and avoids exhaustive search. Results below the configured trade minimum are `INCONCLUSIVE`.
+The forward-selection objective is configurable; sample-size and maximum-
+drawdown guardrails must pass, and selection cannot read the final test
+interval. The API reports possible combinations before dispatch and avoids
+exhaustive search. Results below the configured trade minimum are `INCONCLUSIVE`.
+
+Factor filters no longer share a generic percentile rule. Each registered
+factor declares its output type, directionality, predicate, threshold schema,
+valid range, role, and warm-up. Higher-timeframe values are backward-as-of
+aligned at their close/availability timestamp and NSE context is never carried
+across an overnight or weekend boundary. Feature cache keys include the exact
+candle SHA-256 reference and every market, provider, timeframe, factor,
+parameter, benchmark/sector, and calendar dependency.
 
 ```text
 request → idempotency lookup → QUEUED → RUNNING → COMPLETE

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from collections import Counter, defaultdict
 from datetime import datetime
 from statistics import median
@@ -42,7 +41,13 @@ def summarize_returns(
     drawdown = maximum_drawdown(returns)
     net = sum(returns)
     expectancy = net / len(returns) if returns else 0.0
-    profit_factor = gross_profit / gross_loss if gross_loss else (math.inf if gross_profit else 0.0)
+    profit_factor = gross_profit / gross_loss if gross_loss else None
+    if gross_loss:
+        profit_factor_state = "DEFINED"
+    elif gross_profit:
+        profit_factor_state = "NO_LOSING_TRADES"
+    else:
+        profit_factor_state = "NO_CLOSED_TRADES"
     return {
         "status": "CONCLUSIVE" if len(returns) >= minimum_trades else "INCONCLUSIVE",
         "minimumTrades": minimum_trades,
@@ -55,6 +60,7 @@ def summarize_returns(
         "averageLoss": sum(losses) / len(losses) if losses else 0.0,
         "expectancy": expectancy,
         "profitFactor": profit_factor,
+        "profitFactorState": profit_factor_state,
         "maximumDrawdown": drawdown,
         "returnToDrawdown": net / abs(drawdown) if drawdown else 0.0,
         "averageHoldingMinutes": sum(holding_minutes) / len(holding_minutes) if holding_minutes else 0.0,

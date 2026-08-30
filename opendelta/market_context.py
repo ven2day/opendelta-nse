@@ -45,7 +45,7 @@ class MarketContextService:
                 "relativeStrength": {"status": UNSUPPORTED_DATA_REQUIREMENT},
                 "regime": {"status": "PROVIDER_INSTRUMENT_REQUIRED"},
             }
-        quality = freshness(self.market_data_file, self.stale_seconds)
+        quality = freshness(self.market_data_file, self.stale_seconds, market="NSE")
         if not self.market_data_file.exists():
             return {
                 "market": market,

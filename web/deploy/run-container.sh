@@ -41,4 +41,19 @@ for _ in {1..20}; do
 done
 
 curl -fsS -o /dev/null "http://127.0.0.1:${candidate_port}/login"
+
+candidate_health="starting"
+for _ in {1..30}; do
+  candidate_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' vento-nse-candidate)"
+  if [[ "${candidate_health}" == "healthy" ]]; then
+    break
+  fi
+  sleep 1
+done
+
+if [[ "${candidate_health}" != "healthy" ]]; then
+  echo "vento-nse-candidate did not become healthy: ${candidate_health}" >&2
+  exit 1
+fi
+
 docker ps --filter name='^/vento-nse-candidate$' --format '{{.Names}} {{.Status}} {{.Ports}}'

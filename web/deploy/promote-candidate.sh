@@ -26,6 +26,13 @@ fi
 
 curl -fsS -o /dev/null "http://127.0.0.1:${candidate_port}/login"
 
+candidate_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' vento-nse-candidate)"
+if [[ "${candidate_health}" != "healthy" ]]; then
+  echo "vento-nse-candidate is not healthy: ${candidate_health}" >&2
+  rm -f "$nginx_candidate"
+  exit 1
+fi
+
 install -d -m 0700 "${backup_dir}"
 cp -a "${nginx_site}" "${backup_dir}/nse.ventoday.com.conf"
 

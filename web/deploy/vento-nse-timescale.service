@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenDelta TimescaleDB canonical market-data store
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker network create vento-nse-internal
+ExecStartPre=-/usr/bin/docker volume create vento-nse-timescale-data
+ExecStartPre=-/usr/bin/docker rm -f vento-nse-timescale
+ExecStart=/usr/bin/docker run --rm --name vento-nse-timescale \
+  --network vento-nse-internal \
+  --env-file /etc/vento-nse-timescale.env \
+  --mount type=volume,source=vento-nse-timescale-data,target=/var/lib/postgresql/data \
+  --health-cmd "pg_isready -U opendelta -d opendelta" \
+  --health-interval 10s \
+  --health-timeout 5s \
+  --health-retries 12 \
+  --health-start-period 30s \
+  --stop-timeout 60 \
+  --shm-size 256m \
+  --pids-limit 512 \
+  --memory 2g \
+  timescale/timescaledb:2.29.2-pg17
+ExecStop=/usr/bin/docker stop -t 60 vento-nse-timescale
+Restart=always
+RestartSec=10s
+TimeoutStartSec=2min
+TimeoutStopSec=75s
+
+[Install]
+WantedBy=multi-user.target

@@ -8,16 +8,27 @@ Do not switch research or signal reads as part of this rollout.
 
 ## Bootstrap
 
-1. Set `MARKET_DATA_DATABASE_URL` in the protected server environment.
-2. Run `python market_data_admin.py migrate`.
-3. Load the versioned NSE session calendar with `market_data_admin.py load-sessions`.
-4. Deploy and enable the worker with
+1. Install the private database service with
+   `sudo /opt/vento-nse/current/web/deploy/install-timescale-service.sh`. The
+   installer creates a protected credential and updates
+   `MARKET_DATA_DATABASE_URL`; it never prints the credential.
+2. Export the exact official NSE trading dates for the complete approved range
+   and build the versioned calendar with `market_data_calendar.py`.
+3. Load the generated calendar with `market_data_admin.py load-sessions`, or
+   use `bootstrap-market-data.sh` to migrate, load, and health-check together.
+4. Review the calendar metadata, requested range, symbol mappings, and job
+   counts before passing `--enqueue` to the bootstrap script.
+5. Deploy and enable the worker with
    `sudo /opt/vento-nse/current/web/deploy/install-market-data-worker.sh`.
-5. Confirm `/platform/data-health` reports the canonical store and dual writer.
+6. Confirm `/platform/data-health` reports the canonical store and dual writer.
 
 The NSE calendar must contain every date in the requested backfill range. A
 weekday is never assumed to be a trading day. Crypto expectations are continuous
 UTC intervals and exclude the currently incomplete candle.
+
+Database provisioning, credential rotation constraints, backup verification,
+and guarded restore steps are documented in
+[TimescaleDB production bootstrap](timescaledb-production-bootstrap.md).
 
 ## Queue a backfill
 

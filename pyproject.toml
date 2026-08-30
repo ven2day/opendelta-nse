@@ -16,3 +16,6 @@ dev = [
     "httpx2>=2,<3",
     "pytest>=8,<9",
 ]
+
+[tool.setuptools.packages.find]
+include = ["opendelta*"]

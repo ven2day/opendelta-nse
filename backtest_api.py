@@ -54,6 +54,12 @@ from live_signals import (
 )
 from market_data_refresh import MarketDataRefreshService
 from opendelta.core import PlatformSettings
+from opendelta.timescale_market_data import (
+    CanonicalCandleWriter,
+    TimescaleDualWriter,
+    canonical_candles_from_dhan_frame,
+    dual_writer_from_environment,
+)
 from opendelta.platform import (
     PlatformRuntime,
     create_platform_router,
@@ -1505,10 +1511,16 @@ def simulate_symbol(
 class HistoricalDataStore:
     scanner_process_pool_enabled = True
 
-    def __init__(self, config: DhanConfig, cache_directory: Path) -> None:
+    def __init__(
+        self,
+        config: DhanConfig,
+        cache_directory: Path,
+        canonical_writer: CanonicalCandleWriter | None = None,
+    ) -> None:
         self.config = config
         self.client = DhanClient(config)
         self.cache_directory = cache_directory
+        self.canonical_writer = canonical_writer
         self._mapping_lock = threading.Lock()
         self._security_map: dict[str, str] | None = None
         self._nifty_security_id: str | None = None
@@ -1668,9 +1680,31 @@ class HistoricalDataStore:
                     instrument="INDEX",
                 )
             else:
-                raw = self._fetch_raw(self.security_id(symbol), spec, fetch_start, now_ist)
+                security_id = self.security_id(symbol)
+                raw = self._fetch_raw(security_id, spec, fetch_start, now_ist)
             if not raw.empty:
                 self._write_cache(cache_path, raw)
+                if self.canonical_writer is not None and spec.source == "intraday":
+                    source_timeframe = {
+                        "1": "1m",
+                        "5": "5m",
+                        "15": "15m",
+                        "60": "1h",
+                    }.get(str(spec.source_interval))
+                    if source_timeframe is not None:
+                        canonical_instrument = (
+                            self._nifty_security_id if benchmark else security_id
+                        )
+                        assert canonical_instrument is not None
+                        self.canonical_writer.write(
+                            canonical_candles_from_dhan_frame(
+                                raw,
+                                instrument_id=canonical_instrument,
+                                symbol=cache_symbol,
+                                timeframe=source_timeframe,
+                                completed_before=now_ist,
+                            )
+                        )
         return prepare_candles(raw, timeframe, analysis_start, now_ist, warmup_bars=warmup_bars)
 
     def cached_candles(
@@ -3399,7 +3433,7 @@ def create_store() -> HistoricalDataStore:
     cache_directory = Path(os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")).expanduser()
     if not cache_directory.is_absolute():
         raise RuntimeError("BACKTEST_CACHE_DIR must be an absolute path")
-    return HistoricalDataStore(config, cache_directory)
+    return HistoricalDataStore(config, cache_directory, get_canonical_market_data_writer())
 
 
 @asynccontextmanager
@@ -3431,6 +3465,7 @@ _application_settings_repository: ApplicationSettingsRepository | None = None
 _stock_scanner_service: StockScannerService | None = None
 _crypto_market_service: CryptoMarketService | None = None
 _platform_runtime: PlatformRuntime | None = None
+_canonical_market_data_writer: TimescaleDualWriter | None = None
 
 
 def get_store() -> HistoricalDataStore:
@@ -3438,6 +3473,13 @@ def get_store() -> HistoricalDataStore:
     if _store is None:
         _store = create_store()
     return _store
+
+
+def get_canonical_market_data_writer() -> TimescaleDualWriter:
+    global _canonical_market_data_writer
+    if _canonical_market_data_writer is None:
+        _canonical_market_data_writer = dual_writer_from_environment()
+    return _canonical_market_data_writer
 
 
 def get_stock_scanner_service() -> StockScannerService:
@@ -3551,7 +3593,9 @@ def get_market_data_refresh_service() -> MarketDataRefreshService:
 def get_crypto_market_service() -> CryptoMarketService:
     global _crypto_market_service
     if _crypto_market_service is None:
-        _crypto_market_service = crypto_service_from_environment()
+        _crypto_market_service = crypto_service_from_environment(
+            get_canonical_market_data_writer()
+        )
     return _crypto_market_service
 
 
@@ -3651,6 +3695,7 @@ def get_platform_runtime() -> PlatformRuntime:
             _platform_crypto_instruments,
             lambda: get_crypto_market_service().status(),
             lambda identifier: get_universe_service().get_frozen_universe(identifier)[0],
+            lambda: get_canonical_market_data_writer().status(),
         )
     return _platform_runtime
 
@@ -4382,4 +4427,6 @@ def stop_live_signal_runtime() -> None:
         _crypto_market_service.stop()
     if _platform_runtime is not None:
         _platform_runtime.shutdown()
+    if _canonical_market_data_writer is not None:
+        _canonical_market_data_writer.close()
     _backtest_job_service.shutdown()

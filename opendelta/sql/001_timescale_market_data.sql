@@ -60,15 +60,46 @@ CREATE TABLE IF NOT EXISTS market_data_repair_jobs (
     market text NOT NULL,
     provider text NOT NULL,
     instrument_id text NOT NULL,
+    symbol text NOT NULL,
     timeframe text NOT NULL,
     range_start timestamptz NOT NULL,
     range_end timestamptz NOT NULL,
+    next_start timestamptz NOT NULL,
+    chunk_days integer NOT NULL DEFAULT 30,
     status text NOT NULL,
     attempts integer NOT NULL DEFAULT 0,
+    max_attempts integer NOT NULL DEFAULT 5,
+    candles_received bigint NOT NULL DEFAULT 0,
+    candles_written bigint NOT NULL DEFAULT 0,
     missing_before integer NOT NULL DEFAULT 0,
     missing_after integer,
     last_error text,
+    next_attempt_at timestamptz,
+    lease_owner text,
+    lease_expires_at timestamptz,
+    completed_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT market_data_repair_range CHECK (range_end > range_start)
 );
+
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS symbol text;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS next_start timestamptz;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS chunk_days integer NOT NULL DEFAULT 30;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 5;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS candles_received bigint NOT NULL DEFAULT 0;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS candles_written bigint NOT NULL DEFAULT 0;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS lease_owner text;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;
+ALTER TABLE market_data_repair_jobs ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+
+UPDATE market_data_repair_jobs
+SET symbol=coalesce(symbol, instrument_id), next_start=coalesce(next_start, range_start)
+WHERE symbol IS NULL OR next_start IS NULL;
+
+ALTER TABLE market_data_repair_jobs ALTER COLUMN symbol SET NOT NULL;
+ALTER TABLE market_data_repair_jobs ALTER COLUMN next_start SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS market_data_repair_jobs_claim
+    ON market_data_repair_jobs (status, next_attempt_at, created_at);

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run OpenDelta market-data backfill and repair jobs
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+Persistent=true
+AccuracySec=1min
+Unit=vento-nse-market-data-worker.service
+
+[Install]
+WantedBy=timers.target

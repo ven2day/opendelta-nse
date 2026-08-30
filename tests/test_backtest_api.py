@@ -18,6 +18,7 @@ from backtest_api import (
     LiveUniverseSaveRequest,
     MarketSymbolRequest,
     GlobalPriceSettingsRequest,
+    HistoricalDataStore,
     MAX_SYMBOLS_PER_RUN,
     PaperBuyRequest,
     PaperCloseRequest,
@@ -165,6 +166,43 @@ class SignalTests(unittest.TestCase):
 
 
 class CandlePreparationTests(unittest.TestCase):
+    def test_dhan_cache_fetch_dual_writes_provider_native_completed_candles(self) -> None:
+        class Writer:
+            def __init__(self) -> None:
+                self.rows = []
+
+            def write(self, candles):
+                self.rows.extend(candles)
+
+        with TemporaryDirectory() as directory:
+            writer = Writer()
+            store = object.__new__(HistoricalDataStore)
+            store.cache_directory = Path(directory)
+            store.canonical_writer = writer
+            store._security_map = {"TEST": "123"}
+            store._nifty_security_id = "13"
+            store._read_cache = lambda path: None
+            store._fetch_raw = lambda *args, **kwargs: pd.DataFrame(
+                {
+                    "Open": [100.0, 101.0],
+                    "High": [101.0, 102.0],
+                    "Low": [99.0, 100.0],
+                    "Close": [100.5, 101.5],
+                    "Volume": [1_000.0, 1_100.0],
+                },
+                index=pd.to_datetime(["2026-08-28T09:15+05:30", "2026-08-28T09:20+05:30"]),
+            )
+            now = datetime(2026, 8, 28, 9, 30, tzinfo=IST)
+
+            result = store.candles(
+                "TEST", "5m", 1, datetime(2026, 8, 28, 9, 0, tzinfo=IST), now
+            )
+
+            self.assertEqual(len(result), 2)
+            self.assertEqual(len(writer.rows), 2)
+            self.assertEqual({item.instrument_id for item in writer.rows}, {"123"})
+            self.assertEqual({item.timeframe for item in writer.rows}, {"5m"})
+
     def test_fresh_second_resolution_candles_accept_microsecond_boundary(self) -> None:
         index = pd.date_range("2025-01-01", periods=3, freq="1D", tz=IST).as_unit("s")
         frame = pd.DataFrame(

@@ -29,6 +29,7 @@ from .strategies import StrategyRegistry
 CandleLoader = Callable[[ResearchRequest], Any]
 CryptoInstrumentLoader = Callable[[], list[dict[str, Any]]]
 ProviderStatusLoader = Callable[[], dict[str, Any]]
+CanonicalWriterStatusLoader = Callable[[], dict[str, Any]]
 UniverseResolver = Callable[[str], list[str]]
 LEGACY_INVALID_RESEARCH_MODEL = "LEGACY_INVALID_RESEARCH_MODEL"
 LEGACY_RESEARCH_EXPLANATION = (
@@ -116,6 +117,7 @@ class PlatformRuntime:
     metrics: MetricsRegistry
     logger: StructuredLogger
     provider_status_loader: ProviderStatusLoader | None = None
+    canonical_writer_status_loader: CanonicalWriterStatusLoader | None = None
 
     @classmethod
     def build(
@@ -125,6 +127,7 @@ class PlatformRuntime:
         crypto_instrument_loader: CryptoInstrumentLoader | None = None,
         provider_status_loader: ProviderStatusLoader | None = None,
         universe_resolver: UniverseResolver | None = None,
+        canonical_writer_status_loader: CanonicalWriterStatusLoader | None = None,
     ) -> "PlatformRuntime":
         job_repository = JobRepository(settings.database_path)
         factor_engine = FactorEngine()
@@ -157,6 +160,7 @@ class PlatformRuntime:
             metrics=MetricsRegistry(),
             logger=StructuredLogger(),
             provider_status_loader=provider_status_loader,
+            canonical_writer_status_loader=canonical_writer_status_loader,
         )
 
     def provider_health(self) -> dict[str, Any]:
@@ -311,6 +315,11 @@ def create_platform_router(runtime_factory: Callable[[], PlatformRuntime]) -> AP
             "providers": provider_rows(runtime),
             "providerEngine": runtime.provider_health(),
             "canonicalStore": timescale_health(runtime.settings.market_data_database_url),
+            "canonicalDualWrite": (
+                runtime.canonical_writer_status_loader()
+                if runtime.canonical_writer_status_loader is not None
+                else {"status": "NOT_PROBED"}
+            ),
             "warnings": [
                 "Provider availability is evaluated independently per instrument and timeframe",
                 "Missing spread, sector, order-book, OI, or benchmark data is never manufactured",

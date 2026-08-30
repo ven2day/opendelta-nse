@@ -31,6 +31,7 @@ from market_core import (
     normalize_provider_symbol,
     utc_datetime,
 )
+from opendelta.timescale_market_data import CanonicalCandle, CanonicalCandleWriter
 
 
 class CryptoMarketRepository:
@@ -360,11 +361,13 @@ class CryptoMarketService:
         *,
         clock: Callable[[], datetime] | None = None,
         polling_seconds: int = 60,
+        canonical_writer: CanonicalCandleWriter | None = None,
     ) -> None:
         self.repository = repository
         self.providers = providers or ProviderFactory()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.polling_seconds = max(15, polling_seconds)
+        self.canonical_writer = canonical_writer
         self._catalog_cache: dict[str, tuple[float, list[MarketInstrument]]] = {}
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -448,6 +451,29 @@ class CryptoMarketService:
         provider = self.providers.get(instrument.provider)
         candles = provider.candles(instrument, timeframe, fetch_start, end)
         self.repository.save_candles(candles)
+        if self.canonical_writer is not None:
+            self.canonical_writer.write(
+                [
+                    CanonicalCandle(
+                        market="CRYPTO",
+                        provider=item.provider,
+                        instrument_id=instrument.instrument_id,
+                        symbol=instrument.display_symbol,
+                        timeframe=item.timeframe,
+                        open_time=item.open_time,
+                        close_time=item.close_time,
+                        open=item.open,
+                        high=item.high,
+                        low=item.low,
+                        close=item.close,
+                        volume=item.base_volume,
+                        quote_volume=item.quote_volume,
+                        complete=item.complete,
+                    )
+                    for item in candles
+                    if item.complete
+                ]
+            )
         return self.repository.candles(instrument, timeframe, start, end)
 
     def backtest(
@@ -574,7 +600,9 @@ class CryptoMarketService:
             self._state = "STOPPED"
 
 
-def service_from_environment() -> CryptoMarketService:
+def service_from_environment(
+    canonical_writer: CanonicalCandleWriter | None = None,
+) -> CryptoMarketService:
     default_root = Path(os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")).expanduser() / "crypto-market"
     root = Path(os.environ.get("CRYPTO_MARKET_DIR", str(default_root))).expanduser()
     if not root.is_absolute():
@@ -587,4 +615,9 @@ def service_from_environment() -> CryptoMarketService:
             "VALR": ValrPublicProvider(base_url=os.environ.get("VALR_PUBLIC_API_URL", "https://api.valr.com")),
         }
     )
-    return CryptoMarketService(CryptoMarketRepository(database), providers, polling_seconds=polling)
+    return CryptoMarketService(
+        CryptoMarketRepository(database),
+        providers,
+        polling_seconds=polling,
+        canonical_writer=canonical_writer,
+    )

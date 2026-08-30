@@ -12,6 +12,7 @@ from crypto_engine import CryptoMarketRepository, CryptoMarketService
 from crypto_providers import OkxPublicProvider, ProviderFactory, ValrPublicProvider
 from crypto_strategy import CryptoPullbackConfig, generate_signals, run_pullback_backtest
 from market_core import MarketCandle, MarketInstrument, instrument_identifier
+from opendelta.timescale_market_data import CanonicalCandle, DualWriteResult
 
 
 UTC = timezone.utc
@@ -213,6 +214,15 @@ class FakeProvider:
         return [candle(start + timedelta(minutes=5 * index), 100 + index * 0.1) for index in range(80)]
 
 
+class CapturingCanonicalWriter:
+    def __init__(self) -> None:
+        self.rows: list[CanonicalCandle] = []
+
+    def write(self, candles: list[CanonicalCandle]) -> DualWriteResult:
+        self.rows.extend(candles)
+        return DualWriteResult("WRITTEN", len(candles), len(candles))
+
+
 def test_service_validates_additions_against_provider_catalog(tmp_path: Path) -> None:
     repository = CryptoMarketRepository((tmp_path / "market.sqlite3").resolve())
     service = CryptoMarketService(repository, ProviderFactory({"OKX": FakeProvider()}))
@@ -230,3 +240,22 @@ def test_service_rejects_oversized_interactive_candle_window(tmp_path: Path) -> 
     end = datetime(2026, 8, 1, tzinfo=UTC)
     with pytest.raises(ValueError, match="20,000"):
         service.sync_candles(instrument, "1m", end - timedelta(days=30), end)
+
+
+def test_service_dual_writes_provider_candles_without_changing_sqlite_reads(tmp_path: Path) -> None:
+    repository = CryptoMarketRepository((tmp_path / "market.sqlite3").resolve())
+    writer = CapturingCanonicalWriter()
+    service = CryptoMarketService(
+        repository,
+        ProviderFactory({"OKX": FakeProvider()}),
+        canonical_writer=writer,  # type: ignore[arg-type]
+    )
+    instrument = service.add_instrument("OKX", "BTC-USDT")
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    end = start + timedelta(hours=8)
+
+    legacy_rows = service.sync_candles(instrument, "5m", start, end)
+
+    assert len(legacy_rows) == 80
+    assert len(writer.rows) == 80
+    assert all(item.market == "CRYPTO" and item.instrument_id == instrument.instrument_id for item in writer.rows)

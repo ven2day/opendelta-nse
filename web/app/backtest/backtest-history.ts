@@ -7,6 +7,7 @@ const STORE_NAME = "completed-runs";
 export type BacktestHistoryStrategy =
   | "rsi_range"
   | "rsi_recovery"
+  | "ema_vwap_strong_buy"
   | "top_5_opening_range_breakout"
   | "daily_scalping_watchlist"
   | "market_aligned_vwap_pullback_scalper"

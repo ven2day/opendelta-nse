@@ -28,6 +28,13 @@ from recovery_backtest import (
 )
 from recovery_feature_analysis import calculate_entry_feature_frame
 from nifty_oi_regime import NiftyOiConfig, insufficient_regime
+from ema_vwap_strong_buy import (
+    STRATEGY_KEY as STRONG_BUY_STRATEGY_KEY,
+    STRATEGY_NAME as STRONG_BUY_STRATEGY_NAME,
+    STRATEGY_VERSION as STRONG_BUY_STRATEGY_VERSION,
+    StrongBuyConfig,
+    evaluate_latest_strong_buy,
+)
 
 TIMEFRAME = "5m"
 TIMEFRAME_MINUTES = 5
@@ -139,6 +146,30 @@ class LiveSignalSettings:
     oi_strongly_bullish_threshold: float = 60.0
     oi_elevated_quality_threshold: float = 95.0
     oi_fail_policy: Literal["SKIP", "ALLOW"] = "SKIP"
+    strong_buy_enabled: bool = True
+    strong_buy_ema_fast: int = 9
+    strong_buy_ema_slow: int = 21
+    strong_buy_minimum_adx: float = 20.0
+    strong_buy_minimum_rvol: float = 1.2
+    strong_buy_target_pct: float = 1.0
+    strong_buy_initial_quantity: int = 100
+    strong_buy_additional_quantity_pct: float = 50.0
+    strong_buy_additional_sizing_mode: Literal["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"] = "REDUCE_EVERY_NEW_LOT"
+    strong_buy_minimum_quantity: int = 1
+    strong_buy_maximum_entries_per_cycle: int = 10
+
+    def strong_buy_config(self) -> StrongBuyConfig:
+        return StrongBuyConfig(
+            ema_fast=self.strong_buy_ema_fast, ema_slow=self.strong_buy_ema_slow,
+            minimum_adx=self.strong_buy_minimum_adx,
+            minimum_rvol=self.strong_buy_minimum_rvol,
+            target_pct=self.strong_buy_target_pct,
+            initial_quantity=self.strong_buy_initial_quantity,
+            additional_quantity_pct=self.strong_buy_additional_quantity_pct,
+            additional_sizing_mode=self.strong_buy_additional_sizing_mode,
+            minimum_quantity=self.strong_buy_minimum_quantity,
+            maximum_entries_per_cycle=self.strong_buy_maximum_entries_per_cycle,
+        ).validate()
 
     def validate(self) -> LiveSignalSettings:
         if self.timeframe != "5m":
@@ -160,6 +191,7 @@ class LiveSignalSettings:
         if self.oi_filter_mode not in {"OFF", "ADVISORY", "ENFORCED"}:
             raise ValueError("NIFTY OI filter mode must be OFF, ADVISORY, or ENFORCED")
         self.oi_config()
+        self.strong_buy_config()
         return self
 
     def oi_config(self) -> NiftyOiConfig:
@@ -221,6 +253,18 @@ class LiveSignalSettings:
             "oiStronglyBullishThreshold": self.oi_strongly_bullish_threshold,
             "oiElevatedQualityThreshold": self.oi_elevated_quality_threshold,
             "oiFailPolicy": self.oi_fail_policy,
+            "strongBuyEnabled": self.strong_buy_enabled,
+            "strongBuyEmaFast": self.strong_buy_ema_fast,
+            "strongBuyEmaSlow": self.strong_buy_ema_slow,
+            "strongBuyMinimumAdx": self.strong_buy_minimum_adx,
+            "strongBuyMinimumRvol": self.strong_buy_minimum_rvol,
+            "strongBuyMinimumConfirmations": 2,
+            "strongBuyTargetPct": self.strong_buy_target_pct,
+            "strongBuyInitialQuantity": self.strong_buy_initial_quantity,
+            "strongBuyAdditionalQuantityPct": self.strong_buy_additional_quantity_pct,
+            "strongBuyAdditionalSizingMode": self.strong_buy_additional_sizing_mode,
+            "strongBuyMinimumQuantity": self.strong_buy_minimum_quantity,
+            "strongBuyMaximumEntriesPerCycle": self.strong_buy_maximum_entries_per_cycle,
             "oiFilterDefault": "OFF",
             "targetPct": DEFAULT_TARGET_PCT,
             "execution": "PAPER_ONLY",
@@ -263,6 +307,17 @@ def settings_from_payload(payload: Mapping[str, Any]) -> LiveSignalSettings:
         oi_strongly_bullish_threshold=float(payload.get("oiStronglyBullishThreshold", defaults.oi_strongly_bullish_threshold)),
         oi_elevated_quality_threshold=float(payload.get("oiElevatedQualityThreshold", defaults.oi_elevated_quality_threshold)),
         oi_fail_policy=str(payload.get("oiFailPolicy", defaults.oi_fail_policy)).upper(),  # type: ignore[arg-type]
+        strong_buy_enabled=bool(payload.get("strongBuyEnabled", defaults.strong_buy_enabled)),
+        strong_buy_ema_fast=int(payload.get("strongBuyEmaFast", defaults.strong_buy_ema_fast)),
+        strong_buy_ema_slow=int(payload.get("strongBuyEmaSlow", defaults.strong_buy_ema_slow)),
+        strong_buy_minimum_adx=float(payload.get("strongBuyMinimumAdx", defaults.strong_buy_minimum_adx)),
+        strong_buy_minimum_rvol=float(payload.get("strongBuyMinimumRvol", defaults.strong_buy_minimum_rvol)),
+        strong_buy_target_pct=float(payload.get("strongBuyTargetPct", defaults.strong_buy_target_pct)),
+        strong_buy_initial_quantity=int(payload.get("strongBuyInitialQuantity", defaults.strong_buy_initial_quantity)),
+        strong_buy_additional_quantity_pct=float(payload.get("strongBuyAdditionalQuantityPct", defaults.strong_buy_additional_quantity_pct)),
+        strong_buy_additional_sizing_mode=str(payload.get("strongBuyAdditionalSizingMode", defaults.strong_buy_additional_sizing_mode)).upper(),  # type: ignore[arg-type]
+        strong_buy_minimum_quantity=int(payload.get("strongBuyMinimumQuantity", defaults.strong_buy_minimum_quantity)),
+        strong_buy_maximum_entries_per_cycle=int(payload.get("strongBuyMaximumEntriesPerCycle", defaults.strong_buy_maximum_entries_per_cycle)),
     ).validate()
 
 
@@ -617,8 +672,8 @@ def evaluate_latest_recovery(candles: pd.DataFrame, config: RecoveryConfig) -> d
     return latest
 
 
-def deterministic_signal_id(symbol: str, timestamp: Any) -> str:
-    identity = f"{STRATEGY_VERSION}|{TIMEFRAME}|{symbol.upper()}|{_iso_ist(timestamp)}"
+def deterministic_signal_id(symbol: str, timestamp: Any, strategy_version: str = STRATEGY_VERSION) -> str:
+    identity = f"{strategy_version}|{TIMEFRAME}|{symbol.upper()}|{_iso_ist(timestamp)}"
     return "SIG-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24].upper()
 
 
@@ -792,6 +847,9 @@ class LiveSignalRepository:
                 if high >= signal["systemTargetPrice"]:
                     duration = (stamp - _as_ist(signal["signalTimestamp"])).total_seconds() / 60.0
                     outcome.update({"status": "TARGET_HIT", "targetHitTimestamp": stamp.isoformat(), "durationMinutes": _finite(duration, 2)})
+                    if signal.get("strategyKey") == STRONG_BUY_STRATEGY_KEY:
+                        signal["positionState"] = "SOLD"
+                        signal["signalLabel"] = "TAKE PROFIT — SOLD"
                 changed_signals = True
 
             for trade in self._paper:
@@ -1110,14 +1168,23 @@ class LiveSignalEngine:
         if self._recovering:
             self._set_state(engine="RECOVERING", message="Completed candle stored while missing-candle recovery is active; BUY evaluation paused")
             return None
+        created_signals = []
         recovery = evaluate_latest_recovery(history, self.strategy_config)
-        if recovery is None:
-            self._set_state(engine="READY", message="Latest completed candles evaluated")
-            return None
-        signal = self._build_signal(symbol, candle, recovery, history, data_age)
-        stored, created = self.repository.add_signal(signal)
-        self._set_state(engine="READY", message="New RSI Recovery signal recorded" if created else "Duplicate signal safely ignored")
-        return stored if created else None
+        if recovery is not None:
+            signal = self._build_signal(symbol, candle, recovery, history, data_age)
+            stored, created = self.repository.add_signal(signal)
+            if created:
+                created_signals.append(stored)
+        if settings.strong_buy_enabled:
+            strong_buy = evaluate_latest_strong_buy(history, settings.strong_buy_config())
+            if strong_buy is not None:
+                signal = self._build_strong_buy_signal(symbol, candle, strong_buy, history, data_age, settings)
+                if signal is not None:
+                    stored, created = self.repository.add_signal(signal)
+                    if created:
+                        created_signals.append(stored)
+        self._set_state(engine="READY", message="New Strong Buy lot recorded" if created_signals else "Latest completed candles evaluated")
+        return created_signals[-1] if created_signals else None
 
     def _build_signal(
         self,
@@ -1154,6 +1221,9 @@ class LiveSignalEngine:
             "schemaVersion": LIVE_SIGNAL_SCHEMA_VERSION,
             "universeVersion": self._universe.get("universeVersion") if self._universe else None,
             "strategyVersion": STRATEGY_VERSION,
+            "strategyKey": "rsi_recovery",
+            "strategyName": "RSI Recovery Scalping",
+            "signalLabel": "RSI RECOVERY BUY",
             "symbol": symbol,
             "timeframe": TIMEFRAME,
             "signalTimestamp": stamp.isoformat(),
@@ -1235,6 +1305,47 @@ class LiveSignalEngine:
             "createdAt": self.clock().astimezone(IST).isoformat(),
         }
 
+    def _build_strong_buy_signal(self, symbol: str, candle: Mapping[str, Any], strong: Mapping[str, Any], history: pd.DataFrame, data_age: float, settings: LiveSignalSettings) -> dict[str, Any] | None:
+        config = settings.strong_buy_config()
+        prior = [item for item in self.repository.signals() if item.get("symbol") == symbol and item.get("strategyKey") == STRONG_BUY_STRATEGY_KEY]
+        open_lots = [item for item in prior if item.get("hypotheticalOutcome", {}).get("status") == "OPEN"]
+        if len(open_lots) >= config.maximum_entries_per_cycle:
+            return None
+        cycle_number = max([int(item.get("cycleNumber", 0)) for item in prior], default=0) + (0 if open_lots else 1)
+        lot_number = max([int(item.get("lotNumber", 0)) for item in open_lots], default=0) + 1
+        close = float(candle["Close"])
+        stamp = _as_ist(candle["timestamp"])
+        quantity = config.quantity(lot_number - 1)
+        target = close * (1 + config.target_pct / 100)
+        historical = self._historical_context.get(symbol, {})
+        buy_range = {"method": "SIGNAL_CLOSE", "formula": "confirmed 5m close", "low": _finite(close, 4), "midpoint": _finite(close, 4), "high": _finite(close, 4)}
+        neutral_history = {"rank": historical.get("rank"), "qualityScore": historical.get("qualityScore"), "goodRate": historical.get("goodRate"), "targetHitRate": historical.get("historicalTargetHitRate"), "medianTargetMinutes": historical.get("medianTargetMinutes"), "medianMaePct": historical.get("medianMaePct"), "openRate": historical.get("openRate"), "buyObservations": historical.get("buyObservations")}
+        return {
+            "signalId": deterministic_signal_id(symbol, stamp, STRONG_BUY_STRATEGY_VERSION), "schemaVersion": LIVE_SIGNAL_SCHEMA_VERSION,
+            "universeVersion": self._universe.get("universeVersion") if self._universe else None,
+            "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyVersion": STRONG_BUY_STRATEGY_VERSION,
+            "signalLabel": "STRONG BUY — HOLDING", "positionState": "HOLDING", "cycleNumber": cycle_number,
+            "cycleId": f"{symbol}-Cycle{cycle_number}", "lotId": f"{symbol}-Cycle{cycle_number}-Lot{lot_number}", "lotNumber": lot_number, "strategyQuantity": quantity,
+            "symbol": symbol, "timeframe": TIMEFRAME, "signalTimestamp": stamp.isoformat(), "marketDataTimestamp": str(candle.get("marketDataTimestamp") or stamp.isoformat()), "dataAgeSeconds": _finite(data_age, 2),
+            "signalClose": _finite(close, 4), "systemTargetPct": config.target_pct, "systemTargetPrice": _finite(target, 4),
+            "rsi": None, "rsiMinimumSinceArm": None, "rsiArmTimestamp": None, "barsArmToRecovery": None,
+            "ema9": _finite(strong["emaFast"], 4), "ema20": _finite(strong["emaSlow"], 4),
+            "emaSpreadPct": _finite((strong["emaFast"] / strong["emaSlow"] - 1) * 100, 6),
+            "vwap": _finite(strong["vwap"], 4), "vwapDistancePct": _finite((close / strong["vwap"] - 1) * 100, 6),
+            "volumeRatio": _finite(strong["relativeVolume"], 4), "adx": _finite(strong["adx"], 4),
+            "confirmationScore": int(strong["confirmationScore"]), "emaConfirmation": True, "vwapConfirmation": True,
+            "volumeConfirmation": bool(strong["rvolConfirmation"]), "adxConfirmation": bool(strong["adxConfirmation"]),
+            "rvolConfirmation": bool(strong["rvolConfirmation"]), "htfConfirmation": bool(strong["htfConfirmation"]),
+            "atr14": None, "atrPct": None, "momentum15m": None, "momentum30m": None, "historicalContext": neutral_history,
+            "buyRange": buy_range, "quantitySuggestion": {"allocation": _finite(close * quantity, 2), "recommendedQuantity": quantity, "quantityAtLower": quantity, "quantityAtMidpoint": quantity, "quantityAtUpper": quantity, "referenceEntryMidpoint": _finite(close, 4)},
+            "indicativeTargets": {"targetPct": config.target_pct, "atLower": _finite(target, 4), "atMidpoint": _finite(target, 4), "atUpper": _finite(target, 4)},
+            "supportResistance": calculate_support_resistance(history, close, settings.support_lookback_short, settings.support_lookback_long),
+            "oiFilterMode": "OFF", "oiRegimeAtSignal": None, "oiScoreAtSignal": None, "oiConfidence": None, "oiDecision": "NOT_APPLICABLE_STRONG_BUY", "oiDecisionReason": "Uses ADX, RVOL and 15-minute EMA alignment", "oiSourceTimestamp": None,
+            "executionEligible": True, "manualAction": "NO_ACTION", "decisionTimestamp": None, "ignoreReason": None, "notes": None,
+            "hypotheticalOutcome": {"status": "OPEN", "targetHitTimestamp": None, "durationMinutes": None, "lowestPrice": None, "highestPrice": None, "maePct": None, "mfePct": None, "barsHeld": 0, "lastTimestamp": stamp.isoformat(), "lastClose": _finite(close, 4)},
+            "brokerExecution": False, "createdAt": self.clock().astimezone(IST).isoformat(),
+        }
+
     def status(self) -> dict[str, Any]:
         now = self.clock().astimezone(IST)
         with self._lock:
@@ -1283,9 +1394,13 @@ class LiveSignalEngine:
             age_minutes = max(0.0, (now - _as_ist(signal["signalTimestamp"]).to_pydatetime()).total_seconds() / 60.0)
             freshness = "FRESH" if age_minutes <= settings.fresh_minutes else "RECENT" if age_minutes <= settings.recent_minutes else "OLD"
             low, high = float(signal["buyRange"]["low"]), float(signal["buyRange"]["high"])
+            strong_buy = signal.get("strategyKey") == STRONG_BUY_STRATEGY_KEY
+            sold = signal.get("hypotheticalOutcome", {}).get("status") == "TARGET_HIT"
             result.append(
                 {
                     **signal,
+                    "signalLabel": "TAKE PROFIT — SOLD" if strong_buy and sold else "STRONG BUY — HOLDING" if strong_buy else signal.get("signalLabel"),
+                    "positionState": "SOLD" if strong_buy and sold else "HOLDING" if strong_buy else signal.get("positionState"),
                     "currentPrice": _finite(current_price, 4),
                     "currentPriceTimestamp": latest.get("timestamp") if latest else signal["hypotheticalOutcome"].get("lastTimestamp"),
                     "buyRangeStatus": buy_range_status(current_price, low, high),

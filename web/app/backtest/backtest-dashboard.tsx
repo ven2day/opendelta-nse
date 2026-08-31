@@ -60,6 +60,7 @@ import {
   type Top5OpeningRangeBreakoutResponse,
 } from "./daily-watchlist-results";
 import { createTop5OpeningRangeBreakoutRequest } from "./top-5-opening-range-breakout-contract.mjs";
+import { StrongBuyResults, type StrongBuyBacktestResponse } from "./strong-buy-results";
 import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
 import {
   backtestHistorySummary,
@@ -183,7 +184,7 @@ type BacktestResponse = {
   warnings: string[];
 };
 
-type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse) & { detail?: string };
+type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | StrongBuyBacktestResponse) & { detail?: string };
 type BacktestJobStatus = {
   jobId: string;
   status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETE" | "FAILED";
@@ -231,8 +232,8 @@ type RunProgress = {
   stage?: string;
   workers?: number;
 };
-type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | RetiredMarketAlignedResponse;
-type StrategyMode = "rsi_range" | "rsi_recovery" | "top_5_opening_range_breakout";
+type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | StrongBuyBacktestResponse | RetiredMarketAlignedResponse;
+type StrategyMode = "rsi_range" | "rsi_recovery" | "ema_vwap_strong_buy" | "top_5_opening_range_breakout";
 type StoredBacktest = BacktestHistoryEntry<ActiveResponse>;
 type StoredBacktestSummary = BacktestHistorySummary;
 
@@ -276,6 +277,7 @@ class SavedResultBoundary extends Component<SavedResultBoundaryProps, SavedResul
 const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
+  ema_vwap_strong_buy: "EMA 9/21 + VWAP Strong Buy",
   top_5_opening_range_breakout: "Top-5 Opening Range Breakout",
 };
 
@@ -300,6 +302,10 @@ function numericConstraints(strategy: "rsi_range" | "rsi_recovery", key: string)
 
 function isRecoveryResponse(value: ActiveResponse | null): value is RecoveryBacktestResponse {
   return value?.metadata.strategyMode === "rsi_recovery";
+}
+
+function isStrongBuyResponse(value: ActiveResponse | null): value is StrongBuyBacktestResponse {
+  return value?.metadata.strategyMode === "ema_vwap_strong_buy";
 }
 
 function isVwapPullbackResponse(value: ActiveResponse | null): value is VwapPullbackResponse {
@@ -702,6 +708,14 @@ function PerformanceChart({
 export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
+  const [strongBuySettings, setStrongBuySettings] = useState({
+    emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
+    minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
+    higherTimeframe: "15m", minimumConfirmations: 2, targetPct: 1,
+    initialQuantity: 100, allowAdditionalBuys: true,
+    additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
+    minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
+  });
   const [top5OpeningRangeBreakoutSettings, setTop5OpeningRangeBreakoutSettings] = useState<Top5OpeningRangeBreakoutSettings>({ ...top5OpeningRangeBreakoutRecommendedDefaults });
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
@@ -823,6 +837,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
 
   const currentStrategyValues = (strategy: StrategyMode): Record<string, unknown> => {
     if (strategy === "rsi_range") return { entryLow, entryHigh, exitLow, exitHigh };
+    if (strategy === "ema_vwap_strong_buy") return strongBuySettings;
     if (strategy === "rsi_recovery") return {
       rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, setupExpiryBars,
       emaFast, emaSlow, volumeEma, minimumConfirmations, targetPct,
@@ -1021,7 +1036,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     } catch {
       saved = {};
     }
-    if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
+    if (next === "ema_vwap_strong_buy") {
+      setStrongBuySettings((current) => ({ ...current, minimumConfirmations: 2, higherTimeframe: "15m", executionModel: "NEXT_BAR_OPEN" }));
+    } else if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
       const values = { ...top5OpeningRangeBreakoutRecommendedDefaults, ...saved, quantityPerTrade: 50 };
       applyTop5OpeningRangeBreakoutValues(values as Record<string, number | string | boolean>);
       setExitModel("LEGACY_FIXED_TARGET");
@@ -1035,7 +1052,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     const savedTimeframe = typeof saved.timeframe === "string" && timeframes.includes(saved.timeframe as typeof timeframes[number])
       ? saved.timeframe as typeof timeframes[number]
       : next === "rsi_range" ? "1d" : "5m";
-    setTimeframe(next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "5m" : savedTimeframe);
+    setTimeframe(next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || next === "ema_vwap_strong_buy" ? "5m" : savedTimeframe);
     setResponse(null); setActiveHistoryId(null); setError(null);
   };
 
@@ -1077,6 +1094,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     if (strategyMode === "rsi_range") {
       if (!(entryLow < entryHigh && entryHigh < exitLow && exitLow < exitHigh)) {
         setError("RSI ranges must be ordered from the low entry range to the high exit range.");
+        return;
+      }
+    } else if (strategyMode === "ema_vwap_strong_buy") {
+      if (!(strongBuySettings.emaFast < strongBuySettings.emaSlow && strongBuySettings.targetPct > 0 && strongBuySettings.initialQuantity > 0)) {
+        setError("Strong Buy requires fast EMA below slow EMA, a positive target, and positive quantity.");
         return;
       }
     } else if (strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
@@ -1165,7 +1187,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     let completedCount = 0;
     const runId = crypto.randomUUID();
     try {
-      let aggregate: BacktestResponse | RecoveryBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
+      let aggregate: BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
       // Cross-symbol ranking and portfolio capacity require one chronological stream.
       const batchSize = 10;
       const crossSymbolStrategy = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY;
@@ -1177,6 +1199,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           entryHigh,
           exitLow,
           exitHigh,
+        } : strategyMode === "ema_vwap_strong_buy" ? {
+          strongBuyConfiguration: strongBuySettings,
         } : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? {
           top5OpeningRangeBreakoutConfiguration: top5OpeningRangeBreakoutSettings,
         } : {
@@ -1292,10 +1316,33 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           throw new Error(`Backtest service returned incomplete data near ${batch[0]}. Please retry.`);
         }
 
-        if (strategyMode === "rsi_recovery") {
+        if (strategyMode === "ema_vwap_strong_buy") {
+          if (!isStrongBuyResponse(payload)) throw new Error("Backtest service returned the wrong Strong Buy strategy mode.");
+          const previous: StrongBuyBacktestResponse | null = isStrongBuyResponse(aggregate) ? aggregate : null;
+          // Loop-local accumulator; no React state or props are mutated.
+          // eslint-disable-next-line react-hooks/immutability
+          aggregate = previous ? (((): StrongBuyBacktestResponse => {
+            const executedLots = previous.summary.executedLots + payload.summary.executedLots;
+            const takeProfitSold = previous.summary.takeProfitSold + payload.summary.takeProfitSold;
+            return {
+              metadata: previous.metadata,
+              summary: {
+                strongBuySignals: previous.summary.strongBuySignals + payload.summary.strongBuySignals,
+                executedLots,
+                takeProfitSold,
+                holdingLots: previous.summary.holdingLots + payload.summary.holdingLots,
+                targetHitRate: executedLots ? takeProfitSold / executedLots * 100 : 0,
+                realizedPnl: previous.summary.realizedPnl + payload.summary.realizedPnl,
+                unrealizedPnl: previous.summary.unrealizedPnl + payload.summary.unrealizedPnl,
+              },
+              results: [...previous.results, ...payload.results],
+              errors: [...previous.errors, ...payload.errors],
+              warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
+            };
+          })()) : payload;
+        } else if (strategyMode === "rsi_recovery") {
           if (!isRecoveryResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           // This is a loop-local accumulator, not React state or a prop.
-          // eslint-disable-next-line react-hooks/immutability
           aggregate = mergeRecoveryResponses(
             isRecoveryResponse(aggregate) ? aggregate : null,
             payload,
@@ -1635,10 +1682,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
           <button type="button" className={strategyMode === "rsi_range" ? "active" : ""} onClick={() => switchStrategy("rsi_range")}>RSI Range Strategy</button>
           <button type="button" className={strategyMode === "rsi_recovery" ? "active" : ""} onClick={() => switchStrategy("rsi_recovery")}>RSI Recovery Scalping</button>
+          <button type="button" className={strategyMode === "ema_vwap_strong_buy" ? "active" : ""} onClick={() => switchStrategy("ema_vwap_strong_buy")}>EMA/VWAP Strong Buy</button>
           <button type="button" className={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "active" : ""} onClick={() => switchStrategy(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY)}>Top-5 Opening Range Breakout</button>
         </div>
         <section className="backtest-intro">
-          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : "Select a causal top-five watchlist at the open or on rolling rescans, then test opening-range and midday momentum breakouts."}</p></div>
+          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : strategyMode === "ema_vwap_strong_buy" ? "EMA 9/21 crossover above VWAP with any two of ADX, relative volume and confirmed 15-minute alignment." : "Select a causal top-five watchlist at the open or on rolling rescans, then test opening-range and midday momentum breakouts."}</p></div>
           <button type="button" className="method-pill strategy-rule-trigger" aria-label="Hover or focus to view all backtest conditions">
             <Clock3 size={16} />
             <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : "Causal Top-5 watchlist + next-bar ORB"}; hover for all conditions</span>
@@ -1709,11 +1757,28 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           </div>
 
           <div className="control-block compact-control"><span className="control-title">Duration</span><div className="segmented backtest-segmented">{([1, 3] as const).map((years) => <button key={years} type="button" className={durationYears === years ? "active" : ""} onClick={() => setDurationYears(years)}>{years} year{years > 1 ? "s" : ""}</button>)}</div></div>
-          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" disabled={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY && item !== "5m"} className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
+          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" disabled={(strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || strategyMode === "ema_vwap_strong_buy") && item !== "5m"} className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
           {strategyMode === "rsi_range" ? <>
             <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "entryLow")} value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "entryHigh")} value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
             <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "exitLow")} value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "exitHigh")} value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
-          </> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <Top5OpeningRangeBreakoutSettingsPanel
+          </> : strategyMode === "ema_vwap_strong_buy" ? <div className="recovery-config recovery-simple-config">
+            <fieldset className="recovery-config-card confirmation-card"><legend>Strong Buy entry</legend>
+              <label><span>EMA fast</span><input type="number" min="1" value={strongBuySettings.emaFast} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, emaFast: Number(event.target.value) })} /></label>
+              <label><span>EMA slow</span><input type="number" min="2" value={strongBuySettings.emaSlow} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, emaSlow: Number(event.target.value) })} /></label>
+              <label><span>Minimum ADX</span><input type="number" min="0" step="0.5" value={strongBuySettings.minimumAdx} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumAdx: Number(event.target.value) })} /></label>
+              <label><span>Minimum RVOL</span><input type="number" min="0" step="0.1" value={strongBuySettings.minimumRvol} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumRvol: Number(event.target.value) })} /></label>
+              <div className="fixed-strategy-rules"><span>Confirmations: 2 of 3</span><span>ADX/DMI · RVOL · confirmed 15m EMA</span></div>
+            </fieldset>
+            <fieldset className="recovery-config-card position-config-card"><legend>Independent lots</legend>
+              <label><span>Profit target %</span><input type="number" min="0.01" step="0.1" value={strongBuySettings.targetPct} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, targetPct: Number(event.target.value) })} /></label>
+              <label><span>First lot quantity</span><input type="number" min="1" value={strongBuySettings.initialQuantity} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, initialQuantity: Math.floor(Number(event.target.value)) })} /></label>
+              <label><span>Next-lot percentage</span><input type="number" min="0.01" max="100" value={strongBuySettings.additionalQuantityPct} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, additionalQuantityPct: Number(event.target.value) })} /></label>
+              <label><span>Sizing mode</span><select value={strongBuySettings.additionalSizingMode} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, additionalSizingMode: event.target.value })}><option value="REDUCE_EVERY_NEW_LOT">Reduce every new lot</option><option value="FIXED_PERCENTAGE_OF_FIRST_LOT">Fixed % of first</option></select></label>
+              <label><span>Minimum quantity</span><input type="number" min="1" value={strongBuySettings.minimumQuantity} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumQuantity: Math.floor(Number(event.target.value)) })} /></label>
+              <label><span>Maximum entries</span><input type="number" min="1" max="100" value={strongBuySettings.maximumEntriesPerCycle} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, maximumEntriesPerCycle: Math.floor(Number(event.target.value)) })} /></label>
+              <div className="fixed-strategy-rules"><span>Next-open entry</span><span>No stop loss</span><span>Hold to each lot&apos;s target</span></div>
+            </fieldset>
+          </div> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <Top5OpeningRangeBreakoutSettingsPanel
             settings={top5OpeningRangeBreakoutSettings}
             onChange={(key, value) => setTop5OpeningRangeBreakoutSettings((current) => ({ ...current, [key]: key === "quantityPerTrade" ? 50 : value }))}
             onValidityChange={setNumericValidity}
@@ -1870,6 +1935,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           isRetiredMarketAlignedResponse(response) ? <section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned RSI Scalper result is preserved read-only.</span></div></section>
             : isTop5OpeningRangeBreakoutResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "top-5")}><Top5OpeningRangeBreakoutResults response={response} /></SavedResultBoundary>
             : isVwapPullbackResponse(response) ? <><section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned VWAP Pullback Scalper result is preserved read-only.</span></div></section><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "vwap")}><VwapPullbackResults response={response} /></SavedResultBoundary></>
+            : isStrongBuyResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "strong-buy")}><StrongBuyResults response={response} /></SavedResultBoundary>
             : isRecoveryResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "recovery")}><RecoveryResults response={response} /></SavedResultBoundary> : <>
             <section className="backtest-overview">
               <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>

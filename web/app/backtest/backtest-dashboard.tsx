@@ -1037,7 +1037,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       saved = {};
     }
     if (next === "ema_vwap_strong_buy") {
-      setStrongBuySettings((current) => ({ ...current, ...saved, minimumConfirmations: 2, higherTimeframe: "15m", executionModel: "NEXT_BAR_OPEN" }));
+      setStrongBuySettings((current) => ({ ...current, minimumConfirmations: 2, higherTimeframe: "15m", executionModel: "NEXT_BAR_OPEN" }));
     } else if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
       const values = { ...top5OpeningRangeBreakoutRecommendedDefaults, ...saved, quantityPerTrade: 50 };
       applyTop5OpeningRangeBreakoutValues(values as Record<string, number | string | boolean>);
@@ -1187,7 +1187,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     let completedCount = 0;
     const runId = crypto.randomUUID();
     try {
-      let aggregate: BacktestResponse | RecoveryBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
+      let aggregate: BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
       // Cross-symbol ranking and portfolio capacity require one chronological stream.
       const batchSize = 10;
       const crossSymbolStrategy = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY;

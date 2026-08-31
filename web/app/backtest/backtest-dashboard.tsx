@@ -1318,7 +1318,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
 
         if (strategyMode === "ema_vwap_strong_buy") {
           if (!isStrongBuyResponse(payload)) throw new Error("Backtest service returned the wrong Strong Buy strategy mode.");
-          const previous = isStrongBuyResponse(aggregate) ? aggregate : null;
+          const previous: StrongBuyBacktestResponse | null = isStrongBuyResponse(aggregate) ? aggregate : null;
           // Loop-local accumulator; no React state or props are mutated.
           // eslint-disable-next-line react-hooks/immutability
           aggregate = previous ? (() => {

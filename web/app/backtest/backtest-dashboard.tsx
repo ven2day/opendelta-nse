@@ -1319,23 +1319,27 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         if (strategyMode === "ema_vwap_strong_buy") {
           if (!isStrongBuyResponse(payload)) throw new Error("Backtest service returned the wrong Strong Buy strategy mode.");
           const previous = isStrongBuyResponse(aggregate) ? aggregate : null;
-          aggregate = previous ? {
-            metadata: previous.metadata,
-            summary: {
-              strongBuySignals: previous.summary.strongBuySignals + payload.summary.strongBuySignals,
-              executedLots: previous.summary.executedLots + payload.summary.executedLots,
-              takeProfitSold: previous.summary.takeProfitSold + payload.summary.takeProfitSold,
-              holdingLots: previous.summary.holdingLots + payload.summary.holdingLots,
-              targetHitRate: 0,
-              realizedPnl: previous.summary.realizedPnl + payload.summary.realizedPnl,
-              unrealizedPnl: previous.summary.unrealizedPnl + payload.summary.unrealizedPnl,
-            },
-            results: [...previous.results, ...payload.results],
-            errors: [...previous.errors, ...payload.errors],
-            warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
-          } : payload;
-          aggregate.summary.targetHitRate = aggregate.summary.executedLots
-            ? aggregate.summary.takeProfitSold / aggregate.summary.executedLots * 100 : 0;
+          // Loop-local accumulator; no React state or props are mutated.
+          // eslint-disable-next-line react-hooks/immutability
+          aggregate = previous ? (() => {
+            const executedLots = previous.summary.executedLots + payload.summary.executedLots;
+            const takeProfitSold = previous.summary.takeProfitSold + payload.summary.takeProfitSold;
+            return {
+              metadata: previous.metadata,
+              summary: {
+                strongBuySignals: previous.summary.strongBuySignals + payload.summary.strongBuySignals,
+                executedLots,
+                takeProfitSold,
+                holdingLots: previous.summary.holdingLots + payload.summary.holdingLots,
+                targetHitRate: executedLots ? takeProfitSold / executedLots * 100 : 0,
+                realizedPnl: previous.summary.realizedPnl + payload.summary.realizedPnl,
+                unrealizedPnl: previous.summary.unrealizedPnl + payload.summary.unrealizedPnl,
+              },
+              results: [...previous.results, ...payload.results],
+              errors: [...previous.errors, ...payload.errors],
+              warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
+            };
+          })() : payload;
         } else if (strategyMode === "rsi_recovery") {
           if (!isRecoveryResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           // This is a loop-local accumulator, not React state or a prop.
@@ -1764,7 +1768,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               <label><span>EMA slow</span><input type="number" min="2" value={strongBuySettings.emaSlow} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, emaSlow: Number(event.target.value) })} /></label>
               <label><span>Minimum ADX</span><input type="number" min="0" step="0.5" value={strongBuySettings.minimumAdx} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumAdx: Number(event.target.value) })} /></label>
               <label><span>Minimum RVOL</span><input type="number" min="0" step="0.1" value={strongBuySettings.minimumRvol} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumRvol: Number(event.target.value) })} /></label>
-              <label><span>Confirmations</span><strong className="derived-value">2 of 3</strong><small>ADX/DMI · RVOL · confirmed 15m EMA</small></label>
+              <div className="fixed-strategy-rules"><span>Confirmations: 2 of 3</span><span>ADX/DMI · RVOL · confirmed 15m EMA</span></div>
             </fieldset>
             <fieldset className="recovery-config-card position-config-card"><legend>Independent lots</legend>
               <label><span>Profit target %</span><input type="number" min="0.01" step="0.1" value={strongBuySettings.targetPct} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, targetPct: Number(event.target.value) })} /></label>
@@ -1773,7 +1777,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               <label><span>Sizing mode</span><select value={strongBuySettings.additionalSizingMode} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, additionalSizingMode: event.target.value })}><option value="REDUCE_EVERY_NEW_LOT">Reduce every new lot</option><option value="FIXED_PERCENTAGE_OF_FIRST_LOT">Fixed % of first</option></select></label>
               <label><span>Minimum quantity</span><input type="number" min="1" value={strongBuySettings.minimumQuantity} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumQuantity: Math.floor(Number(event.target.value)) })} /></label>
               <label><span>Maximum entries</span><input type="number" min="1" max="100" value={strongBuySettings.maximumEntriesPerCycle} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, maximumEntriesPerCycle: Math.floor(Number(event.target.value)) })} /></label>
-              <div className="fixed-strategy-rules"><span>Next-open entry</span><span>No stop loss</span><span>Hold to each lot's target</span></div>
+              <div className="fixed-strategy-rules"><span>Next-open entry</span><span>No stop loss</span><span>Hold to each lot&apos;s target</span></div>
             </fieldset>
           </div> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <Top5OpeningRangeBreakoutSettingsPanel
             settings={top5OpeningRangeBreakoutSettings}

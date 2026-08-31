@@ -1,5 +1,4 @@
 "use client";
-/* eslint-disable @next/next/no-html-link-for-pages -- Native navigation matches the existing production shell. */
 
 import {
   Activity,
@@ -429,7 +428,6 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
   }, []);
 
   // Polling is the presentation transport; market ingestion remains server-side streaming.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
     const refreshVisible = () => {
       if (document.visibilityState === "visible") void load(true);
@@ -439,6 +437,7 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
       configurationLoaded.current = false;
       void load(true);
     };
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Initial runtime snapshot belongs to this external polling subscription.
     void load();
     const timer = window.setInterval(refreshVisible, SIGNAL_REFRESH_INTERVAL_MS);
     document.addEventListener("visibilitychange", refreshConfiguration);

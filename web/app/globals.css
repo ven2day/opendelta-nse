@@ -5573,6 +5573,7 @@ footer {
 .scanner-signal-heading a { color: var(--blue); font-size: 13px; font-weight: 750; text-decoration: none; }
 .scanner-signal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 8px 18px 18px; }
 .scanner-signal-grid article { overflow: hidden; border: 1px solid color-mix(in srgb, var(--green) 48%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--green) 5%, var(--surface-raised)); }
+.scanner-signal-grid article.research-signal { border-color: color-mix(in srgb, var(--amber) 48%, var(--border)); background: color-mix(in srgb, var(--amber) 5%, var(--surface-raised)); }
 .scanner-signal-title { display: flex; align-items: center; gap: 11px; border-bottom: 1px solid var(--border); padding: 13px 15px; }
 .scanner-signal-title > span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 8px; color: var(--green); background: var(--green-soft); font-weight: 850; }
 .scanner-signal-title > div { display: grid; flex: 1; gap: 2px; }
@@ -5588,6 +5589,15 @@ footer {
 .scanner-signal-prices strong { font-size: 14px; }
 .scanner-signal-grid footer { display: flex; justify-content: space-between; gap: 10px; padding: 11px 15px; color: var(--muted); font-size: 12px; }
 .scanner-signal-grid footer strong { color: var(--text); }
+.scanner-signal-evidence { display: grid; gap: 4px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 12px 15px; background: var(--surface); }
+.scanner-signal-evidence strong { font-size: 13px; }
+.scanner-signal-evidence span,
+.scanner-signal-evidence small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.scanner-signal-grid details { border-bottom: 1px solid var(--border); padding: 0 15px; background: var(--surface); }
+.scanner-signal-grid details summary { cursor: pointer; padding: 11px 0; font-size: 13px; font-weight: 750; }
+.scanner-signal-grid details ul { display: grid; gap: 7px; margin: 0 0 13px; padding-left: 20px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.scanner-signal-grid details li strong { color: var(--text); }
+.scanner-paper-skip { margin: 0; border-bottom: 1px solid var(--border); padding: 10px 15px; color: var(--amber); font-size: 12px; }
 .scanner-no-trade { display: flex; align-items: center; gap: 14px; margin: 8px 18px 18px; border: 1px solid var(--border); border-radius: 10px; padding: 18px; color: var(--muted); background: var(--surface); }
 .scanner-no-trade strong { color: var(--text); font-size: 18px; }
 .scanner-no-trade span { font-size: 14px; }
@@ -5604,6 +5614,10 @@ footer {
 .scanner-funnel-rejections p { display: flex; align-items: center; gap: 9px; margin: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px; }
 .scanner-funnel-rejections p strong { color: var(--rose); font-size: 16px; }
 .scanner-funnel-rejections p span { color: var(--muted); font-size: 11px; }
+.scanner-funnel-rejections .scanner-rejected-events { display: grid; grid-template-columns: 1fr; max-height: 420px; margin-top: 12px; overflow-y: auto; }
+.scanner-funnel-rejections .scanner-rejected-events p { align-items: flex-start; justify-content: space-between; }
+.scanner-funnel-rejections .scanner-rejected-events p strong { color: var(--text); font-size: 12px; }
+.scanner-funnel-rejections .scanner-rejected-events p span { text-align: right; }
 .signals-shell .signals-tabs .signal-funnel-link { margin-left: 0; border-bottom-color: var(--green); color: var(--green); }
 .signals-shell .signals-tabs > a:last-child { margin-left: auto; }
 

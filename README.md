@@ -86,6 +86,7 @@ diagnostics.
 | --- | --- | --- |
 | RSI Range Strategy | Active | Existing strategy behavior and historical results are preserved. |
 | RSI Recovery Scalping | Active | Existing strategy key, configuration, signals and exits are preserved. |
+| NSE Signal Engine V2 | Research only | Long-only Trend Pullback Continuation and Breakout-Retest signals; all valid setups remain visible and broker orders are disabled. |
 | Top-5 Opening Range Breakout | Research only | Supports `FROZEN_OPEN` and `ROLLING`; broker orders are disabled. |
 | Market-Aligned RSI Scalper | Retired | Historical results remain read-only; new runs are blocked. |
 | Market-Aligned VWAP Pullback Scalper | Retired | Historical results remain read-only; new runs are blocked. |
@@ -95,23 +96,27 @@ No strategy in this repository is represented as guaranteed profitable.
 
 ## Stock Scanner
 
-The authenticated `/scanner` page now leads with a signal-first funnel; the
-same view is available under Signals at `/signals/funnel`. It reads locally
-cached completed five-minute candles for the saved global price-filtered NSE
-universe and rescans every 15 minutes from 09:30 through 14:30 IST. Every
-eligible symbol is evaluated before any setup is ranked. At most two active,
-trade-ready paper setups and three watch setups are displayed. Zero passing
-setups produces an explicit `NO TRADE` result.
+The authenticated `/scanner` page now leads with NSE Signal Engine V2; the same
+view is available under Signals at `/signals/funnel`. It reads locally cached
+completed five-minute candles for the saved global price-filtered NSE universe.
+Every eligible symbol is evaluated for two independent long-only setups:
+Trend Pullback Continuation and Breakout-Retest. Signal checks follow the latest
+completed five-minute candle. Ranking changes display order only and never
+hides a valid setup; activity Top-5 and Top-20 tables remain context, not entry
+signals.
 
-The active trade-ready detector reuses the exact RSI Recovery v1.1 evaluator;
-its existing live workspace, frozen universe and historical behavior are not
-modified. The retired Market-Aligned VWAP Pullback detector is visible only as
-research `WATCH` context and can never become `TRADE_READY`. The former Top-5
-and Top-20 activity rankings remain below the funnel as context, not entry
-signals. The durable audit repository deduplicates rescans, limits new accepted
-paper signals to five per day and one per symbol per day, and retains rejected
-reason codes. Scanner feature caches retain 160 completed bars so the RSI
-warmup does not disappear near the open.
+Every valid setup includes the passed rules, BUY rationale, stop-entry range,
+structural stop, 1.5R target, timeout/invalidation/session SELL conditions and
+historical-evidence record. V2 does not manufacture a probability: until its
+walk-forward gate has at least 200 trades across 50 symbols, positive net and
+stress expectancy, profit factor at least 1.20 and a positive confidence lower
+bound, the evidence is `UNVALIDATED` and the setup is a `RESEARCH_SIGNAL`.
+Paper limits decide only `PAPER_EXECUTED` versus
+`PAPER_SKIPPED_RISK_LIMIT`; qualified signals remain visible. The original RSI
+Recovery live workspace, keys, signals and history are unchanged.
+
+The complete rule and evidence contract is documented in
+[NSE Signal Engine V2](web/docs/nse-signal-engine-v2.md).
 
 The scanner never fetches missing historical candles during an HTTP request,
 never creates a broker order, and never enables live execution. The main NSE

@@ -24,7 +24,7 @@ grep -q 'Stock Scanner' "${page}"
 grep -q 'paper research' "${page}"
 
 curl -fsS -b "${cookie_jar}" "${base_url}/signals/funnel" > "${page}"
-grep -q 'NSE Signal Funnel' "${page}"
+grep -q 'NSE Signal Engine V2' "${page}"
 
 anonymous_status="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/stock-scanner")"
 [[ "${anonymous_status}" == "401" ]]
@@ -35,6 +35,7 @@ curl --max-time 240 -fsS -b "${cookie_jar}" \
 jq -e '
   .metadata.timeframe == "5m" and
   .metadata.rescanIntervalMinutes == 15 and
+  .metadata.signalEvaluationIntervalMinutes == 5 and
   .metadata.paperOnly == true and
   .metadata.liveOrdersEnabled == false and
   .metadata.signalUniversePolicy == "SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE" and
@@ -47,15 +48,16 @@ jq -e '
   (.opportunities | length) <= 20 and
   .signalFunnel.metadata.paperOnly == true and
   .signalFunnel.metadata.liveOrdersEnabled == false and
-  .signalFunnel.metadata.configuration.maximumTradeReady == 2 and
-  .signalFunnel.metadata.configuration.maximumWatch == 3 and
+  .signalFunnel.metadata.engineVersion == "nse-signal-engine-2.0.0" and
+  .signalFunnel.metadata.rankingPolicy == "DISPLAY_ORDER_ONLY_NEVER_HIDES_SIGNALS" and
   .signalFunnel.metadata.configuration.maximumTradesPerDay == 5 and
   .signalFunnel.metadata.configuration.maximumConcurrent == 2 and
-  (.signalFunnel.tradeReady | length) <= 2 and
-  (.signalFunnel.watch | length) <= 3 and
-  ([.signalFunnel.tradeReady[] | select(.strategyStatus != "ACTIVE")] | length) == 0 and
-  ([.signalFunnel.metadata.strategies[] | select(.key == "rsi_recovery_v1_1" and .tradeReadyAllowed == true)] | length) == 1 and
-  ([.signalFunnel.metadata.strategies[] | select(.key == "market_aligned_vwap_pullback_scalper" and .tradeReadyAllowed == false)] | length) == 1
+  (.signalFunnel.allSignals | length) == .signalFunnel.counts.validSetups and
+  ([.signalFunnel.allSignals[] | select(.entryRange.minimum == null or .entryRange.maximum == null or .estimatedStop == null or .estimatedTarget == null)] | length) == 0 and
+  ([.signalFunnel.allSignals[] | select((.whyBuy | length) == 0 or (.sellConditions | length) < 6)] | length) == 0 and
+  ([.signalFunnel.allSignals[] | select(.historicalEvidence.status == "UNVALIDATED" and (.historicalEvidence.targetHitProbability != null or .historicalEvidence.expectedNetR != null))] | length) == 0 and
+  ([.signalFunnel.metadata.strategies[] | select(.key == "nse_trend_pullback_continuation_v2")] | length) == 1 and
+  ([.signalFunnel.metadata.strategies[] | select(.key == "nse_breakout_retest_v2")] | length) == 1
 ' "${response}" >/dev/null
 
 jq -c '{
@@ -66,7 +68,7 @@ jq -c '{
   loaded: .metadata.symbolsLoaded,
   scored: .metadata.symbolsScored,
   topFive: [.watchlist.topFive[] | {rank: .rankAfter, symbol, tier, score}],
-  tradeReady: [.signalFunnel.tradeReady[] | {rank, symbol, strategyKey, signalScore}],
-  watch: [.signalFunnel.watch[] | {rank, symbol, strategyKey, strategyStatus, signalScore}],
+  validSignals: [.signalFunnel.allSignals[] | {rank, symbol, strategyKey, status, entryRange, estimatedStop, estimatedTarget, historicalEvidence}],
+  rejectionCounts: .signalFunnel.rejectionCounts,
   liveOrdersEnabled: .metadata.liveOrdersEnabled
 }' "${response}"

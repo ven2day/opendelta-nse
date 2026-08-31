@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 import gzip
 import io
+import json
 import multiprocessing
 import os
 import threading
@@ -32,7 +33,7 @@ from nse_signal_funnel import (
     build_nse_signal_funnel,
 )
 
-SCANNER_VERSION = "stock-scanner-1.1.0"
+SCANNER_VERSION = "stock-scanner-2.0.0"
 SCANNER_FEATURE_CACHE_VERSION = "stock-scanner-features-2.0.0"
 SCANNER_TIMEFRAME = "5m"
 SCANNER_MAX_SOURCE_ROWS = 12_000
@@ -239,6 +240,7 @@ def build_stock_scanner_snapshot(
     maximum_price: float,
     symbols_requested: int | None = None,
     errors: Sequence[Mapping[str, str]] = (),
+    signal_evidence: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build one causal scanner snapshot from already-completed feature frames."""
     now = _as_ist(now_ist)
@@ -377,14 +379,17 @@ def build_stock_scanner_snapshot(
         if remaining:
             next_rescan = remaining[0].isoformat()
     freshness = max(0.0, (pd.Timestamp(now) - latest_source).total_seconds() / 60.0)
+    signal_as_of = min(latest_source, pd.Timestamp(now)) if current_session else latest_source
     warnings = [
         "Research and paper-signal only. The scanner has no broker-order path.",
-        "The signal-first funnel evaluates active RSI Recovery across every eligible symbol; retired VWAP Pullback candidates remain WATCH-only research context.",
+        "Signal Engine V2 evaluates Trend Pullback Continuation and Breakout-Retest across every eligible symbol on completed five-minute candles.",
+        "Ranking controls display order only and never hides a valid setup.",
+        "V2 probability and expectancy remain unclaimed until walk-forward evidence passes the qualification gate.",
         "The original RSI Recovery live workspace remains unchanged and separately auditable.",
         "Historical bid/ask spread is advisory when unavailable and is never fabricated.",
     ]
     if nifty_row is None:
-        warnings.append("NIFTY context was unavailable at the selected rescan; its score contribution is neutral.")
+        warnings.append("NIFTY context is unavailable; Signal Engine V2 fails closed and rejects new setups.")
 
     return {
         "metadata": {
@@ -396,10 +401,12 @@ def build_stock_scanner_snapshot(
             "sessionDate": session_day.isoformat(),
             "timeframe": SCANNER_TIMEFRAME,
             "rescanIntervalMinutes": effective_config.rescan_interval_minutes,
+            "signalEvaluationIntervalMinutes": 5,
             "rescanWindow": [effective_config.selection_time, SCANNER_CONFIG.rescan_end_time],
             "lastRescanTimestamp": final_rescan.isoformat(),
             "nextRescanTimestamp": next_rescan,
             "latestSourceTimestamp": latest_source.isoformat(),
+            "signalEvaluationTimestamp": signal_as_of.isoformat(),
             "dataFreshnessMinutes": round(freshness, 2),
             "symbolsRequested": requested,
             "symbolsLoaded": len(session_frames),
@@ -426,7 +433,9 @@ def build_stock_scanner_snapshot(
         "signalFunnel": build_nse_signal_funnel(
             feature_frames,
             ranked_for_funnel,
-            as_of=final_rescan,
+            as_of=signal_as_of,
+            nifty_frame=nifty_frame,
+            evidence_by_strategy=signal_evidence,
         ),
         "eligibility": {
             "eligible": len(eligible),
@@ -455,10 +464,31 @@ class StockScannerService:
         self._cache_value: dict[str, Any] | None = None
         cache_directory = getattr(store, "cache_directory", None)
         self.funnel_repository = funnel_repository
+        configured_evidence = os.environ.get("NSE_SIGNAL_EVIDENCE_PATH", "").strip()
+        self.signal_evidence_path = Path(configured_evidence) if configured_evidence else None
         if self.funnel_repository is None and isinstance(cache_directory, Path) and cache_directory.is_absolute():
             self.funnel_repository = NseSignalFunnelRepository(
                 cache_directory / "nse-signal-funnel" / "events.sqlite3"
             )
+        if self.signal_evidence_path is None and isinstance(cache_directory, Path) and cache_directory.is_absolute():
+            self.signal_evidence_path = cache_directory / "nse-signal-v2" / "evidence.json"
+
+    def _signal_evidence(self) -> dict[str, Mapping[str, Any]]:
+        path = self.signal_evidence_path
+        if path is None or not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        strategies = payload.get("strategies", payload) if isinstance(payload, dict) else {}
+        if not isinstance(strategies, dict):
+            return {}
+        return {
+            str(key): value
+            for key, value in strategies.items()
+            if isinstance(value, dict)
+        }
 
     def _feature_cache_path(
         self,
@@ -574,7 +604,7 @@ class StockScannerService:
     ) -> dict[str, Any]:
         now = _as_ist(now_ist or datetime.now(IST))
         normalized_symbols = tuple(sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}))
-        rescan_bucket = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+        rescan_bucket = now.replace(minute=(now.minute // 5) * 5, second=0, microsecond=0)
         cache_key = (normalized_symbols, float(minimum_price), float(maximum_price), rescan_bucket.isoformat())
         with self._lock:
             monotonic_now = time.monotonic()
@@ -671,6 +701,7 @@ class StockScannerService:
                 maximum_price=maximum_price,
                 symbols_requested=len(normalized_symbols),
                 errors=errors,
+                signal_evidence=self._signal_evidence(),
             )
             result["metadata"] = {
                 **result["metadata"],

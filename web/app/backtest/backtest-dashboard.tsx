@@ -60,6 +60,7 @@ import {
   type Top5OpeningRangeBreakoutResponse,
 } from "./daily-watchlist-results";
 import { createTop5OpeningRangeBreakoutRequest } from "./top-5-opening-range-breakout-contract.mjs";
+import { StrongBuyResults, type StrongBuyBacktestResponse } from "./strong-buy-results";
 import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
 import {
   backtestHistorySummary,
@@ -183,7 +184,7 @@ type BacktestResponse = {
   warnings: string[];
 };
 
-type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse) & { detail?: string };
+type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | StrongBuyBacktestResponse) & { detail?: string };
 type BacktestJobStatus = {
   jobId: string;
   status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETE" | "FAILED";
@@ -231,8 +232,8 @@ type RunProgress = {
   stage?: string;
   workers?: number;
 };
-type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | RetiredMarketAlignedResponse;
-type StrategyMode = "rsi_range" | "rsi_recovery" | "top_5_opening_range_breakout";
+type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | StrongBuyBacktestResponse | RetiredMarketAlignedResponse;
+type StrategyMode = "rsi_range" | "rsi_recovery" | "ema_vwap_strong_buy" | "top_5_opening_range_breakout";
 type StoredBacktest = BacktestHistoryEntry<ActiveResponse>;
 type StoredBacktestSummary = BacktestHistorySummary;
 
@@ -276,6 +277,7 @@ class SavedResultBoundary extends Component<SavedResultBoundaryProps, SavedResul
 const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
+  ema_vwap_strong_buy: "EMA 9/21 + VWAP Strong Buy",
   top_5_opening_range_breakout: "Top-5 Opening Range Breakout",
 };
 
@@ -300,6 +302,10 @@ function numericConstraints(strategy: "rsi_range" | "rsi_recovery", key: string)
 
 function isRecoveryResponse(value: ActiveResponse | null): value is RecoveryBacktestResponse {
   return value?.metadata.strategyMode === "rsi_recovery";
+}
+
+function isStrongBuyResponse(value: ActiveResponse | null): value is StrongBuyBacktestResponse {
+  return value?.metadata.strategyMode === "ema_vwap_strong_buy";
 }
 
 function isVwapPullbackResponse(value: ActiveResponse | null): value is VwapPullbackResponse {
@@ -702,6 +708,14 @@ function PerformanceChart({
 export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
+  const [strongBuySettings, setStrongBuySettings] = useState({
+    emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
+    minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
+    higherTimeframe: "15m", minimumConfirmations: 2, targetPct: 1,
+    initialQuantity: 100, allowAdditionalBuys: true,
+    additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
+    minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
+  });
   const [top5OpeningRangeBreakoutSettings, setTop5OpeningRangeBreakoutSettings] = useState<Top5OpeningRangeBreakoutSettings>({ ...top5OpeningRangeBreakoutRecommendedDefaults });
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
@@ -823,6 +837,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
 
   const currentStrategyValues = (strategy: StrategyMode): Record<string, unknown> => {
     if (strategy === "rsi_range") return { entryLow, entryHigh, exitLow, exitHigh };
+    if (strategy === "ema_vwap_strong_buy") return strongBuySettings;
     if (strategy === "rsi_recovery") return {
       rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, setupExpiryBars,
       emaFast, emaSlow, volumeEma, minimumConfirmations, targetPct,
@@ -1021,7 +1036,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     } catch {
       saved = {};
     }
-    if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
+    if (next === "ema_vwap_strong_buy") {
+      setStrongBuySettings((current) => ({ ...current, ...saved, minimumConfirmations: 2, higherTimeframe: "15m", executionModel: "NEXT_BAR_OPEN" }));
+    } else if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
       const values = { ...top5OpeningRangeBreakoutRecommendedDefaults, ...saved, quantityPerTrade: 50 };
       applyTop5OpeningRangeBreakoutValues(values as Record<string, number | string | boolean>);
       setExitModel("LEGACY_FIXED_TARGET");
@@ -1035,7 +1052,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     const savedTimeframe = typeof saved.timeframe === "string" && timeframes.includes(saved.timeframe as typeof timeframes[number])
       ? saved.timeframe as typeof timeframes[number]
       : next === "rsi_range" ? "1d" : "5m";
-    setTimeframe(next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "5m" : savedTimeframe);
+    setTimeframe(next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || next === "ema_vwap_strong_buy" ? "5m" : savedTimeframe);
     setResponse(null); setActiveHistoryId(null); setError(null);
   };
 

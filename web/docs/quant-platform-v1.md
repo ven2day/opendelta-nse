@@ -102,7 +102,7 @@ Existing production engines remain active for existing strategies. The modular c
 
 ## Signal, research, and job lifecycles
 
-Existing RSI Recovery evaluation remains unchanged. The signal-first scanner prevents duplicates, records rejection reasons, limits trade-ready/watch candidates, and remains paper-only. Research is not connected to broker execution.
+Existing RSI Recovery evaluation remains unchanged. NSE Signal Engine V2 separately evaluates Trend Pullback Continuation and Breakout-Retest on completed five-minute candles. It records every rule and rejection, exposes every technically valid signal without a Top-N cap, and uses ranking only for display order. Paper risk limits annotate execution or skip decisions without hiding qualified signals. Missing walk-forward evidence remains `UNVALIDATED`; it is never converted into a probability. Research is not connected to broker execution.
 
 The original Research implementation is disabled because it used one-bar
 next-open-to-next-close observations rather than an actual base strategy and

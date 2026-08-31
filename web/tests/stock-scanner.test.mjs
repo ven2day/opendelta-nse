@@ -41,12 +41,15 @@ test("scanner page and API require the existing authenticated session", async ()
 
 test("scanner UI leads with actual setups and retains activity rankings as context", async () => {
   const scanner = await source("app/scanner/stock-scanner.tsx");
-  assert.match(scanner, /Actual strategy setups/);
-  assert.match(scanner, /TRADE_READY/);
-  assert.match(scanner, /NO TRADE/);
+  assert.match(scanner, /All valid setups/);
+  assert.match(scanner, /ALL QUALIFYING TECHNICAL SETUPS/);
+  assert.match(scanner, /NO VALID SETUP/);
   assert.match(scanner, /activity leaders/);
   assert.match(scanner, /Top 20 opportunities/);
-  assert.match(scanner, /response\.signalFunnel\.tradeReady/);
+  assert.match(scanner, /response\.signalFunnel\.allSignals/);
+  assert.match(scanner, /Why BUY/);
+  assert.match(scanner, /When to SELL/);
+  assert.match(scanner, /historicalEvidence/);
   assert.match(scanner, /response\.watchlist\.topFive/);
   assert.match(scanner, /response\.opportunities/);
 });
@@ -73,16 +76,19 @@ test("scanner consumes the application-wide price filter", async () => {
 });
 
 test("scanner stays paper-only and keeps the original RSI Recovery workspace isolated", async () => {
-  const [scanner, backend, funnel, signals] = await Promise.all([
+  const [scanner, backend, funnel, engine, signals] = await Promise.all([
     source("app/scanner/stock-scanner.tsx"),
     source("../stock_scanner.py"),
     source("../nse_signal_funnel.py"),
+    source("../nse_signal_engine_v2.py"),
     source("../live_signals.py"),
   ]);
   assert.match(scanner, /Live orders disabled/);
   assert.match(backend, /"liveOrdersEnabled": False/);
   assert.match(backend, /"signalUniversePolicy": "SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE"/);
-  assert.match(funnel, /from live_signals import evaluate_latest_recovery/);
+  assert.match(funnel, /from nse_signal_engine_v2 import/);
+  assert.match(engine, /TrendPullbackContinuationDetector/);
+  assert.match(engine, /BreakoutRetestDetector/);
   assert.match(signals, /def evaluate_latest_recovery/);
   assert.doesNotMatch(`${backend}\n${funnel}`, /place_order|broker_order|paper-buy/);
 });
@@ -108,6 +114,7 @@ test("production backend image includes both scanner modules", async () => {
   const dockerfile = await source("deploy/backtest.Dockerfile");
   assert.match(dockerfile, /stock_scanner\.py/);
   assert.match(dockerfile, /nse_signal_funnel\.py/);
+  assert.match(dockerfile, /nse_signal_engine_v2\.py/);
 });
 
 test("production scanner smoke validates the signal-first contract", async () => {
@@ -115,9 +122,9 @@ test("production scanner smoke validates the signal-first contract", async () =>
   assert.match(smoke, /SIGNAL_FIRST_FULL_ELIGIBLE_UNIVERSE/);
   assert.match(smoke, /maximumTradesPerDay == 5/);
   assert.match(smoke, /maximumConcurrent == 2/);
-  assert.match(smoke, /rsi_recovery_v1_1/);
-  assert.match(smoke, /market_aligned_vwap_pullback_scalper/);
-  assert.match(smoke, /strategyStatus != "ACTIVE"/);
+  assert.match(smoke, /nse_trend_pullback_continuation_v2/);
+  assert.match(smoke, /nse_breakout_retest_v2/);
+  assert.match(smoke, /DISPLAY_ORDER_ONLY_NEVER_HIDES_SIGNALS/);
 });
 
 test("candidate deployment supports an isolated validated host port", async () => {

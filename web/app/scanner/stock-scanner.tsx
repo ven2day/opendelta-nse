@@ -61,7 +61,7 @@ type FunnelSignal = {
   strategyName: string;
   strategyStatus?: string;
   signalTimestamp: string;
-  status: "TRADE_READY" | "WATCH" | "REJECTED";
+  status: "QUALIFIED" | "RESEARCH_SIGNAL" | "PAPER_EXECUTED" | "PAPER_SKIPPED_RISK_LIMIT" | "REJECTED";
   rank?: number;
   signalScore?: number;
   activityScore?: number;
@@ -74,6 +74,26 @@ type FunnelSignal = {
   quantity?: number;
   executionModel?: string;
   reasons?: string[];
+  paperSkipReasons?: string[];
+  entryRange?: { minimum?: number | null; maximum?: number | null };
+  whyBuy?: string[];
+  rules?: Array<{ code: string; label: string; passed: boolean; required: boolean; unavailable?: boolean; actual?: unknown; threshold?: unknown }>;
+  sellConditions?: Array<{ type: string; price?: number | null; condition: string }>;
+  historicalEvidence?: {
+    status: string;
+    passesQualificationGate: boolean;
+    sampleSize: number;
+    distinctSymbols: number;
+    targetHitProbability?: number | null;
+    stopHitProbability?: number | null;
+    timeoutProbability?: number | null;
+    expectedNetReturnPct?: number | null;
+    expectedNetR?: number | null;
+    profitFactor?: number | null;
+    confidenceLowerNetR?: number | null;
+    confidenceUpperNetR?: number | null;
+    message: string;
+  };
 };
 
 type SignalFunnel = {
@@ -82,12 +102,16 @@ type SignalFunnel = {
     generatedAt: string;
     paperOnly: boolean;
     liveOrdersEnabled: boolean;
-    configuration: { maximumTradesPerDay: number; maximumConcurrent: number; quantityPerTrade: number };
+    configuration: { maximumTradesPerDay: number; maximumConcurrent: number; quantityPerTrade: number; rewardRisk?: number };
     strategies: Array<{ key: string; name: string; version: string; tradeReadyAllowed?: boolean }>;
+    rankingPolicy?: string;
   };
-  counts: { tradeable: number; strategyEvaluations: number; validSetups: number; tradeReady: number; watch: number; rejected: number };
+  counts: { tradeable: number; strategyEvaluations: number; validSetups: number; qualified?: number; researchSignals?: number; tradeReady: number; watch: number; rejected: number; paperExecuted?: number; paperSkippedRisk?: number };
+  allSignals: FunnelSignal[];
   tradeReady: FunnelSignal[];
   watch: FunnelSignal[];
+  paperExecuted?: FunnelSignal[];
+  paperSkippedRisk?: FunnelSignal[];
   rejected: FunnelSignal[];
   rejectionCounts: Record<string, number>;
 };
@@ -207,7 +231,7 @@ export function StockScanner({ userName, signOutHref, focusSignals = false }: { 
 
     <main className="main-content scanner-main">
       <section className="scanner-hero backtest-panel">
-        <div><span className="section-kicker">Completed five-minute candles · paper research</span><h1>{focusSignals ? "NSE Signal Funnel" : "Stock Scanner & Signal Funnel"}</h1><p>Evaluates active RSI Recovery across every eligible stock and shows retired VWAP Pullback candidates as WATCH-only research. The activity Top-5 remains context and never forces a trade.</p></div>
+        <div><span className="section-kicker">Completed five-minute candles · paper research</span><h1>{focusSignals ? "NSE Signal Engine V2" : "Stock Scanner & Signal Engine V2"}</h1><p>Evaluates Trend Pullback Continuation and Breakout-Retest across every eligible stock. Every technically valid setup stays visible; ranking changes display order only.</p></div>
         <button className="secondary-action" disabled={refreshing} onClick={() => void load(true)}>{refreshing ? <><LoaderCircle className="spin" size={15} />Refreshing…</> : <><RefreshCw size={15} />Refresh scanner</>}</button>
       </section>
 
@@ -225,12 +249,21 @@ export function StockScanner({ userName, signOutHref, focusSignals = false }: { 
         <section className="scanner-safety backtest-panel"><div><strong>Research only</strong><span>Live orders disabled · {response.metadata.signalUniversePolicy.replaceAll("_", " ")}</span></div><div><strong>Global price range</strong><span>{money(response.metadata.globalPriceRange.minimumPrice)} to {money(response.metadata.globalPriceRange.maximumPrice)}</span></div><div><strong>Source</strong><span>{formatIst(response.metadata.latestSourceTimestamp)} · {response.metadata.resultSource?.replaceAll("_", " ")}</span></div></section>
 
         <section className="backtest-panel scanner-funnel" id="trade-ready">
-          <div className="panel-title"><div><span className="section-kicker">Signal-first selection</span><h2>Actual strategy setups</h2></div><span className="date-window">Maximum {response.signalFunnel.metadata.configuration.maximumConcurrent} concurrent · {response.signalFunnel.metadata.configuration.maximumTradesPerDay} trades/day</span></div>
-          <div className="scanner-funnel-counts"><div><span>Universe requested</span><strong>{response.metadata.symbolsRequested}</strong></div><div><span>Tradeable</span><strong>{response.signalFunnel.counts.tradeable}</strong></div><div><span>Strategy checks</span><strong>{response.signalFunnel.counts.strategyEvaluations}</strong></div><div><span>Valid setups</span><strong>{response.signalFunnel.counts.validSetups}</strong></div><div className="ready"><span>Trade ready</span><strong>{response.signalFunnel.counts.tradeReady}</strong></div><div><span>Watch</span><strong>{response.signalFunnel.counts.watch}</strong></div></div>
-          <div className="scanner-signal-heading"><div><h3>TRADE_READY</h3><p>Only completed-candle setups that passed a registered strategy and the signal score threshold.</p></div><a href="/signals">Open RSI Recovery history</a></div>
-          {response.signalFunnel.tradeReady.length ? <div className="scanner-signal-grid">{response.signalFunnel.tradeReady.map((signal) => <article className="trade-ready" key={signal.eventId}><div className="scanner-signal-title"><span>#{signal.rank}</span><div><strong>{signal.symbol}</strong><small>{signal.strategyName}</small></div><b>BUY</b></div><div className="scanner-signal-score"><span>Signal score</span><strong>{number(signal.signalScore)}</strong></div><div className="scanner-signal-prices"><div><span>Estimated entry</span><strong>{price(signal.estimatedEntry)}</strong></div><div><span>Stop</span><strong>{price(signal.estimatedStop)}</strong></div><div><span>Target</span><strong>{price(signal.estimatedTarget)}</strong></div><div><span>Risk / share</span><strong>{price(signal.riskPerShare)}</strong></div></div><footer><span>{signal.executionModel?.replaceAll("_", " ")}</span><strong>{number(signal.rewardRisk)}R · {signal.quantity} shares</strong></footer></article>)}</div> : <div className="scanner-no-trade"><strong>NO TRADE</strong><span>No strategy setup passed at {formatIst(response.signalFunnel.metadata.generatedAt)}. The system will not manufacture two entries.</span></div>}
-          {response.signalFunnel.watch.length > 0 && <><div className="scanner-signal-heading"><div><h3>WATCH</h3><p>Research-only or lower-ranked setups. Retired strategies can never become trade-ready.</p></div></div><div className="scanner-watch-signal-grid">{response.signalFunnel.watch.map((signal) => <article key={signal.eventId}><div><strong>{signal.symbol}</strong><span>{signal.strategyName}</span></div><b>{number(signal.signalScore)}</b><small>{signal.strategyStatus?.replaceAll("_", " ")} · {price(signal.estimatedEntry)} → {price(signal.estimatedTarget)}</small></article>)}</div></>}
-          <details className="scanner-funnel-rejections"><summary>Why setups were rejected ({response.signalFunnel.counts.rejected})</summary><div>{Object.entries(response.signalFunnel.rejectionCounts).slice(0, 12).map(([reason, count]) => <p key={reason}><strong>{count}</strong><span>{reason.replaceAll("_", " ")}</span></p>)}</div></details>
+          <div className="panel-title"><div><span className="section-kicker">All valid setups · no Top-N cutoff</span><h2>BUY candidates and complete exit plans</h2></div><span className="date-window">Paper portfolio: {response.signalFunnel.metadata.configuration.maximumConcurrent} concurrent · {response.signalFunnel.metadata.configuration.maximumTradesPerDay}/day</span></div>
+          <div className="scanner-funnel-counts"><div><span>Universe requested</span><strong>{response.metadata.symbolsRequested}</strong></div><div><span>Eligible</span><strong>{response.signalFunnel.counts.tradeable}</strong></div><div><span>Strategy checks</span><strong>{response.signalFunnel.counts.strategyEvaluations}</strong></div><div><span>Valid setups</span><strong>{response.signalFunnel.counts.validSetups}</strong></div><div className="ready"><span>Evidence-qualified</span><strong>{response.signalFunnel.counts.qualified ?? 0}</strong></div><div><span>Research signals</span><strong>{response.signalFunnel.counts.researchSignals ?? 0}</strong></div></div>
+          <div className="scanner-signal-heading"><div><h3>ALL QUALIFYING TECHNICAL SETUPS</h3><p>Technical validity and historical qualification are separate. Missing evidence is shown as unvalidated, never converted into a probability.</p></div><a href="/signals">Open RSI Recovery history</a></div>
+          {response.signalFunnel.allSignals.length ? <div className="scanner-signal-grid">{response.signalFunnel.allSignals.map((signal) => <article className={signal.historicalEvidence?.passesQualificationGate ? "trade-ready" : "research-signal"} key={signal.eventId}>
+            <div className="scanner-signal-title"><span>#{signal.rank}</span><div><strong>{signal.symbol}</strong><small>{signal.strategyName}</small></div><b>BUY</b></div>
+            <div className="scanner-signal-score"><span>Status</span><strong>{signal.status.replaceAll("_", " ")}</strong></div>
+            <div className="scanner-signal-prices"><div><span>Entry range</span><strong>{price(signal.entryRange?.minimum)}–{price(signal.entryRange?.maximum)}</strong></div><div><span>Stop-loss</span><strong>{price(signal.estimatedStop)}</strong></div><div><span>Target</span><strong>{price(signal.estimatedTarget)}</strong></div><div><span>Risk / share</span><strong>{price(signal.riskPerShare)}</strong></div></div>
+            <div className="scanner-signal-evidence"><strong>Historical evidence</strong><span>{signal.historicalEvidence?.status.replaceAll("_", " ") ?? "UNVALIDATED"} · N={signal.historicalEvidence?.sampleSize ?? 0}</span><span>Target {number(signal.historicalEvidence?.targetHitProbability)}% · Expected {number(signal.historicalEvidence?.expectedNetR)}R · PF {number(signal.historicalEvidence?.profitFactor)}</span><small>{signal.historicalEvidence?.message}</small></div>
+            <details><summary>Why BUY</summary><ul>{signal.whyBuy?.map((reason) => <li key={reason}>{reason}</li>)}</ul></details>
+            <details><summary>When to SELL</summary><ul>{signal.sellConditions?.map((condition) => <li key={condition.type}><strong>{condition.type.replaceAll("_", " ")}{condition.price ? ` at ${price(condition.price)}` : ""}</strong>: {condition.condition}</li>)}</ul></details>
+            <details><summary>Passed conditions</summary><ul>{signal.rules?.filter((rule) => rule.passed).map((rule) => <li key={rule.code}>{rule.label}</li>)}</ul></details>
+            {signal.paperSkipReasons?.length ? <p className="scanner-paper-skip">Paper position skipped: {signal.paperSkipReasons.map((reason) => reason.replaceAll("_", " ")).join(", ")}</p> : null}
+            <footer><span>{signal.executionModel?.replaceAll("_", " ")}</span><strong>{number(signal.rewardRisk)}R · {signal.quantity} shares</strong></footer>
+          </article>)}</div> : <div className="scanner-no-trade"><strong>NO VALID SETUP</strong><span>No V2 setup passed at {formatIst(response.signalFunnel.metadata.generatedAt)}. Failed rules remain visible below.</span></div>}
+          <details className="scanner-funnel-rejections"><summary>Why setups were rejected ({response.signalFunnel.counts.rejected})</summary><div>{Object.entries(response.signalFunnel.rejectionCounts).map(([reason, count]) => <p key={reason}><strong>{count}</strong><span>{reason.replaceAll("_", " ")}</span></p>)}</div><div className="scanner-rejected-events">{response.signalFunnel.rejected.map((signal) => <p key={signal.eventId}><strong>{signal.symbol} · {signal.strategyName}</strong><span>{signal.reasons?.map((reason) => reason.replaceAll("_", " ")).join(" · ")}</span></p>)}</div></details>
         </section>
 
         <section className="backtest-panel scanner-watchlist">

@@ -11,7 +11,7 @@ import pandas as pd
 from pydantic import ValidationError
 
 import recovery_backtest
-from backtest_api import BacktestRequest, run_backtest
+from backtest_api import BacktestRequest, run_recovery_backtest
 from main import IST
 from recovery_backtest import (
     RecoveryConfig,
@@ -498,7 +498,7 @@ class ValidationAndParityTests(unittest.TestCase):
                 return state_frame(baseline_rsi())
 
         with patch("recovery_backtest.calculate_recovery_indicators", side_effect=injected_indicators):
-            response = run_backtest(
+            response = run_recovery_backtest(
                 BacktestRequest(symbols=["TEST"], strategyMode="rsi_recovery", timeframe="5m", runId="metadata-run"),
                 Store(),
                 datetime(2025, 2, 1, 15, 30, tzinfo=IST),

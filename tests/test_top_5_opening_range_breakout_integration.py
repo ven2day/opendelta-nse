@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 import backtest_api
@@ -22,55 +23,32 @@ def _payload() -> dict[str, object]:
     }
 
 
-def test_http_request_dispatches_to_top_5_engine_and_returns_matching_contract(
-    monkeypatch,
-) -> None:
-    captured: dict[str, object] = {}
+def test_top_5_request_still_validates_but_can_no_longer_be_launched(monkeypatch) -> None:
+    """Top-5 is retired from new runs: its request contract and engine are preserved,
+    but /backtest refuses to dispatch it so saved results stay readable and nothing new
+    can be started."""
 
-    def top_5_engine(request, store, now_ist=None):
-        captured["request"] = request
-        captured["store"] = store
-        return {
-            "metadata": {
-                "strategyMode": "top_5_opening_range_breakout",
-                "strategyKey": "top_5_opening_range_breakout",
-                "strategyName": "Top-5 Opening Range Breakout",
-                "strategyVersion": "top-5-opening-range-breakout-1.0.0",
-                "effectiveConfiguration": request.top5OpeningRangeBreakoutConfiguration.model_dump(),
-                "watchlistMode": request.top5OpeningRangeBreakoutConfiguration.watchlistMode,
-            },
-            "summary": {"dailyWatchlists": 1},
-            "dailySelections": [{
-                "sessionDate": "2026-08-28",
-                "selectionTimestamp": "2026-08-28T09:30:00+05:30",
-                "symbols": [
-                    {"rank": rank, "symbol": symbol, "tier": "PRIMARY" if rank <= 2 else "RESERVE"}
-                    for rank, symbol in enumerate(("AAA", "BBB", "CCC", "DDD", "EEE"), start=1)
-                ],
-            }],
-            "results": [],
-            "errors": [],
-            "warnings": [],
-        }
-
-    def rejected_vwap_engine(*args, **kwargs):
-        raise AssertionError("The retired VWAP engine must not be dispatched")
+    def rejected_engine(*args, **kwargs):
+        raise AssertionError("A retired engine must not be dispatched")
 
     store = object()
     monkeypatch.setattr(backtest_api, "get_store", lambda: store)
-    monkeypatch.setattr(backtest_api, "run_top_5_opening_range_breakout_backtest", top_5_engine)
-    monkeypatch.setattr(backtest_api, "run_vwap_pullback_backtest", rejected_vwap_engine)
+    monkeypatch.setattr(backtest_api, "run_top_5_opening_range_breakout_backtest", rejected_engine)
+    monkeypatch.setattr(backtest_api, "run_vwap_pullback_backtest", rejected_engine)
 
     request_model = backtest_api.BacktestRequest.model_validate(_payload())
-    body = asyncio.run(backtest_api.backtest(request_model))
-    request = captured["request"]
-    assert captured["store"] is store
-    assert request.strategyKey == "top_5_opening_range_breakout"
-    assert request.strategyMode == "top_5_opening_range_breakout"
-    assert body["metadata"]["strategyKey"] == request.strategyKey
-    assert body["metadata"]["strategyName"] == "Top-5 Opening Range Breakout"
-    assert body["metadata"]["effectiveConfiguration"]["watchlistMode"] == "FROZEN_OPEN"
-    assert len(body["dailySelections"][0]["symbols"]) == 5
+    assert request_model.strategyKey == "top_5_opening_range_breakout"
+    assert request_model.strategyMode == "top_5_opening_range_breakout"
+    assert request_model.top5OpeningRangeBreakoutConfiguration.watchlistMode == "FROZEN_OPEN"
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(backtest_api.backtest(request_model))
+    assert caught.value.status_code == 422
+    assert "EMA/VWAP Strong Buy" in str(caught.value.detail)
+
+    with pytest.raises(HTTPException) as job_caught:
+        backtest_api.start_backtest_job(request_model)
+    assert job_caught.value.status_code == 422
 
 
 def test_retired_and_legacy_keys_cannot_create_new_backtests() -> None:

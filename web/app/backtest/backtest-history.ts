@@ -26,6 +26,18 @@ export type BacktestHistoryEntry<T = unknown> = {
 
 export type BacktestHistorySummary = Omit<BacktestHistoryEntry, "response">;
 
+// Every strategy that may appear in saved history, including the ones retired from new
+// runs. Retired results stay readable; only launching them is blocked.
+const BACKTEST_HISTORY_STRATEGIES: readonly string[] = [
+  "rsi_range",
+  "rsi_recovery",
+  "ema_vwap_strong_buy",
+  "top_5_opening_range_breakout",
+  "daily_scalping_watchlist",
+  "market_aligned_vwap_pullback_scalper",
+  "market_aligned_rsi_scalper",
+];
+
 export function backtestHistorySummary<T>(entry: BacktestHistoryEntry<T>): BacktestHistorySummary {
   return {
     id: entry.id,
@@ -74,7 +86,7 @@ function isHistoryEntry(value: unknown): value is BacktestHistoryEntry {
   const response = entry.response as { metadata?: unknown; results?: unknown } | undefined;
   return typeof entry.id === "string"
     && typeof entry.completedAt === "string"
-    && ["rsi_range", "rsi_recovery", "top_5_opening_range_breakout", "daily_scalping_watchlist", "market_aligned_vwap_pullback_scalper", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
+    && BACKTEST_HISTORY_STRATEGIES.includes(entry.strategyMode ?? "")
     && typeof entry.strategyName === "string"
     && typeof entry.timeframe === "string"
     && typeof entry.durationYears === "number"
@@ -89,7 +101,7 @@ function isHistorySummary(value: unknown): value is BacktestHistorySummary {
   const entry = value as Partial<BacktestHistorySummary>;
   return typeof entry.id === "string"
     && typeof entry.completedAt === "string"
-    && ["rsi_range", "rsi_recovery", "top_5_opening_range_breakout", "daily_scalping_watchlist", "market_aligned_vwap_pullback_scalper", "market_aligned_rsi_scalper"].includes(entry.strategyMode ?? "")
+    && BACKTEST_HISTORY_STRATEGIES.includes(entry.strategyMode ?? "")
     && typeof entry.strategyName === "string"
     && typeof entry.timeframe === "string"
     && typeof entry.durationYears === "number"

@@ -50,6 +50,18 @@ class BacktestHistoryRepositoryTests(unittest.TestCase):
             self.assertEqual(summary["strategyMode"], "top_5_opening_range_breakout")
             self.assertEqual(repository.get(owner("alice"), "top-5-run"), saved)
 
+    def test_strong_buy_result_is_saved_to_account_history(self) -> None:
+        with TemporaryDirectory() as directory:
+            repository = BacktestHistoryRepository(Path(directory))
+            saved = record(
+                "strong-buy-run",
+                datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc),
+                strategy_mode="ema_vwap_strong_buy",
+            )
+            summary = repository.save(owner("alice"), saved)
+            self.assertEqual(summary["strategyMode"], "ema_vwap_strong_buy")
+            self.assertEqual(repository.get(owner("alice"), "strong-buy-run"), saved)
+
     def test_save_list_and_get_round_trip(self) -> None:
         with TemporaryDirectory() as directory:
             repository = BacktestHistoryRepository(Path(directory))

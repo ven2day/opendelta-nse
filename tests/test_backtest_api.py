@@ -29,8 +29,11 @@ from backtest_api import (
     update_application_settings,
     prepare_candles,
     run_backtest,
+    run_rsi_range_backtest,
     simulate_symbol,
+    start_backtest_job,
 )
+from fastapi import HTTPException
 from main import DhanAPIError
 
 
@@ -450,7 +453,7 @@ class RequestTests(unittest.TestCase):
             def candles(*args, **kwargs):
                 raise DhanAPIError("Historical data is temporarily unavailable")
 
-        result = run_backtest(
+        result = run_rsi_range_backtest(
             BacktestRequest(symbols=["A", "B"], timeframe="4h"),
             UnavailableStore(),
             datetime(2026, 8, 23, 15, 30, tzinfo=IST),
@@ -459,6 +462,56 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(result["results"], [])
         self.assertEqual([item["symbol"] for item in result["errors"]], ["A", "B"])
         self.assertTrue(any("universe run continued" in item for item in result["warnings"]))
+
+
+class StrategyLaunchRestrictionTests(unittest.TestCase):
+    class RefusingStore:
+        @staticmethod
+        def universe() -> list[str]:
+            raise AssertionError("A retired strategy must never reach a data store")
+
+        @staticmethod
+        def candles(*args, **kwargs):
+            raise AssertionError("A retired strategy must never reach a data store")
+
+    def test_only_strong_buy_can_start_a_new_backtest(self) -> None:
+        for strategy_mode, extra in (
+            ("rsi_range", {"timeframe": "1d"}),
+            ("rsi_recovery", {"timeframe": "5m"}),
+            ("top_5_opening_range_breakout", {"timeframe": "5m"}),
+        ):
+            with self.subTest(strategyMode=strategy_mode):
+                request = BacktestRequest(symbols=["LUPIN"], strategyMode=strategy_mode, **extra)
+                with self.assertRaises(ValueError) as caught:
+                    run_backtest(request, self.RefusingStore())
+                self.assertIn("EMA/VWAP Strong Buy", str(caught.exception))
+
+    def test_strong_buy_is_still_dispatched_to_its_engine(self) -> None:
+        request = BacktestRequest(
+            symbols=["LUPIN"], strategyMode="ema_vwap_strong_buy", timeframe="5m",
+        )
+        captured: dict[str, object] = {}
+
+        def engine(passed_request, store, now_ist=None):
+            captured["request"] = passed_request
+            return {"metadata": {"strategyMode": "ema_vwap_strong_buy"}}
+
+        with patch("backtest_api.run_strong_buy_backtest", engine):
+            result = run_backtest(request, self.RefusingStore())
+
+        self.assertIs(captured["request"], request)
+        self.assertEqual(result["metadata"]["strategyMode"], "ema_vwap_strong_buy")
+
+    def test_asynchronous_job_endpoint_refuses_every_strategy(self) -> None:
+        for strategy_mode, extra in (
+            ("top_5_opening_range_breakout", {"timeframe": "5m"}),
+            ("ema_vwap_strong_buy", {"timeframe": "5m"}),
+        ):
+            with self.subTest(strategyMode=strategy_mode):
+                request = BacktestRequest(symbols=["LUPIN"], strategyMode=strategy_mode, **extra)
+                with self.assertRaises(HTTPException) as caught:
+                    start_backtest_job(request)
+                self.assertEqual(caught.exception.status_code, 422)
 
 
 if __name__ == "__main__":

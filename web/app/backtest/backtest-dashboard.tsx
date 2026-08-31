@@ -1096,6 +1096,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         setError("RSI ranges must be ordered from the low entry range to the high exit range.");
         return;
       }
+    } else if (strategyMode === "ema_vwap_strong_buy") {
+      if (!(strongBuySettings.emaFast < strongBuySettings.emaSlow && strongBuySettings.targetPct > 0 && strongBuySettings.initialQuantity > 0)) {
+        setError("Strong Buy requires fast EMA below slow EMA, a positive target, and positive quantity.");
+        return;
+      }
     } else if (strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
       if (top5OpeningRangeBreakoutFormInvalid) {
         setError(Object.values(numericErrors)[0] ?? Object.values(top5OpeningRangeBreakoutRelationshipErrors)[0] ?? "Review the highlighted Top-5 Opening Range Breakout settings.");
@@ -1194,6 +1199,8 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           entryHigh,
           exitLow,
           exitHigh,
+        } : strategyMode === "ema_vwap_strong_buy" ? {
+          strongBuyConfiguration: strongBuySettings,
         } : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? {
           top5OpeningRangeBreakoutConfiguration: top5OpeningRangeBreakoutSettings,
         } : {
@@ -1309,7 +1316,27 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           throw new Error(`Backtest service returned incomplete data near ${batch[0]}. Please retry.`);
         }
 
-        if (strategyMode === "rsi_recovery") {
+        if (strategyMode === "ema_vwap_strong_buy") {
+          if (!isStrongBuyResponse(payload)) throw new Error("Backtest service returned the wrong Strong Buy strategy mode.");
+          const previous = isStrongBuyResponse(aggregate) ? aggregate : null;
+          aggregate = previous ? {
+            metadata: previous.metadata,
+            summary: {
+              strongBuySignals: previous.summary.strongBuySignals + payload.summary.strongBuySignals,
+              executedLots: previous.summary.executedLots + payload.summary.executedLots,
+              takeProfitSold: previous.summary.takeProfitSold + payload.summary.takeProfitSold,
+              holdingLots: previous.summary.holdingLots + payload.summary.holdingLots,
+              targetHitRate: 0,
+              realizedPnl: previous.summary.realizedPnl + payload.summary.realizedPnl,
+              unrealizedPnl: previous.summary.unrealizedPnl + payload.summary.unrealizedPnl,
+            },
+            results: [...previous.results, ...payload.results],
+            errors: [...previous.errors, ...payload.errors],
+            warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
+          } : payload;
+          aggregate.summary.targetHitRate = aggregate.summary.executedLots
+            ? aggregate.summary.takeProfitSold / aggregate.summary.executedLots * 100 : 0;
+        } else if (strategyMode === "rsi_recovery") {
           if (!isRecoveryResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           // This is a loop-local accumulator, not React state or a prop.
           // eslint-disable-next-line react-hooks/immutability

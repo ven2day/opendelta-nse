@@ -103,6 +103,18 @@ type Signal = {
   symbol: string;
   universeVersion: string;
   strategyVersion: string;
+  strategyKey?: "rsi_recovery" | "ema_vwap_strong_buy";
+  strategyName?: string;
+  signalLabel?: string;
+  positionState?: "HOLDING" | "SOLD";
+  lotNumber?: number;
+  strategyQuantity?: number;
+  systemTargetPct?: number;
+  systemTargetPrice?: number;
+  adx?: number | null;
+  adxConfirmation?: boolean;
+  rvolConfirmation?: boolean;
+  htfConfirmation?: boolean;
   timeframe: string;
   signalTimestamp: string;
   marketDataTimestamp: string;
@@ -285,10 +297,12 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
 }) {
   const historical = signal.historicalContext;
   const levels = signal.supportResistance;
+  const strongBuy = signal.strategyKey === "ema_vwap_strong_buy";
+  const stateLabel = signal.signalLabel ?? "BUY";
   const statusCopy = signal.buyRangeStatus === "ABOVE_RANGE" ? "ABOVE BUY RANGE · DO NOT CHASE" : signal.buyRangeStatus === "BELOW_RANGE" ? "BELOW ORIGINAL BUY RANGE · RE-EVALUATE" : signal.buyRangeStatus.replaceAll("_", " ");
-  return <article className={`live-signal-card ${signal.buyRangeStatus.toLowerCase()} ${signal.freshness.toLowerCase()}`}>
+  return <article className={`live-signal-card ${signal.buyRangeStatus.toLowerCase()} ${signal.freshness.toLowerCase()} ${strongBuy ? signal.positionState?.toLowerCase() ?? "holding" : ""}`}>
     <div className="signal-card-head">
-      <div><span className="buy-badge">BUY</span><div><h2>{signal.symbol}</h2><span>{formatIst(signal.signalTimestamp)} · {duration(signal.signalAgeMinutes)} ago · {signal.freshness}</span></div></div>
+      <div><span className={`buy-badge ${strongBuy ? signal.positionState?.toLowerCase() ?? "holding" : ""}`}>{stateLabel}</span><div><h2>{signal.symbol}</h2><span>{formatIst(signal.signalTimestamp)} · {duration(signal.signalAgeMinutes)} ago · {signal.freshness}</span></div></div>
       <div className="signal-rank"><span>Historical rank</span><strong>#{historical.rank ?? "—"} / 300</strong></div>
     </div>
     <div className="signal-price-strip">
@@ -296,7 +310,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
       <Metric label="Signal price" value={money(signal.signalClose)} />
       <Metric label="Suggested buy range" value={`${money(signal.buyRange.low)} – ${money(signal.buyRange.high)}`} />
       <Metric label="Status" value={statusCopy} tone={signal.buyRangeStatus.toLowerCase()} />
-      <Metric label="Suggested quantity" value={`${signal.quantitySuggestion.recommendedQuantity} shares`} />
+      <Metric label={strongBuy ? `Lot ${signal.lotNumber ?? 1} quantity` : "Suggested quantity"} value={`${signal.strategyQuantity ?? signal.quantitySuggestion.recommendedQuantity} shares`} />
       <Metric label="Paper allocation" value={money(signal.quantitySuggestion.allocation, 0)} />
       <Metric label="Indicative target" value={`${money(signal.indicativeTargets.atLower)} – ${money(signal.indicativeTargets.atUpper)}`} />
     </div>
@@ -322,13 +336,13 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
         <Metric label="15m momentum" value={percent(signal.momentum15m, 3)} />
         <Metric label="30m momentum" value={percent(signal.momentum30m, 3)} />
       </div><div className="confirmation-pills"><span className={signal.emaConfirmation ? "pass" : "fail"}>EMA</span><span className={signal.vwapConfirmation ? "pass" : "fail"}>VWAP</span><span className={signal.volumeConfirmation ? "pass" : "fail"}>VOLUME</span></div></section>
-      <section><h3>Strategy isolation</h3><div className="signal-detail-grid"><Metric label="Strategy" value="RSI Recovery Scalping" /><Metric label="OI execution gate" value="NOT APPLIED" /></div><small>Market-Aligned VWAP Pullback Scalper is a separate backtest strategy. This signal preserves RSI Recovery behavior.</small></section>
+      <section><h3>Strategy and lot state</h3><div className="signal-detail-grid"><Metric label="Strategy" value={signal.strategyName ?? "RSI Recovery Scalping"} /><Metric label="State" value={strongBuy ? stateLabel : "OBSERVATION"} /></div><small>{strongBuy ? "Each Strong Buy lot is held independently until its own target is reached." : "Existing RSI Recovery behavior is preserved."}</small></section>
       <section><h3>Support and target room</h3><div className="signal-detail-grid">
         <Metric label="Recent support" value={money(levels.support)} />
         <Metric label="Distance to support" value={percent(levels.distanceToSupportPct)} />
         <Metric label="Recent resistance" value={money(levels.resistance)} />
         <Metric label="Room to resistance" value={percent(levels.distanceToResistancePct)} />
-        <Metric label="Target required" value="+0.50%" />
+        <Metric label="Target required" value={`+${number(signal.systemTargetPct ?? 0.5)}%`} />
         <Metric label="Target room" value={levels.targetRoom} tone={levels.targetRoom.toLowerCase()} />
       </div>{levels.resistanceBeforeTarget && <div className="resistance-warning">Resistance lies before the indicative target</div>}<small>{levels.supportSource ?? "Causal recent lows"} · {levels.resistanceSource ?? "Causal recent highs"}</small></section>
     </div>
@@ -365,6 +379,7 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
   const [rangeFilter, setRangeFilter] = useState("ALL");
   const [confirmationFilter, setConfirmationFilter] = useState("ALL");
   const [rankFilter, setRankFilter] = useState("ALL");
+  const [strategyFilter, setStrategyFilter] = useState("ema_vwap_strong_buy");
   const [sortKey, setSortKey] = useState<SortKey>("signalTimestamp");
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const seenSignals = useRef<Set<string>>(new Set());
@@ -488,6 +503,7 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
   const visibleSignals = useMemo(() => {
     const base = tab === "watch" ? signals.filter((item) => item.manualAction === "WATCH") : tab === "live" ? signals.filter((item) => item.manualAction === "NO_ACTION") : signals;
     return base.filter((item) => isPriceInGlobalRange(item.currentPrice ?? item.signalClose, globalPriceRange))
+      .filter((item) => strategyFilter === "ALL" || (item.strategyKey ?? "rsi_recovery") === strategyFilter)
       .filter((item) => rangeFilter === "ALL" || item.buyRangeStatus === rangeFilter)
       .filter((item) => confirmationFilter === "ALL" || item.confirmationScore === Number(confirmationFilter))
       .filter((item) => {
@@ -504,7 +520,7 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
         if (sortKey === "rank" || sortKey === "medianTargetMinutes") return Number(a ?? Infinity) - Number(b ?? Infinity);
         return Number(b ?? -Infinity) - Number(a ?? -Infinity);
       });
-  }, [confirmationFilter, globalPriceRange, rangeFilter, rankFilter, signals, sortKey, tab]);
+  }, [confirmationFilter, globalPriceRange, rangeFilter, rankFilter, signals, sortKey, strategyFilter, tab]);
 
   const connected = status.connectionStatus === "CONNECTED";
   const marketClosed = status.marketSession === "CLOSED";
@@ -535,9 +551,9 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
         <div><span>Auto-refresh every 10 seconds</span><strong>{formatRefreshTime(lastUpdatedAt)}</strong></div>
       </section>
 
-      <section className="backtest-panel oi-regime-card" aria-label="RSI Recovery strategy isolation">
-        <div className="panel-title"><div><span className="section-kicker">RSI Recovery Scalping</span><h2>Existing live behavior preserved</h2></div><span className="date-window">OI gate: OFF</span></div>
-        <small>Optional market context belongs to the separate Market-Aligned VWAP Pullback Scalper backtest. It does not block, create, or resize RSI Recovery Signals trades.</small>
+      <section className="backtest-panel oi-regime-card" aria-label="EMA VWAP Strong Buy strategy">
+        <div className="panel-title"><div><span className="section-kicker">EMA 9/21 + VWAP Strong Buy</span><h2>Independent 1% lots</h2></div><span className="date-window">2 of 3 confirmations</span></div>
+        <small>Orange = STRONG BUY — HOLDING. Green = TAKE PROFIT — SOLD. RSI Recovery remains separate.</small>
       </section>
 
       {notice && <div className="signal-notice"><BellRing size={15} />{notice}<button onClick={() => setNotice("")} aria-label="Dismiss"><X size={14} /></button></div>}
@@ -552,10 +568,10 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
         <Metric label="Paper positions open" value={number(study?.paperPositionsOpen, 0)} />
       </section>
 
-      <nav className="signals-tabs" aria-label="Signals views"><a className="signal-funnel-link" href="/signals/funnel">Signal Funnel</a><button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}>RSI Recovery</button><button className={tab === "watch" ? "active" : ""} onClick={() => setTab("watch")}>Watch</button><button className={tab === "paper" ? "active" : ""} onClick={() => setTab("paper")}>Paper positions</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button><a href="/signals?view=universe">Universe</a></nav>
+      <nav className="signals-tabs" aria-label="Signals views"><a className="signal-funnel-link" href="/signals/funnel">Signal Funnel</a><button className={tab === "live" ? "active" : ""} onClick={() => setTab("live")}>Live signals</button><button className={tab === "watch" ? "active" : ""} onClick={() => setTab("watch")}>Watch</button><button className={tab === "paper" ? "active" : ""} onClick={() => setTab("paper")}>Paper positions</button><button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>History</button><a href="/signals?view=universe">Universe</a></nav>
       {tab !== "paper" && <a className="global-range-badge signals-global-range" href="/admin">Global price: {formatGlobalPriceRange(globalPriceRange)}</a>}
 
-      {tab !== "paper" && <section className="signals-filterbar"><select aria-label="Buy range status" value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}><option value="ALL">All range states</option><option value="IN_RANGE">In range</option><option value="ABOVE_RANGE">Above range</option><option value="BELOW_RANGE">Below range</option></select><select aria-label="Confirmation score" value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)}><option value="ALL">All confirmations</option><option value="2">2/3 confirmations</option><option value="3">3/3 confirmations</option></select><select aria-label="Historical rank" value={rankFilter} onChange={(event) => setRankFilter(event.target.value)}><option value="ALL">All historical ranks</option><option value="1-50">Rank 1–50</option><option value="51-100">Rank 51–100</option><option value="101-200">Rank 101–200</option><option value="201-300">Rank 201–300</option></select><select aria-label="Sort signals" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}><option value="signalTimestamp">Newest first</option><option value="rank">Historical rank</option><option value="qualityScore">Quality</option><option value="goodRate">GOOD rate</option><option value="medianTargetMinutes">Median target time</option><option value="atrPct">ATR</option><option value="volumeRatio">Volume ratio</option><option value="distanceToResistancePct">Distance to resistance</option></select><span>{visibleSignals.length} observations</span></section>}
+      {tab !== "paper" && <section className="signals-filterbar"><select aria-label="Signal strategy" value={strategyFilter} onChange={(event) => setStrategyFilter(event.target.value)}><option value="ema_vwap_strong_buy">EMA/VWAP Strong Buy</option><option value="rsi_recovery">RSI Recovery</option><option value="ALL">All strategies</option></select><select aria-label="Buy range status" value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}><option value="ALL">All range states</option><option value="IN_RANGE">In range</option><option value="ABOVE_RANGE">Above range</option><option value="BELOW_RANGE">Below range</option></select><select aria-label="Confirmation score" value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)}><option value="ALL">All confirmations</option><option value="2">2/3 confirmations</option><option value="3">3/3 confirmations</option></select><select aria-label="Historical rank" value={rankFilter} onChange={(event) => setRankFilter(event.target.value)}><option value="ALL">All historical ranks</option><option value="1-50">Rank 1–50</option><option value="51-100">Rank 51–100</option><option value="101-200">Rank 101–200</option><option value="201-300">Rank 201–300</option></select><select aria-label="Sort signals" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}><option value="signalTimestamp">Newest first</option><option value="rank">Historical rank</option><option value="qualityScore">Quality</option><option value="goodRate">GOOD rate</option><option value="medianTargetMinutes">Median target time</option><option value="atrPct">ATR</option><option value="volumeRatio">Volume ratio</option><option value="distanceToResistancePct">Distance to resistance</option></select><span>{visibleSignals.length} observations</span></section>}
 
       {loading ? <section className="backtest-panel signals-empty"><LoaderCircle className="spin" size={20} />Loading persisted signals and engine health…</section> : tab === "paper" ? <section className="paper-position-list">{paperTrades.length ? paperTrades.map((trade) => <article className="paper-position-card" key={trade.paperTradeId}><div><span className={`trade-status ${trade.status === "OPEN" ? "open" : "hit"}`}>{trade.status.replaceAll("_", " ")}</span><h2>{trade.symbol}</h2><small>{formatIst(trade.entryTimestamp)} · {duration(trade.ageMinutes)} old</small></div><Metric label="Actual paper entry" value={money(trade.entryPrice)} /><Metric label="Quantity" value={`${trade.quantity} shares`} /><Metric label="Paper amount" value={money(trade.paperAmount)} /><Metric label="Paper target" value={money(trade.targetPrice)} /><Metric label="Current" value={money(trade.currentPrice)} /><Metric label="Current P&L" value={`${money(trade.currentPnl)} · ${percent(trade.currentPnlPct)}`} tone={trade.currentPnl >= 0 ? "clear" : "tight"} /><Metric label="Target progress" value={`${number(trade.targetProgressPct)}%`} /><Metric label="MAE / MFE" value={`${percent(trade.maePct)} / ${percent(trade.mfePct)}`} />{trade.status === "OPEN" && <button disabled={working} onClick={() => { setClosingTrade(trade); setClosePrice(trade.currentPrice); }}>Close paper trade</button>}</article>) : <div className="backtest-panel signals-empty">No paper positions yet. A PAPER BUY records research data only and never sends a Dhan order.</div>}</section> : <section className="live-signal-list">{visibleSignals.length ? visibleSignals.map((signal) => <SignalCard key={signal.signalId} signal={signal} readOnly={tab === "history"} onPaper={openPaper} onWatch={(item) => void decide(item, "WATCH")} onIgnore={setIgnoreSignal} />) : <div className="backtest-panel signals-empty"><CheckCircle2 size={20} /><div><strong>{emptyMessage}</strong><span>The strategy evaluates only completed 5-minute candles with the existing RSI arm → recovery and 2-of-3 confirmation rules.</span></div></div>}</section>}
     </main>

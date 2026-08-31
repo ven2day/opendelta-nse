@@ -1105,6 +1105,17 @@ class LiveSignalSettingsRequest(BaseModel):
     oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
     oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
     oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
+    strongBuyEnabled: bool = True
+    strongBuyEmaFast: int = Field(default=9, ge=1, le=500)
+    strongBuyEmaSlow: int = Field(default=21, ge=2, le=500)
+    strongBuyMinimumAdx: float = Field(default=20.0, ge=0)
+    strongBuyMinimumRvol: float = Field(default=1.2, ge=0)
+    strongBuyTargetPct: float = Field(default=1.0, gt=0, le=100)
+    strongBuyInitialQuantity: int = Field(default=100, ge=1)
+    strongBuyAdditionalQuantityPct: float = Field(default=50.0, gt=0, le=100)
+    strongBuyAdditionalSizingMode: Literal["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"] = "REDUCE_EVERY_NEW_LOT"
+    strongBuyMinimumQuantity: int = Field(default=1, ge=1)
+    strongBuyMaximumEntriesPerCycle: int = Field(default=10, ge=1, le=100)
 
     @model_validator(mode="after")
     def validate_live_settings(self) -> "LiveSignalSettingsRequest":
@@ -1112,6 +1123,8 @@ class LiveSignalSettingsRequest(BaseModel):
             raise ValueError("Fresh signal minutes must be lower than recent signal minutes")
         if self.supportLookbackShort > self.supportLookbackLong:
             raise ValueError("Short support lookback cannot exceed long support lookback")
+        if self.strongBuyEmaFast >= self.strongBuyEmaSlow:
+            raise ValueError("Strong Buy fast EMA must be lower than slow EMA")
         return self
 
     def settings(self) -> LiveSignalSettings:
@@ -1148,6 +1161,17 @@ class LiveSignalSettingsRequest(BaseModel):
             oi_strongly_bullish_threshold=self.oiStronglyBullishThreshold,
             oi_elevated_quality_threshold=self.oiElevatedQualityThreshold,
             oi_fail_policy=self.oiFailPolicy,
+            strong_buy_enabled=self.strongBuyEnabled,
+            strong_buy_ema_fast=self.strongBuyEmaFast,
+            strong_buy_ema_slow=self.strongBuyEmaSlow,
+            strong_buy_minimum_adx=self.strongBuyMinimumAdx,
+            strong_buy_minimum_rvol=self.strongBuyMinimumRvol,
+            strong_buy_target_pct=self.strongBuyTargetPct,
+            strong_buy_initial_quantity=self.strongBuyInitialQuantity,
+            strong_buy_additional_quantity_pct=self.strongBuyAdditionalQuantityPct,
+            strong_buy_additional_sizing_mode=self.strongBuyAdditionalSizingMode,
+            strong_buy_minimum_quantity=self.strongBuyMinimumQuantity,
+            strong_buy_maximum_entries_per_cycle=self.strongBuyMaximumEntriesPerCycle,
         ).validate()
 
 
@@ -4216,6 +4240,17 @@ def live_signals_settings() -> dict[str, Any]:
             "setupExpiryBars": 50,
             "noStopLoss": True,
             "noLeverage": True,
+            "brokerExecution": False,
+        },
+        "strongBuyStrategy": {
+            "strategyKey": STRONG_BUY_STRATEGY_KEY,
+            "strategyName": STRONG_BUY_STRATEGY_NAME,
+            "strategyVersion": STRONG_BUY_STRATEGY_VERSION,
+            "timeframe": "5m",
+            "minimumConfirmations": 2,
+            "targetPct": engine.repository.settings().strong_buy_target_pct,
+            "noStopLoss": True,
+            "noEndOfDayExit": True,
             "brokerExecution": False,
         },
     }

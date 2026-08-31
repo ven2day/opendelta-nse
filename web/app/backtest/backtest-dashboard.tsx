@@ -25,7 +25,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Component, FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   RecoveryResults,
   mergeRecoveryResponses,
@@ -235,6 +235,43 @@ type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullback
 type StrategyMode = "rsi_range" | "rsi_recovery" | "top_5_opening_range_breakout";
 type StoredBacktest = BacktestHistoryEntry<ActiveResponse>;
 type StoredBacktestSummary = BacktestHistorySummary;
+
+type SavedResultBoundaryProps = {
+  children: ReactNode;
+  resetKey: string;
+};
+
+type SavedResultBoundaryState = {
+  failed: boolean;
+};
+
+class SavedResultBoundary extends Component<SavedResultBoundaryProps, SavedResultBoundaryState> {
+  state: SavedResultBoundaryState = { failed: false };
+
+  static getDerivedStateFromError(): SavedResultBoundaryState {
+    return { failed: true };
+  }
+
+  componentDidUpdate(previousProps: SavedResultBoundaryProps) {
+    if (previousProps.resetKey !== this.props.resetKey && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <section className="backtest-panel" role="alert">
+          <div className="backtest-message error">
+            <AlertTriangle size={17} />
+            <span><strong>Saved result could not be displayed.</strong> It was created by an older OpenDelta version and is not compatible with the current result view. Your saved history has not been deleted; choose another result or run a new backtest.</span>
+          </div>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
@@ -1831,9 +1868,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         {rsiComparison && <RsiExitComparisonResults response={rsiComparison} />}
         {response && (
           isRetiredMarketAlignedResponse(response) ? <section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned RSI Scalper result is preserved read-only.</span></div></section>
-            : isTop5OpeningRangeBreakoutResponse(response) ? <Top5OpeningRangeBreakoutResults response={response} />
-            : isVwapPullbackResponse(response) ? <><section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned VWAP Pullback Scalper result is preserved read-only.</span></div></section><VwapPullbackResults response={response} /></>
-            : isRecoveryResponse(response) ? <RecoveryResults response={response} /> : <>
+            : isTop5OpeningRangeBreakoutResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "top-5")}><Top5OpeningRangeBreakoutResults response={response} /></SavedResultBoundary>
+            : isVwapPullbackResponse(response) ? <><section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned VWAP Pullback Scalper result is preserved read-only.</span></div></section><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "vwap")}><VwapPullbackResults response={response} /></SavedResultBoundary></>
+            : isRecoveryResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "recovery")}><RecoveryResults response={response} /></SavedResultBoundary> : <>
             <section className="backtest-overview">
               <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>
               <div><span>Profitable</span><strong className="positive-value">{profitableCount}</strong></div>

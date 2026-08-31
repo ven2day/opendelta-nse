@@ -27,10 +27,10 @@ curl -fsS \
   "${base_url}/api/backtest" > "${response}"
 
 jq -e '
-  .metadata.strategyMode == "ema_vwap_strong_buy" and
-  .results | length == 1 and
-  .[0].symbol == "LUPIN" and
-  .[0].bars > 200
+  (.metadata.strategyMode == "ema_vwap_strong_buy") and
+  (.results | length == 1) and
+  (.results[0].symbol == "LUPIN") and
+  (.results[0].bars > 200)
 ' "${response}" >/dev/null
 
 jq -c '{

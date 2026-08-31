@@ -117,6 +117,15 @@ from daily_scalping_watchlist import (
     summarize_watchlist_history,
     validation_decision as daily_watchlist_validation_decision,
 )
+from ema_vwap_strong_buy import (
+    STRATEGY_DESCRIPTION as STRONG_BUY_DESCRIPTION,
+    STRATEGY_KEY as STRONG_BUY_STRATEGY_KEY,
+    STRATEGY_NAME as STRONG_BUY_STRATEGY_NAME,
+    STRATEGY_VERSION as STRONG_BUY_STRATEGY_VERSION,
+    StrongBuyConfig,
+    aggregate_strong_buy_results,
+    simulate_strong_buy_symbol,
+)
 from dhan_oi import build_oi_service_from_environment
 from main import (
     ConfigurationError,
@@ -507,6 +516,7 @@ class BacktestHistorySaveRequest(BaseModel):
     strategyMode: Literal[
         "rsi_range",
         "rsi_recovery",
+        "ema_vwap_strong_buy",
         "top_5_opening_range_breakout",
         "daily_scalping_watchlist",
         "market_aligned_vwap_pullback_scalper",
@@ -522,13 +532,52 @@ class BacktestHistorySaveRequest(BaseModel):
         return self.model_dump(mode="json")
 
 
+class StrongBuyConfigurationRequest(BaseModel):
+    emaFast: int = Field(default=9, ge=1, le=500)
+    emaSlow: int = Field(default=21, ge=2, le=500)
+    adxLength: int = Field(default=14, ge=1, le=500)
+    adxSmoothing: int = Field(default=14, ge=1, le=500)
+    minimumAdx: float = Field(default=20.0, ge=0)
+    rvolLength: int = Field(default=20, ge=1, le=500)
+    minimumRvol: float = Field(default=1.2, ge=0)
+    higherTimeframe: Literal["15m"] = "15m"
+    minimumConfirmations: Literal[2] = 2
+    targetPct: float = Field(default=1.0, gt=0, le=100)
+    initialQuantity: int = Field(default=100, ge=1, le=1_000_000)
+    allowAdditionalBuys: bool = True
+    additionalQuantityPct: float = Field(default=50.0, gt=0, le=100)
+    additionalSizingMode: Literal["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"] = "REDUCE_EVERY_NEW_LOT"
+    minimumQuantity: int = Field(default=1, ge=1, le=1_000_000)
+    maximumEntriesPerCycle: int = Field(default=10, ge=1, le=100)
+    executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
+
+    @model_validator(mode="after")
+    def validate_configuration(self) -> "StrongBuyConfigurationRequest":
+        self.strategy_config().validate()
+        return self
+
+    def strategy_config(self) -> StrongBuyConfig:
+        return StrongBuyConfig(
+            ema_fast=self.emaFast, ema_slow=self.emaSlow,
+            adx_length=self.adxLength, adx_smoothing=self.adxSmoothing,
+            minimum_adx=self.minimumAdx, rvol_length=self.rvolLength,
+            minimum_rvol=self.minimumRvol, target_pct=self.targetPct,
+            initial_quantity=self.initialQuantity,
+            allow_additional_buys=self.allowAdditionalBuys,
+            additional_quantity_pct=self.additionalQuantityPct,
+            additional_sizing_mode=self.additionalSizingMode,
+            minimum_quantity=self.minimumQuantity,
+            maximum_entries_per_cycle=self.maximumEntriesPerCycle,
+        )
+
+
 class BacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=MAX_SYMBOLS_PER_RUN)
     strategyMode: Literal[
-        "rsi_range", "rsi_recovery", "top_5_opening_range_breakout",
+        "rsi_range", "rsi_recovery", "ema_vwap_strong_buy", "top_5_opening_range_breakout",
     ] = "rsi_range"
     strategyKey: Literal[
-        "rsi_range", "rsi_recovery", "top_5_opening_range_breakout",
+        "rsi_range", "rsi_recovery", "ema_vwap_strong_buy", "top_5_opening_range_breakout",
     ] | None = None
     universeMode: Literal["selected", "all"] = "selected"
     runId: str | None = Field(default=None, min_length=1, max_length=80)
@@ -606,6 +655,9 @@ class BacktestRequest(BaseModel):
     top5OpeningRangeBreakoutConfiguration: Top5OpeningRangeBreakoutConfigurationRequest = Field(
         default_factory=Top5OpeningRangeBreakoutConfigurationRequest
     )
+    strongBuyConfiguration: StrongBuyConfigurationRequest = Field(
+        default_factory=StrongBuyConfigurationRequest
+    )
 
     @field_validator("symbols")
     @classmethod
@@ -642,6 +694,12 @@ class BacktestRequest(BaseModel):
                 raise ValueError("Position exit models and the NIFTY OI filter are available only for RSI Recovery")
             if not self.entryLow < self.entryHigh < self.exitLow < self.exitHigh:
                 raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
+            return self
+
+        if self.strategyMode == STRONG_BUY_STRATEGY_KEY:
+            if self.timeframe != "5m":
+                raise ValueError("EMA/VWAP Strong Buy requires completed 5-minute candles")
+            self.strongBuyConfiguration.validate_configuration()
             return self
 
         if self.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
@@ -3344,9 +3402,44 @@ def run_top_5_opening_range_breakout_backtest(
     return response
 
 
+def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
+    started_at = datetime.now(IST)
+    now = (now_ist or started_at).astimezone(IST)
+    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
+    run_id = request.runId or str(uuid.uuid4())
+    config = request.strongBuyConfiguration.strategy_config().validate()
+    universe = set(store.universe())
+    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
+    if unavailable:
+        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
+    warmup_bars = max(config.ema_slow * 3, config.adx_length + config.adx_smoothing, config.rvol_length) + 10
+    def run_symbol(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+        try:
+            candles = store.candles(symbol, request.timeframe, request.durationYears, analysis_start, now, warmup_bars=warmup_bars)
+            return simulate_strong_buy_symbol(symbol, candles, timeframe=request.timeframe, config=config, run_id=run_id, analysis_start=pd.Timestamp(analysis_start)), None
+        except (DhanAPIError, ValueError, OSError, KeyError) as error:
+            return None, {"symbol": symbol, "message": str(error)}
+    workers = max(1, min(int(os.environ.get("BACKTEST_WORKERS", "4")), len(request.symbols), MAX_BACKTEST_WORKERS))
+    if workers == 1:
+        processed = [run_symbol(symbol) for symbol in request.symbols]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="strong-buy-symbol") as executor:
+            processed = list(executor.map(run_symbol, request.symbols))
+    results = [result for result, _ in processed if result is not None]
+    errors = [error for _, error in processed if error is not None]
+    completed = datetime.now(IST)
+    return {
+        "metadata": {"runId": run_id, "strategyMode": STRONG_BUY_STRATEGY_KEY, "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyDescription": STRONG_BUY_DESCRIPTION, "strategyVersion": STRONG_BUY_STRATEGY_VERSION, "generatedAt": completed.isoformat(), "completedAt": completed.isoformat(), "analysisStart": analysis_start.isoformat(), "durationYears": request.durationYears, "timeframe": request.timeframe, "symbolsRequested": len(request.symbols), "symbolsProcessed": len(results), "symbolsFailed": len(errors), "workerCount": workers, "configuration": config.public(), "backtestSemantics": "INDEPENDENT_LOTS"},
+        "summary": aggregate_strong_buy_results(results), "results": results, "errors": errors,
+        "warnings": ["Strong Buy requires EMA crossover, close above VWAP, and at least two of ADX/DMI, RVOL and confirmed 15-minute alignment.", "Entries execute at the next 5-minute open. Every lot has its own target.", "No stop loss, bearish exit or end-of-day exit. Paper research only; no broker order is sent."],
+    }
+
+
 def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
     if request.strategyMode == "rsi_recovery":
         return run_recovery_backtest(request, store, now_ist)
+    if request.strategyMode == STRONG_BUY_STRATEGY_KEY:
+        return run_strong_buy_backtest(request, store, now_ist)
     if request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
         return run_top_5_opening_range_breakout_backtest(request, store, now_ist)
 

@@ -18,24 +18,26 @@ login_status="$(curl -sS -o /dev/null -w '%{http_code}' \
   "${base_url}/api/login")"
 [[ "${login_status}" == "303" ]]
 
+# EMA/VWAP Strong Buy is the only strategy that can start a new backtest, and it
+# requires completed 5-minute candles, so this smoke test always exercises it.
 curl -fsS \
   -b "${cookie_jar}" \
   -H 'Content-Type: application/json' \
-  --data '{"symbols":["LUPIN"],"durationYears":1,"timeframe":"1d"}' \
+  --data '{"symbols":["LUPIN"],"durationYears":1,"timeframe":"5m","strategyMode":"ema_vwap_strong_buy","strategyKey":"ema_vwap_strong_buy"}' \
   "${base_url}/api/backtest" > "${response}"
 
 jq -e '
+  .metadata.strategyMode == "ema_vwap_strong_buy" and
   .results | length == 1 and
   .[0].symbol == "LUPIN" and
-  .[0].bars > 200 and
-  (.[0].niftyReturnPct | type == "number")
+  .[0].bars > 200
 ' "${response}" >/dev/null
 
 jq -c '{
   symbol: .results[0].symbol,
   bars: .results[0].bars,
-  trades: .results[0].closedTrades,
-  returnPct: .results[0].strategyReturnPct,
-  niftyReturnPct: .results[0].niftyReturnPct,
+  strongBuySignals: .results[0].strongBuySignals,
+  executedLots: .results[0].executedLots,
+  targetHits: .results[0].targetHits,
   errors: .errors
 }' "${response}"

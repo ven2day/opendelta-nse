@@ -84,10 +84,11 @@ diagnostics.
 
 | Strategy | Status | Notes |
 | --- | --- | --- |
-| RSI Range Strategy | Active | Existing strategy behavior and historical results are preserved. |
-| RSI Recovery Scalping | Active | Existing strategy key, configuration, signals and exits are preserved. |
+| EMA/VWAP Strong Buy | Active | The only strategy that can start a new backtest; broker orders are disabled. |
+| RSI Range Strategy | Retired | Historical results remain read-only; new runs are blocked. |
+| RSI Recovery Scalping | Retired | Historical results remain read-only; new runs are blocked. |
 | NSE Signal Engine V2 | Research only | Long-only Trend Pullback Continuation and Breakout-Retest signals; all valid setups remain visible and broker orders are disabled. |
-| Top-5 Opening Range Breakout | Research only | Supports `FROZEN_OPEN` and `ROLLING`; broker orders are disabled. |
+| Top-5 Opening Range Breakout | Retired | Historical results remain read-only; new runs are blocked. Supported `FROZEN_OPEN` and `ROLLING`. |
 | Market-Aligned RSI Scalper | Retired | Historical results remain read-only; new runs are blocked. |
 | Market-Aligned VWAP Pullback Scalper | Retired | Historical results remain read-only; new runs are blocked. |
 | Crypto Trend Pullback Recovery | Research only | OKX/VALR public candles, completed-candle signals, next-bar backtest entry, no order path. |
@@ -252,8 +253,15 @@ NSE website scraping or embedded contract identifiers are used.
 
 ## Backtest strategy separation
 
-`RSI Range Strategy` and `RSI Recovery Scalping` retain their existing keys,
-configuration, evaluators, exits, results and URLs.
+`EMA/VWAP Strong Buy` (`ema_vwap_strong_buy`) is the only strategy that can start
+a new backtest. Every other strategy is retired from launching: `/backtest` and
+`/backtest/jobs` reject them with HTTP 422, and the frontend offers no selector
+for them.
+
+`RSI Range Strategy`, `RSI Recovery Scalping` and `Top-5 Opening Range Breakout`
+retain their existing keys, configuration, evaluators, exits, engines and result
+views. Saved history entries still render read-only and display
+`Retired strategy — cannot run again`.
 
 `Market-Aligned RSI Scalper` is retired. It is absent from new-backtest
 selection and cannot start a new API job. Existing saved results remain
@@ -275,10 +283,10 @@ validation.
 
 ### Top-5 Opening Range Breakout research modes
 
-`Top-5 Opening Range Breakout` is a standalone backtest strategy with
-`top_5_opening_range_breakout` as its internal key. It supports `FROZEN_OPEN` (the
-default) and `ROLLING` selection. Frozen mode ranks at 09:30 and retains five
-symbols for the session. Rolling mode rescans completed candles every 30 minutes
+`Top-5 Opening Range Breakout` is retired from new backtests. Its
+`top_5_opening_range_breakout` key, engine and saved results are preserved. It
+supported `FROZEN_OPEN` (the default) and `ROLLING` selection. Frozen mode ranks
+at 09:30 and retains five symbols for the session. Rolling mode rescans completed candles every 30 minutes
 through 14:00, applies score-advantage, residence-time, replacement-count and
 sector caps, and makes a promoted symbol eligible only from the next completed
 five-minute candle.

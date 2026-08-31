@@ -8,8 +8,21 @@ import json
 import sys
 from datetime import datetime
 
-from backtest_api import BacktestRequest, get_store, run_backtest
+from backtest_api import (
+    BacktestRequest,
+    get_store,
+    run_recovery_backtest,
+    run_rsi_range_backtest,
+)
 from main import IST
+
+# These strategies are retired from the launch surface (run_backtest and the HTTP API
+# accept EMA/VWAP Strong Buy only). This offline regression hash still calls their
+# preserved engines directly so saved historical results stay verifiable.
+PRESERVED_ENGINES = {
+    "rsi_range": run_rsi_range_backtest,
+    "rsi_recovery": run_recovery_backtest,
+}
 
 
 def _digest(value: object) -> str:
@@ -27,8 +40,8 @@ def main() -> int:
     store = get_store()
     symbol = sorted(store.universe())[0]
     output: dict[str, object] = {"symbolSelection": "FIRST_SORTED_UNIVERSE_SYMBOL"}
-    for strategy in ("rsi_range", "rsi_recovery"):
-        result = run_backtest(
+    for strategy, engine in PRESERVED_ENGINES.items():
+        result = engine(
             BacktestRequest(
                 symbols=[symbol],
                 strategyMode=strategy,

@@ -216,6 +216,20 @@ RSI_RECOVERY_DESCRIPTION = (
     "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic."
 )
 
+# Only EMA/VWAP Strong Buy may start a new backtest. Every other strategy engine and
+# its saved results stay in place so historical runs remain readable; removing the
+# membership test below is all that is required to make a strategy launchable again.
+LAUNCHABLE_STRATEGY_KEYS = frozenset({STRONG_BUY_STRATEGY_KEY})
+RETIRED_STRATEGY_LAUNCH_MESSAGE = (
+    "Only the EMA/VWAP Strong Buy strategy can be run; other strategies have been "
+    "retired from new backtests."
+)
+
+
+def ensure_strategy_is_launchable(strategy_mode: str) -> None:
+    if strategy_mode not in LAUNCHABLE_STRATEGY_KEYS:
+        raise ValueError(RETIRED_STRATEGY_LAUNCH_MESSAGE)
+
 
 class GlobalPriceSettingsRequest(BaseModel):
     minimumPrice: float = Field(ge=0, le=GLOBAL_DEFAULT_MAXIMUM_PRICE)
@@ -3459,14 +3473,7 @@ def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore
     }
 
 
-def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
-    if request.strategyMode == "rsi_recovery":
-        return run_recovery_backtest(request, store, now_ist)
-    if request.strategyMode == STRONG_BUY_STRATEGY_KEY:
-        return run_strong_buy_backtest(request, store, now_ist)
-    if request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
-        return run_top_5_opening_range_breakout_backtest(request, store, now_ist)
-
+def run_rsi_range_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
     if not request.entryLow < request.entryHigh < request.exitLow < request.exitHigh:
         raise ValueError("RSI ranges must be ordered: entry low < entry high < exit low < exit high")
 
@@ -3543,6 +3550,17 @@ def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: 
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
+    ensure_strategy_is_launchable(request.strategyMode)
+    if request.strategyMode == "rsi_recovery":
+        return run_recovery_backtest(request, store, now_ist)
+    if request.strategyMode == STRONG_BUY_STRATEGY_KEY:
+        return run_strong_buy_backtest(request, store, now_ist)
+    if request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
+        return run_top_5_opening_range_breakout_backtest(request, store, now_ist)
+    return run_rsi_range_backtest(request, store, now_ist)
 
 
 def create_store() -> HistoricalDataStore:
@@ -4460,11 +4478,15 @@ def start_backtest_job(
         alias="x-opendelta-history-owner",
     ),
 ) -> dict[str, Any]:
-    if request.strategyMode != DAILY_WATCHLIST_STRATEGY_KEY:
-        raise HTTPException(
-            status_code=422,
-            detail="Asynchronous progress jobs apply to Top-5 Opening Range Breakout.",
-        )
+    # Asynchronous progress jobs only ever served Top-5 Opening Range Breakout, and that
+    # strategy is retired from new runs, so every request is refused today. The route and
+    # its runner are kept intact: re-adding Top-5 to LAUNCHABLE_STRATEGY_KEYS restores it,
+    # and /backtest/jobs/{job_id} GET and DELETE stay available for in-flight job ids.
+    if (
+        request.strategyMode != DAILY_WATCHLIST_STRATEGY_KEY
+        or DAILY_WATCHLIST_STRATEGY_KEY not in LAUNCHABLE_STRATEGY_KEYS
+    ):
+        raise HTTPException(status_code=422, detail=RETIRED_STRATEGY_LAUNCH_MESSAGE)
     store = get_store()
 
     def runner(

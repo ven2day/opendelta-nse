@@ -274,12 +274,23 @@ class SavedResultBoundary extends Component<SavedResultBoundaryProps, SavedResul
   }
 }
 
+// Saved history entries are still labelled with every strategy name, including the
+// retired ones, so older results stay readable.
 const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
   ema_vwap_strong_buy: "EMA 9/21 + VWAP Strong Buy",
   top_5_opening_range_breakout: "Top-5 Opening Range Breakout",
 };
+
+// EMA/VWAP Strong Buy is the only strategy that can start a new backtest. Every other
+// strategy is retired: its engine, settings and result views are preserved read-only so
+// saved runs keep rendering, and the backend rejects new runs with HTTP 422.
+const LAUNCHABLE_STRATEGY_MODE = "ema_vwap_strong_buy" as const;
+const LAUNCHABLE_STRATEGY_NAMES: Record<string, string> = {
+  [LAUNCHABLE_STRATEGY_MODE]: STRATEGY_NAMES[LAUNCHABLE_STRATEGY_MODE],
+};
+const RETIRED_STRATEGY_NOTICE = "Retired strategy — cannot run again.";
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
 const top5OpeningRangeBreakoutRecommendedDefaults = strategyDefaults(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY);
@@ -327,6 +338,18 @@ function isRangeResponse(value: ActiveResponse | null): value is BacktestRespons
 
 function strategyDisplayName(strategy: StrategyMode): string {
   return STRATEGY_NAMES[strategy];
+}
+
+// Saved results for retired strategies stay viewable; only launching them is blocked.
+function RetiredStrategyBanner({ name }: { name: string }) {
+  return (
+    <section className="backtest-panel">
+      <div className="backtest-message error">
+        <AlertTriangle size={17} />
+        <span><strong>{RETIRED_STRATEGY_NOTICE}</strong> This historical {name} result is preserved read-only.</span>
+      </div>
+    </section>
+  );
 }
 
 async function readBacktestPayload(result: Response, batchStart: string): Promise<BacktestPayload> {
@@ -707,7 +730,7 @@ function PerformanceChart({
 
 export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
-  const [strategyMode, setStrategyMode] = useState<StrategyMode>("rsi_range");
+  const [strategyMode, setStrategyMode] = useState<StrategyMode>(LAUNCHABLE_STRATEGY_MODE);
   const [strongBuySettings, setStrongBuySettings] = useState({
     emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
     minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
@@ -725,7 +748,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const [symbolQuery, setSymbolQuery] = useState("");
   const [symbolMenuOpen, setSymbolMenuOpen] = useState(false);
   const [durationYears, setDurationYears] = useState<1 | 3>(1);
-  const [timeframe, setTimeframe] = useState<(typeof timeframes)[number]>("1d");
+  const [timeframe, setTimeframe] = useState<(typeof timeframes)[number]>("5m");
   const [entryLow, setEntryLow] = useState(defaultNumber("rsi_range", "entryLow"));
   const [entryHigh, setEntryHigh] = useState(defaultNumber("rsi_range", "entryHigh"));
   const [exitLow, setExitLow] = useState(defaultNumber("rsi_range", "exitLow"));
@@ -1620,7 +1643,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     if (universeMode === "selected") setSelectedSymbols(nextSymbols);
     setDurationYears(Number(settings.durationYears) as 1 | 3);
     setTimeframe(String(settings.timeframe) as typeof timeframe);
-    if (strategyMode === "rsi_range") {
+    if (strategyMode === "ema_vwap_strong_buy") {
+      // Strong Buy has no JSON-managed strategy parameters; only the run settings above apply.
+      setNumericErrors({});
+    } else if (strategyMode === "rsi_range") {
       applyRangeValues(settings);
     } else if (strategyMode === "rsi_recovery") {
       applyRecoveryValues(settings);
@@ -1635,7 +1661,18 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   };
 
   const resetJsonConfiguration = () => {
-    if (strategyMode === "rsi_range") {
+    if (strategyMode === "ema_vwap_strong_buy") {
+      setStrongBuySettings({
+        emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
+        minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
+        higherTimeframe: "15m", minimumConfirmations: 2, targetPct: 1,
+        initialQuantity: 100, allowAdditionalBuys: true,
+        additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
+        minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
+      });
+      setNumericErrors({});
+      setTimeframe("5m");
+    } else if (strategyMode === "rsi_range") {
       applyRangeValues(rangeRecommendedDefaults);
       setTimeframe("1d");
     } else if (strategyMode === "rsi_recovery") {
@@ -1680,18 +1717,22 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       <main className="backtest-main">
         <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/backtest">NSE</a><a href="/backtest/crypto">Crypto &amp; metals</a></nav>
         <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
-          <button type="button" className={strategyMode === "rsi_range" ? "active" : ""} onClick={() => switchStrategy("rsi_range")}>RSI Range Strategy</button>
-          <button type="button" className={strategyMode === "rsi_recovery" ? "active" : ""} onClick={() => switchStrategy("rsi_recovery")}>RSI Recovery Scalping</button>
-          <button type="button" className={strategyMode === "ema_vwap_strong_buy" ? "active" : ""} onClick={() => switchStrategy("ema_vwap_strong_buy")}>EMA/VWAP Strong Buy</button>
-          <button type="button" className={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "active" : ""} onClick={() => switchStrategy(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY)}>Top-5 Opening Range Breakout</button>
+          <button type="button" className={strategyMode === LAUNCHABLE_STRATEGY_MODE ? "active" : ""} onClick={() => switchStrategy(LAUNCHABLE_STRATEGY_MODE)}>EMA/VWAP Strong Buy</button>
         </div>
         <section className="backtest-intro">
           <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : strategyMode === "ema_vwap_strong_buy" ? "EMA 9/21 crossover above VWAP with any two of ADX, relative volume and confirmed 15-minute alignment." : "Select a causal top-five watchlist at the open or on rolling rescans, then test opening-range and midday momentum breakouts."}</p></div>
           <button type="button" className="method-pill strategy-rule-trigger" aria-label="Hover or focus to view all backtest conditions">
             <Clock3 size={16} />
-            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : "Causal Top-5 watchlist + next-bar ORB"}; hover for all conditions</span>
+            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : strategyMode === "ema_vwap_strong_buy" ? "EMA 9/21 crossover above VWAP, next-open entry" : "Causal Top-5 watchlist + next-bar ORB"}; hover for all conditions</span>
             <span className="strategy-rules-popover" role="tooltip">
-              {strategyMode === "rsi_range" ? <>
+              {strategyMode === "ema_vwap_strong_buy" ? <>
+                <strong>EMA/VWAP Strong Buy conditions</strong>
+                <span><b>BUY:</b> EMA {strongBuySettings.emaFast} crosses above EMA {strongBuySettings.emaSlow} while the close is above session VWAP.</span>
+                <span><b>CONFIRM:</b> Any two of ADX/DMI ≥ {strongBuySettings.minimumAdx}, RVOL ≥ {strongBuySettings.minimumRvol}, and confirmed 15-minute alignment.</span>
+                <span><b>ENTRY:</b> Execute at the next completed 5-minute candle open. Every lot is independent.</span>
+                <span><b>SELL:</b> Each lot exits at its own {strongBuySettings.targetPct}% target. There is no stop loss, bearish exit or end-of-day exit.</span>
+                <span>Paper research only; no broker order is sent.</span>
+              </> : strategyMode === "rsi_range" ? <>
                 <strong>Buy / hold / sell conditions</strong>
                 <span><b>BUY:</b> RSI enters {entryLow}-{entryHigh}; execute at the next candle open.</span>
                 <span><b>CHECK:</b> When RSI is {exitLow}-{exitHigh}, estimate the next-open sale after entry fee, exit fee, and slippage.</span>
@@ -1890,11 +1931,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             key={strategyMode}
             configuration={jsonConfiguration}
             definitions={parameterDefinitions}
-            strategyNames={STRATEGY_NAMES}
+            strategyNames={LAUNCHABLE_STRATEGY_NAMES}
             onApply={applyJsonConfiguration}
             onReset={resetJsonConfiguration}
             onSwitchStrategy={(strategyKey) => {
-              if (strategyKey in STRATEGY_NAMES) switchStrategy(strategyKey as StrategyMode);
+              // Only the launchable strategy can be switched to; retired keys stay read-only.
+              if (strategyKey in LAUNCHABLE_STRATEGY_NAMES) switchStrategy(strategyKey as StrategyMode);
             }}
           />
           {loading ? (
@@ -1932,11 +1974,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         {comparingRsiExits && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing RSI exit settings chronologically</strong><span>Training and validation stay separate, costs are included, and one common configuration is applied to all selected symbols.</span></div></div>}
         {rsiComparison && <RsiExitComparisonResults response={rsiComparison} />}
         {response && (
-          isRetiredMarketAlignedResponse(response) ? <section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned RSI Scalper result is preserved read-only.</span></div></section>
-            : isTop5OpeningRangeBreakoutResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "top-5")}><Top5OpeningRangeBreakoutResults response={response} /></SavedResultBoundary>
-            : isVwapPullbackResponse(response) ? <><section className="backtest-panel"><div className="backtest-message error"><AlertTriangle size={17} /><span><strong>Retired strategy — cannot run again.</strong> This historical Market-Aligned VWAP Pullback Scalper result is preserved read-only.</span></div></section><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "vwap")}><VwapPullbackResults response={response} /></SavedResultBoundary></>
+          isRetiredMarketAlignedResponse(response) ? <RetiredStrategyBanner name="Market-Aligned RSI Scalper" />
+            : isTop5OpeningRangeBreakoutResponse(response) ? <><RetiredStrategyBanner name="Top-5 Opening Range Breakout" /><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "top-5")}><Top5OpeningRangeBreakoutResults response={response} /></SavedResultBoundary></>
+            : isVwapPullbackResponse(response) ? <><RetiredStrategyBanner name="Market-Aligned VWAP Pullback Scalper" /><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "vwap")}><VwapPullbackResults response={response} /></SavedResultBoundary></>
             : isStrongBuyResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "strong-buy")}><StrongBuyResults response={response} /></SavedResultBoundary>
-            : isRecoveryResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "recovery")}><RecoveryResults response={response} /></SavedResultBoundary> : <>
+            : isRecoveryResponse(response) ? <><RetiredStrategyBanner name="RSI Recovery Scalping" /><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "recovery")}><RecoveryResults response={response} /></SavedResultBoundary></> : <>
+            <RetiredStrategyBanner name="RSI Range Strategy" />
             <section className="backtest-overview">
               <div><span>Symbols tested</span><strong>{response.results.length}</strong></div>
               <div><span>Profitable</span><strong className="positive-value">{profitableCount}</strong></div>

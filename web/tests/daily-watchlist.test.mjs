@@ -17,9 +17,11 @@ async function sources() {
   return { definitions, dashboard, panel, results, history, backendImage };
 }
 
-test("Top-5 Opening Range Breakout is a standalone selectable strategy", async () => {
+test("Top-5 Opening Range Breakout is retired from launching but stays viewable", async () => {
   const { dashboard, history, backendImage } = await sources();
-  assert.match(dashboard, /Top-5 Opening Range Breakout<\/button>/);
+  assert.doesNotMatch(dashboard, /Top-5 Opening Range Breakout<\/button>/);
+  assert.match(dashboard, /<RetiredStrategyBanner name="Top-5 Opening Range Breakout" \/>/);
+  assert.match(dashboard, /<Top5OpeningRangeBreakoutResults response=\{response\} \/>/);
   assert.match(dashboard, /createTop5OpeningRangeBreakoutRequest/);
   assert.match(dashboard, /isTop5OpeningRangeBreakoutResponse/);
   assert.match(history, /top_5_opening_range_breakout/);

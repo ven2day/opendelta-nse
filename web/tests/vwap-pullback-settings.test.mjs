@@ -41,11 +41,12 @@ test("new strategy numeric constraints are aligned", async () => {
   assert.equal(valid(definition(definitions, "maximumTradesPerDay"), 2.5), false);
 });
 
-test("selector hides the rejected VWAP strategy and exposes Top-5 instead", async () => {
+test("selector exposes only the launchable EMA/VWAP Strong Buy strategy", async () => {
   const { dashboard } = await sources();
-  assert.match(dashboard, />RSI Range Strategy<\/button>/);
-  assert.match(dashboard, />RSI Recovery Scalping<\/button>/);
-  assert.match(dashboard, />Top-5 Opening Range Breakout<\/button>/);
+  assert.match(dashboard, />EMA\/VWAP Strong Buy<\/button>/);
+  assert.doesNotMatch(dashboard, />RSI Range Strategy<\/button>/);
+  assert.doesNotMatch(dashboard, />RSI Recovery Scalping<\/button>/);
+  assert.doesNotMatch(dashboard, />Top-5 Opening Range Breakout<\/button>/);
   assert.doesNotMatch(dashboard, />Market-Aligned VWAP Pullback Scalper<\/button>/);
   assert.doesNotMatch(dashboard, />Market-Aligned RSI Scalper<\/button>/);
   assert.doesNotMatch(dashboard, /vwapPullbackConfiguration:/);

@@ -158,6 +158,8 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(signalsHtml, /Completed-candle research monitor/);
   assert.match(signalsHtml, /Paper positions/);
   assert.match(signalsHtml, /Crypto &amp; metals/);
+  assert.match(signalsHtml, /Auto-refresh every 10 seconds/);
+  assert.doesNotMatch(signalsHtml, /class="global-header"/);
 
   const anonymousCryptoBacktest = await fetchFromWorker(worker, "/backtest/crypto", {
     headers: { accept: "text/html" },
@@ -201,7 +203,7 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
 });
 
 test("ships all synchronized NSE symbols without starter dependencies", async () => {
-  const [dataText, packageText, dashboardText, backtestText, recoveryResultsText, featureAnalysisText, liveUniverseText, liveSignalsText, backtestApiText, recoveryAnalysisApiText, liveUniverseApiText, liveSignalsApiText, marketRefreshApiText, marketDataText, stylesText, layoutText, liveCsv, syncDataText] = await Promise.all([
+  const [dataText, packageText, dashboardText, backtestText, recoveryResultsText, featureAnalysisText, liveUniverseText, liveSignalsText, platformChromeText, backtestApiText, recoveryAnalysisApiText, liveUniverseApiText, liveSignalsApiText, marketRefreshApiText, marketDataText, stylesText, layoutText, liveCsv, syncDataText] = await Promise.all([
     readFile(new URL("../app/data/nse-data.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
@@ -210,6 +212,7 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
     readFile(new URL("../app/backtest/feature-analysis.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/signals/live-universe.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/platform-chrome.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/backtest/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/recovery-analysis/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/live-universe/route.ts", import.meta.url), "utf8"),
@@ -407,6 +410,14 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(liveUniverseApiText, /\/live-universe\/preview/);
   assert.match(liveUniverseApiText, /\/live-universe\/save/);
   assert.match(liveSignalsText, /Completed-candle research monitor/);
+  assert.match(liveSignalsText, /SIGNAL_REFRESH_INTERVAL_MS = 10_000/);
+  assert.match(liveSignalsText, /document\.visibilityState === "visible"/);
+  assert.match(liveSignalsText, /Live monitoring operational/);
+  assert.match(liveSignalsText, /Market closed · automatic resume armed/);
+  assert.doesNotMatch(liveSignalsText, /className="global-header"/);
+  assert.match(platformChromeText, /OVERVIEW_REFRESH_INTERVAL_MS = 15_000/);
+  assert.match(platformChromeText, /window\.addEventListener\("focus", refreshVisible\)/);
+  assert.match(platformChromeText, /overviewUnavailable \? "UNAVAILABLE"/);
   assert.match(liveSignalsText, /<span>Universe<\/span>/);
   assert.match(liveSignalsText, /status\.universeVersion/);
   assert.doesNotMatch(liveSignalsText, /className="snapshot-pill"/);

@@ -5,18 +5,23 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
 
-test("Stock Scanner is directly beside Dashboard in every application shell", async () => {
-  const files = await Promise.all([
+test("Stock Scanner remains available in legacy and unified application navigation", async () => {
+  const [legacyFiles, signals, platformChrome] = await Promise.all([
+    Promise.all([
     source("app/dashboard.tsx"),
     source("app/backtest/backtest-dashboard.tsx"),
-    source("app/signals/signals-workspace.tsx"),
     source("app/signals/live-universe.tsx"),
     source("app/admin/admin-settings.tsx"),
+    ]),
+    source("app/signals/signals-workspace.tsx"),
+    source("app/platform/platform-chrome.tsx"),
   ]);
-  for (const file of files) {
+  for (const file of legacyFiles) {
     assert.match(file, /Dashboard[\s\S]{0,60}<\/a>[\s\S]{0,180}href="\/scanner"/);
     assert.match(file, /Stock Scanner/);
   }
+  assert.doesNotMatch(signals, /className="global-header"/);
+  assert.match(platformChrome, /href: "\/scanner", label: "Scanner"/);
 });
 
 test("scanner page and API require the existing authenticated session", async () => {

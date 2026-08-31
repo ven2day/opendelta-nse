@@ -4298,6 +4298,22 @@ footer {
 .health-item strong { overflow: hidden; color: var(--text); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .health-item.healthy svg { color: var(--green); }
 .health-item.warning svg { color: var(--amber); }
+.signals-runtime-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+.signals-runtime-banner > div { display: grid; gap: 2px; min-width: 0; }
+.signals-runtime-banner > div:last-child { flex: 0 0 auto; text-align: right; }
+.signals-runtime-banner strong { color: var(--text); font-size: 12px; }
+.signals-runtime-banner span { overflow-wrap: anywhere; color: var(--muted); font-size: 11px; }
+.signals-runtime-banner.ready { border-color: color-mix(in srgb, var(--green) 34%, var(--border)); background: color-mix(in srgb, var(--green-soft) 45%, var(--panel)); }
+.signals-runtime-banner.degraded { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); background: color-mix(in srgb, var(--amber-soft) 45%, var(--panel)); }
 .signal-notice { display: flex; align-items: center; gap: 7px; border: 1px solid color-mix(in srgb, var(--green) 30%, var(--border)); border-radius: 8px; padding: 8px 10px; color: var(--green); background: var(--green-soft); font-size: 9px; font-weight: 700; }
 .signal-notice button { margin-left: auto; border: 0; color: inherit; background: transparent; }
 .signals-study-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 7px; }
@@ -4357,7 +4373,10 @@ footer {
 .manual-action { margin-left: auto; border-radius: 999px; padding: 5px 7px; color: var(--muted); background: var(--panel); font-size: 7px; font-weight: 800; }
 .manual-action.paper_buy { color: var(--green); background: var(--green-soft); }
 .manual-action.ignore { color: var(--faint); }
-.signals-empty { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 120px; color: var(--muted); font-size: 9px; }
+.signals-empty { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 120px; color: var(--muted); font-size: 9px; text-align: center; }
+.signals-empty > div { display: grid; gap: 4px; max-width: 720px; }
+.signals-empty strong { color: var(--text); }
+.signals-empty span { color: var(--faint); }
 .paper-position-card { display: grid; grid-template-columns: minmax(140px, 1.2fr) repeat(8, minmax(85px, .7fr)) auto; align-items: center; gap: 9px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; background: var(--panel); }
 .paper-position-card h2 { margin: 4px 0 1px; font-size: 12px; }
 .paper-position-card small { color: var(--faint); font-size: 6.5px; }
@@ -4399,6 +4418,8 @@ footer {
 
 @media (max-width: 600px) {
   .signals-healthbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .signals-runtime-banner { align-items: flex-start; flex-direction: column; }
+  .signals-runtime-banner > div:last-child { text-align: left; }
   .health-item { border-left: 0; padding-left: 0; }
   .signals-study-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .signals-tabs button,

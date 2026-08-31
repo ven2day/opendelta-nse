@@ -66,6 +66,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
 ];
 
 const navigation = navigationGroups.flatMap((group) => group.items);
+const OVERVIEW_REFRESH_INTERVAL_MS = 15_000;
 
 export function usesPlatformShell(pathname: string): boolean {
   return pathname !== "/login" && !pathname.startsWith("/api/");
@@ -99,6 +100,8 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   });
   const [clock, setClock] = useState(() => new Date());
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [overviewUnavailable, setOverviewUnavailable] = useState(false);
+  const [overviewUpdatedAt, setOverviewUpdatedAt] = useState<Date | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "dark";
     const saved = window.localStorage.getItem("opendelta-theme");
@@ -118,18 +121,30 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
     if (!shellEnabled) return;
     let cancelled = false;
     const load = async () => {
+      if (document.visibilityState !== "visible") return;
       try {
         const next = await platformGet<Overview>("overview");
-        if (!cancelled) setOverview(next);
+        if (!cancelled) {
+          setOverview(next);
+          setOverviewUnavailable(false);
+          setOverviewUpdatedAt(new Date());
+        }
       } catch {
-        if (!cancelled) setOverview(null);
+        if (!cancelled) setOverviewUnavailable(true);
       }
     };
     void load();
-    const timer = window.setInterval(load, 30_000);
+    const timer = window.setInterval(load, OVERVIEW_REFRESH_INTERVAL_MS);
+    const refreshVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", refreshVisible);
+    window.addEventListener("focus", refreshVisible);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisible);
+      window.removeEventListener("focus", refreshVisible);
     };
   }, [pathname, shellEnabled]);
 
@@ -142,9 +157,12 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   }).format(clock), [clock, market]);
 
   if (!shellEnabled) return <>{children}</>;
-  const freshness = overview?.dataFreshness?.status ?? "CHECKING";
-  const worker = overview?.jobStatus?.status ?? "CHECKING";
+  const freshness = overviewUnavailable ? "UNAVAILABLE" : (overview?.dataFreshness?.status ?? "CHECKING");
+  const worker = overviewUnavailable ? "UNAVAILABLE" : (overview?.jobStatus?.status ?? "CHECKING");
   const freshnessLabel = overview?.dataFreshness?.reason === "MARKET_CLOSED_LAST_SESSION_CURRENT" ? "current" : freshness.toLowerCase();
+  const overviewRefreshTitle = overviewUpdatedAt
+    ? `Live overview refreshes every 15 seconds. Last update ${overviewUpdatedAt.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })} IST.`
+    : "Connecting to the live overview service.";
 
   const toggleNavigation = () => {
     setOpen((current) => {
@@ -187,8 +205,8 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
           <div className="platform-live-strip">
             <span className="platform-clock" title="Market clock"><Activity size={14} /><b>{marketClock}</b><small>{market === "NSE" ? "IST" : "UTC"}</small></span>
-            <span className="platform-status" data-tone={statusTone(freshness)} title="Market-data freshness"><i />Data <b>{freshnessLabel}</b></span>
-            <span className="platform-status" data-tone={statusTone(worker)} title="Background worker"><i />Worker <b>{worker.toLowerCase()}</b></span>
+            <span className="platform-status" data-tone={statusTone(freshness)} title={overviewRefreshTitle}><i />Data <b>{freshnessLabel}</b></span>
+            <span className="platform-status" data-tone={statusTone(worker)} title={overviewRefreshTitle}><i />Worker <b>{worker.toLowerCase()}</b></span>
             <span className="platform-environment">{overview?.environment ?? "Connecting"}</span>
             <button className="platform-icon-action" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`} title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
               {theme === "dark" ? <Sun size={17} /> : <Moon size={17} />}

@@ -108,7 +108,28 @@ echo "verified backtest HTML"
 curl -fsS -b "${cookie_jar}" "${base_url}/signals" > "${dashboard_html}"
 grep -q 'Completed-candle research monitor' "${dashboard_html}"
 grep -q 'Paper positions' "${dashboard_html}"
+grep -q 'Auto-refresh every 10 seconds' "${dashboard_html}"
+! grep -q 'class="global-header"' "${dashboard_html}"
 echo "verified signals HTML"
+
+curl -fsS -b "${cookie_jar}" "${base_url}/api/live-signals?action=status" > "${dashboard_html}"
+jq -e '
+  .paperOnly == true and
+  .liveOrdersEnabled == false and
+  .universeFrozen == true and
+  (.universeVersion | type == "string" and length > 0) and
+  (.monitoredSymbols > 0) and
+  (.subscribedSymbols == .monitoredSymbols) and
+  (
+    (.marketSession == "CLOSED" and .engineStatus == "MARKET_CLOSED") or
+    (
+      .marketSession == "OPEN" and
+      .connectionStatus == "CONNECTED" and
+      (.engineStatus == "READY" or .engineStatus == "RECOVERING")
+    )
+  )
+' "${dashboard_html}" >/dev/null
+echo "verified paper-only NSE live-signal runtime contract"
 
 curl -fsS -b "${cookie_jar}" "${base_url}/scanner" > "${dashboard_html}"
 grep -q 'Stock Scanner' "${dashboard_html}"

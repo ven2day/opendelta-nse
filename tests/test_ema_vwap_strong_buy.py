@@ -25,7 +25,7 @@ class StrongBuyConfigTests(unittest.TestCase):
 class StrongBuySimulationTests(unittest.TestCase):
     def candles(self) -> pd.DataFrame:
         index = pd.date_range("2026-08-31 09:15", periods=5, freq="5min", tz="Asia/Kolkata")
-        return pd.DataFrame({"Open": [100, 101, 102, 103, 104], "High": [101, 102, 104, 104, 105], "Low": [99, 100, 101, 102, 103], "Close": [100, 101, 103, 103, 104], "Volume": [1000] * 5}, index=index)
+        return pd.DataFrame({"Open": [100, 101, 101, 101, 102], "High": [101, 102, 102, 102, 103], "Low": [99, 100, 100, 100, 101], "Close": [100, 101, 101, 101, 102], "Volume": [1000] * 5}, index=index)
 
     def indicator_frame(self) -> pd.DataFrame:
         data = self.candles()

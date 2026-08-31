@@ -1321,7 +1321,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           const previous: StrongBuyBacktestResponse | null = isStrongBuyResponse(aggregate) ? aggregate : null;
           // Loop-local accumulator; no React state or props are mutated.
           // eslint-disable-next-line react-hooks/immutability
-          aggregate = previous ? (() => {
+          aggregate = previous ? (((): StrongBuyBacktestResponse => {
             const executedLots = previous.summary.executedLots + payload.summary.executedLots;
             const takeProfitSold = previous.summary.takeProfitSold + payload.summary.takeProfitSold;
             return {
@@ -1339,11 +1339,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               errors: [...previous.errors, ...payload.errors],
               warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
             };
-          })() : payload;
+          })()) : payload;
         } else if (strategyMode === "rsi_recovery") {
           if (!isRecoveryResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           // This is a loop-local accumulator, not React state or a prop.
-          // eslint-disable-next-line react-hooks/immutability
           aggregate = mergeRecoveryResponses(
             isRecoveryResponse(aggregate) ? aggregate : null,
             payload,

@@ -109,6 +109,45 @@ test("sidebar links perform full document navigation in production", async ({ pa
   await expect(page.locator(".platform-route-context strong")).toHaveText("Backtests");
 });
 
+test("an incompatible saved Top-5 result cannot crash the Backtests page", async ({ page }) => {
+  const summary = {
+    id: "legacy-top-5",
+    completedAt: "2026-08-29T15:30:00+05:30",
+    strategyMode: "top_5_opening_range_breakout",
+    strategyName: "Top-5 Opening Range Breakout",
+    timeframe: "5m",
+    durationYears: 1,
+    symbolCount: 649,
+  };
+  await page.route("**/api/backtest-history**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.has("id")) {
+      return route.fulfill({ json: {
+        ...summary,
+        response: {
+          metadata: {
+            runId: summary.id,
+            strategyMode: summary.strategyMode,
+            strategyKey: summary.strategyMode,
+          },
+          results: [],
+          errors: [],
+          warnings: [],
+        },
+      } });
+    }
+    return route.fulfill({ json: { runs: [summary], limit: 10 } });
+  });
+
+  await page.goto("/backtest");
+
+  await expect(page.locator(".platform-topbar")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent backtests" })).toBeVisible();
+  await expect(page.getByText("Saved result could not be displayed.")).toBeVisible();
+  await expect(page.getByText("Your saved history has not been deleted")).toBeVisible();
+  await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
+});
+
 test("desktop hamburger fully hides, restores, and remembers the sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");

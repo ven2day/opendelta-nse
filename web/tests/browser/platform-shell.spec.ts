@@ -30,6 +30,34 @@ async function mockPlatform(page: Page) {
     } });
     return route.fulfill({ status: 404, json: { detail: "Not part of this browser smoke" } });
   });
+  await page.route("**/api/live-signals?**", async (route) => {
+    const action = new URL(route.request().url()).searchParams.get("action");
+    const status = {
+      connectionStatus: "DISCONNECTED",
+      engineStatus: "MARKET_CLOSED",
+      message: "NSE is closed; Dhan live subscriptions resume at the next market session",
+      universeVersion: "LIVE-TEST-001",
+      universeFrozen: true,
+      monitoredSymbols: 300,
+      subscribedSymbols: 300,
+      timeframe: "5m",
+      strategyVersion: "rsi-recovery-1.1.0",
+      lastCompletedCandle: "2026-08-28T15:30:00+05:30",
+      lastMarketDataTimestamp: null,
+      dataAgeSeconds: null,
+      marketSession: "CLOSED",
+      paperOnly: true,
+      liveOrdersEnabled: false,
+      oiFilterMode: "OFF",
+      oiRegime: null,
+      oiHistory: null,
+    };
+    if (action === "signals") return route.fulfill({ json: { signals: [], status, study: { signalsGenerated: 0 } } });
+    if (action === "status") return route.fulfill({ json: status });
+    if (action === "settings") return route.fulfill({ json: { settings: {} } });
+    if (action === "paper") return route.fulfill({ json: { paperTrades: [] } });
+    return route.fulfill({ status: 404, json: { detail: "Unknown test action" } });
+  });
 }
 
 async function login(page: Page) {
@@ -53,7 +81,7 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
     "/strategies", "/backtest", "/backtest/crypto", "/research", "/research/experiments",
     "/research/results", "/risk", "/data-health", "/jobs", "/settings", "/admin",
   ];
-  const routesWithEmbeddedHeader = new Set(["/", "/scanner", "/signals", "/signals/funnel", "/signals/crypto", "/backtest", "/backtest/crypto", "/admin"]);
+  const routesWithEmbeddedHeader = new Set(["/", "/scanner", "/signals/funnel", "/signals/crypto", "/backtest", "/backtest/crypto", "/admin"]);
   const viewports = [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -73,10 +101,21 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
         await expect(page.locator(".global-header .brand")).not.toBeVisible();
         await expect(page.locator(".global-header .top-nav")).not.toBeVisible();
       }
+      if (route === "/signals") await expect(page.locator(".global-header")).toHaveCount(0);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);
     }
   }
+});
+
+test("NSE Signals presents an expected market-close state without false degradation", async ({ page }) => {
+  await page.goto("/signals");
+
+  await expect(page.getByText("Market closed · automatic resume armed")).toBeVisible();
+  await expect(page.getByText("RESUMES AT OPEN")).toBeVisible();
+  await expect(page.getByText("Auto-refresh every 10 seconds")).toBeVisible();
+  await expect(page.locator(".signals-runtime-banner")).toHaveClass(/ready/);
+  await expect(page.getByText(/NSE is closed\. The engine will reconnect automatically/)).toBeVisible();
 });
 
 test("sidebar links perform full document navigation in production", async ({ page }) => {

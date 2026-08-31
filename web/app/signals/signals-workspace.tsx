@@ -8,15 +8,11 @@ import {
   Clock3,
   Eye,
   IndianRupee,
-  LayoutDashboard,
   LoaderCircle,
   LockKeyhole,
-  LogOut,
   Radio,
   RefreshCw,
-  ScanSearch,
   Settings2,
-  TrendingUp,
   Wifi,
   WifiOff,
   X,
@@ -231,6 +227,8 @@ const EMPTY_STATUS: EngineStatus = {
   oiFilterMode: "OFF", oiRegime: null, oiHistory: null,
 };
 
+const SIGNAL_REFRESH_INTERVAL_MS = 10_000;
+
 function money(value: number | null | undefined, digits = 2) {
   return value == null || !Number.isFinite(value) ? "—" : `₹${value.toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 }
@@ -246,6 +244,17 @@ function percent(value: number | null | undefined, digits = 2) {
 function formatIst(value: string | null | undefined) {
   if (!value) return "No completed candle yet";
   return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true }).format(new Date(value)) + " IST";
+}
+
+function formatRefreshTime(value: Date | null) {
+  if (!value) return "Waiting for first refresh";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(value) + " IST";
 }
 
 function duration(minutes: number | null | undefined) {
@@ -332,7 +341,7 @@ function SignalCard({ signal, readOnly, onPaper, onWatch, onIgnore }: {
   </article>;
 }
 
-export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRange }: { userName: string; signOutHref: string; initialGlobalPriceRange: GlobalPriceRange }) {
+export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string; signOutHref: string; initialGlobalPriceRange: GlobalPriceRange }) {
   const [tab, setTab] = useState<Tab>("live");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [paperTrades, setPaperTrades] = useState<PaperTrade[]>([]);
@@ -341,6 +350,8 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
   const [draftSettings, setDraftSettings] = useState<Settings | null>(null);
   const [study, setStudy] = useState<Study | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -358,21 +369,39 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
   const [sortKey, setSortKey] = useState<SortKey>("signalTimestamp");
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const seenSignals = useRef<Set<string>>(new Set());
+  const loadInFlight = useRef(false);
+  const configurationLoaded = useRef(false);
 
   const load = useCallback(async (quiet = false) => {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
     if (!quiet) setLoading(true);
+    else setRefreshing(true);
     try {
-      const [signalResponse, settingsResponse, paperResponse, globalSettingsResponse] = await Promise.all([
+      const includeConfiguration = !configurationLoaded.current;
+      const responses = await Promise.all([
         fetch("/api/live-signals?action=signals", { cache: "no-store" }),
-        fetch("/api/live-signals?action=settings", { cache: "no-store" }),
         fetch("/api/live-signals?action=paper", { cache: "no-store" }),
-        fetch("/api/global-settings", { cache: "no-store" }),
+        ...(includeConfiguration ? [
+          fetch("/api/live-signals?action=settings", { cache: "no-store" }),
+          fetch("/api/global-settings", { cache: "no-store" }),
+        ] : []),
       ]);
-      const [signalBody, settingsBody, paperBody, globalSettingsBody] = await Promise.all([payload(signalResponse), payload(settingsResponse), payload(paperResponse), payload(globalSettingsResponse)]);
+      const signalResponse = responses[0];
+      const paperResponse = responses[1];
+      const settingsResponse = includeConfiguration ? responses[2] : undefined;
+      const globalSettingsResponse = includeConfiguration ? responses[3] : undefined;
+      if (!signalResponse || !paperResponse) throw new Error("Live-signal refresh returned an incomplete response");
+      const [signalBody, paperBody, settingsBody, globalSettingsBody] = await Promise.all([
+        payload(signalResponse),
+        payload(paperResponse),
+        settingsResponse ? payload(settingsResponse) : Promise.resolve(null),
+        globalSettingsResponse ? payload(globalSettingsResponse) : Promise.resolve(null),
+      ]);
       if (!signalResponse.ok) throw new Error(signalBody.detail ?? "Unable to load live signals");
-      if (!settingsResponse.ok) throw new Error(settingsBody.detail ?? "Unable to load signal settings");
       if (!paperResponse.ok) throw new Error(paperBody.detail ?? "Unable to load paper positions");
-      if (globalSettingsResponse.ok) setGlobalPriceRange(parseGlobalSettings(globalSettingsBody).priceRange);
+      if (settingsResponse && !settingsResponse.ok) throw new Error(settingsBody?.detail ?? "Unable to load signal settings");
+      if (globalSettingsResponse?.ok && globalSettingsBody) setGlobalPriceRange(parseGlobalSettings(globalSettingsBody).priceRange);
       const incoming: Signal[] = signalBody.signals ?? [];
       if (seenSignals.current.size) {
         const fresh = incoming.filter((item) => !seenSignals.current.has(item.signalId));
@@ -382,18 +411,44 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
       setSignals(incoming);
       setStatus(signalBody.status ?? EMPTY_STATUS);
       setStudy(signalBody.study ?? null);
-      setSettings(settingsBody.settings);
-      setDraftSettings((current) => current ?? settingsBody.settings);
+      if (settingsBody?.settings) {
+        setSettings(settingsBody.settings);
+        setDraftSettings((current) => current ?? settingsBody.settings);
+        configurationLoaded.current = true;
+      }
       setPaperTrades(paperBody.paperTrades ?? []);
+      setLastUpdatedAt(new Date());
       setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to load live signals");
-    } finally { if (!quiet) setLoading(false); }
+    } finally {
+      loadInFlight.current = false;
+      if (!quiet) setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
   // Polling is the presentation transport; market ingestion remains server-side streaming.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void load(); const timer = window.setInterval(() => void load(true), 10_000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => {
+    const refreshVisible = () => {
+      if (document.visibilityState === "visible") void load(true);
+    };
+    const refreshConfiguration = () => {
+      if (document.visibilityState !== "visible") return;
+      configurationLoaded.current = false;
+      void load(true);
+    };
+    void load();
+    const timer = window.setInterval(refreshVisible, SIGNAL_REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refreshConfiguration);
+    window.addEventListener("focus", refreshConfiguration);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshConfiguration);
+      window.removeEventListener("focus", refreshConfiguration);
+    };
+  }, [load]);
 
   const decide = async (signal: Signal, action: "WATCH" | "IGNORE", reason?: string) => {
     setWorking(true); setError("");
@@ -452,26 +507,33 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
       });
   }, [confirmationFilter, globalPriceRange, rangeFilter, rankFilter, signals, sortKey, tab]);
 
-  const initials = userName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
   const connected = status.connectionStatus === "CONNECTED";
+  const marketClosed = status.marketSession === "CLOSED";
+  const feedHealthy = connected || marketClosed;
+  const engineHealthy = status.engineStatus === "READY" || status.engineStatus === "MARKET_CLOSED";
+  const runtimeReady = marketClosed || (connected && status.engineStatus === "READY");
+  const emptyMessage = !runtimeReady
+    ? "Live signal evaluation is paused until Dhan reconnects and the engine returns to READY."
+    : marketClosed
+      ? "NSE is closed. The engine will reconnect automatically at the next market session. Stored signals remain available in History."
+      : "No completed-candle RSI Recovery signals match this view yet.";
 
   return <div className="site-shell backtest-shell signals-shell">
-    <header className="global-header"><div className="header-inner">
-      <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
-      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className="nav-item" href="/scanner"><ScanSearch size={16} />Stock Scanner</a><a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a><a className="nav-item active" href="/signals" aria-current="page"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
-      <div className="header-actions"><div className="user-chip"><div className="avatar">{initials}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
-    </div></header>
-
     <main className="main-content signals-main">
       <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/signals">NSE</a><a href="/signals/crypto">Crypto &amp; metals</a></nav>
       <section className="signals-healthbar">
         <div className="signals-health-title"><span className="section-kicker">Completed-candle research monitor</span><h1>Signals</h1></div>
-        <div className={`health-item ${connected ? "healthy" : "warning"}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}<div><span>Dhan market data</span><strong>{status.connectionStatus}</strong></div></div>
-        <div className={`health-item ${status.engineStatus === "READY" ? "healthy" : "warning"}`}><Activity size={16} /><div><span>Signal engine</span><strong>{status.engineStatus.replaceAll("_", " ")}</strong></div></div>
+        <div className={`health-item ${feedHealthy ? "healthy" : "warning"}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}<div><span>Dhan market data</span><strong>{marketClosed ? "RESUMES AT OPEN" : status.connectionStatus}</strong></div></div>
+        <div className={`health-item ${engineHealthy ? "healthy" : "warning"}`}><Activity size={16} /><div><span>Signal engine</span><strong>{status.engineStatus.replaceAll("_", " ")}</strong></div></div>
         <div className={`health-item ${status.universeFrozen ? "healthy" : "warning"}`}><LockKeyhole size={16} /><div><span>Universe</span><strong>{status.universeVersion ?? "Unavailable"} · {status.universeFrozen ? "Frozen" : "Not frozen"}</strong></div></div>
         <div className="health-item"><Clock3 size={16} /><div><span>Last completed candle</span><strong>{formatIst(status.lastCompletedCandle)}</strong></div></div>
         <div className="health-item"><Radio size={16} /><div><span>Monitored</span><strong>{status.monitoredSymbols} symbols · {status.timeframe}</strong></div></div>
-        <button className="icon-button" onClick={() => void load()} aria-label="Refresh signals"><RefreshCw size={16} /></button><button className="icon-button" onClick={() => { setDraftSettings(settings); setSettingsOpen(true); }} aria-label="Signals settings"><Settings2 size={16} /></button>
+        <button className="icon-button" onClick={() => { configurationLoaded.current = false; void load(); }} aria-label="Refresh signals" title={`Last refreshed ${formatRefreshTime(lastUpdatedAt)}`}><RefreshCw className={refreshing ? "spin" : undefined} size={16} /></button><button className="icon-button" onClick={() => { setDraftSettings(settings); setSettingsOpen(true); }} aria-label="Signals settings"><Settings2 size={16} /></button>
+      </section>
+
+      <section className={`signals-runtime-banner ${runtimeReady ? "ready" : "degraded"}`} role={runtimeReady ? "status" : "alert"} aria-live="polite">
+        <div><strong>{marketClosed ? "Market closed · automatic resume armed" : runtimeReady ? "Live monitoring operational" : "Live monitoring degraded"}</strong><span>{status.message}</span></div>
+        <div><span>Auto-refresh every 10 seconds</span><strong>{formatRefreshTime(lastUpdatedAt)}</strong></div>
       </section>
 
       <section className="backtest-panel oi-regime-card" aria-label="RSI Recovery strategy isolation">
@@ -496,7 +558,7 @@ export function SignalsWorkspace({ userName, signOutHref, initialGlobalPriceRang
 
       {tab !== "paper" && <section className="signals-filterbar"><select aria-label="Buy range status" value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)}><option value="ALL">All range states</option><option value="IN_RANGE">In range</option><option value="ABOVE_RANGE">Above range</option><option value="BELOW_RANGE">Below range</option></select><select aria-label="Confirmation score" value={confirmationFilter} onChange={(event) => setConfirmationFilter(event.target.value)}><option value="ALL">All confirmations</option><option value="2">2/3 confirmations</option><option value="3">3/3 confirmations</option></select><select aria-label="Historical rank" value={rankFilter} onChange={(event) => setRankFilter(event.target.value)}><option value="ALL">All historical ranks</option><option value="1-50">Rank 1–50</option><option value="51-100">Rank 51–100</option><option value="101-200">Rank 101–200</option><option value="201-300">Rank 201–300</option></select><select aria-label="Sort signals" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}><option value="signalTimestamp">Newest first</option><option value="rank">Historical rank</option><option value="qualityScore">Quality</option><option value="goodRate">GOOD rate</option><option value="medianTargetMinutes">Median target time</option><option value="atrPct">ATR</option><option value="volumeRatio">Volume ratio</option><option value="distanceToResistancePct">Distance to resistance</option></select><span>{visibleSignals.length} observations</span></section>}
 
-      {loading ? <section className="backtest-panel signals-empty"><LoaderCircle className="spin" size={20} />Loading persisted signals and engine health…</section> : tab === "paper" ? <section className="paper-position-list">{paperTrades.length ? paperTrades.map((trade) => <article className="paper-position-card" key={trade.paperTradeId}><div><span className={`trade-status ${trade.status === "OPEN" ? "open" : "hit"}`}>{trade.status.replaceAll("_", " ")}</span><h2>{trade.symbol}</h2><small>{formatIst(trade.entryTimestamp)} · {duration(trade.ageMinutes)} old</small></div><Metric label="Actual paper entry" value={money(trade.entryPrice)} /><Metric label="Quantity" value={`${trade.quantity} shares`} /><Metric label="Paper amount" value={money(trade.paperAmount)} /><Metric label="Paper target" value={money(trade.targetPrice)} /><Metric label="Current" value={money(trade.currentPrice)} /><Metric label="Current P&L" value={`${money(trade.currentPnl)} · ${percent(trade.currentPnlPct)}`} tone={trade.currentPnl >= 0 ? "clear" : "tight"} /><Metric label="Target progress" value={`${number(trade.targetProgressPct)}%`} /><Metric label="MAE / MFE" value={`${percent(trade.maePct)} / ${percent(trade.mfePct)}`} />{trade.status === "OPEN" && <button disabled={working} onClick={() => { setClosingTrade(trade); setClosePrice(trade.currentPrice); }}>Close paper trade</button>}</article>) : <div className="backtest-panel signals-empty">No paper positions yet. A PAPER BUY records research data only and never sends a Dhan order.</div>}</section> : <section className="live-signal-list">{visibleSignals.length ? visibleSignals.map((signal) => <SignalCard key={signal.signalId} signal={signal} readOnly={tab === "history"} onPaper={openPaper} onWatch={(item) => void decide(item, "WATCH")} onIgnore={setIgnoreSignal} />) : <div className="backtest-panel signals-empty"><CheckCircle2 size={20} />No signals match this view. The engine waits for a completed 5-minute RSI arm → recovery candle with at least 2 of 3 confirmations.</div>}</section>}
+      {loading ? <section className="backtest-panel signals-empty"><LoaderCircle className="spin" size={20} />Loading persisted signals and engine health…</section> : tab === "paper" ? <section className="paper-position-list">{paperTrades.length ? paperTrades.map((trade) => <article className="paper-position-card" key={trade.paperTradeId}><div><span className={`trade-status ${trade.status === "OPEN" ? "open" : "hit"}`}>{trade.status.replaceAll("_", " ")}</span><h2>{trade.symbol}</h2><small>{formatIst(trade.entryTimestamp)} · {duration(trade.ageMinutes)} old</small></div><Metric label="Actual paper entry" value={money(trade.entryPrice)} /><Metric label="Quantity" value={`${trade.quantity} shares`} /><Metric label="Paper amount" value={money(trade.paperAmount)} /><Metric label="Paper target" value={money(trade.targetPrice)} /><Metric label="Current" value={money(trade.currentPrice)} /><Metric label="Current P&L" value={`${money(trade.currentPnl)} · ${percent(trade.currentPnlPct)}`} tone={trade.currentPnl >= 0 ? "clear" : "tight"} /><Metric label="Target progress" value={`${number(trade.targetProgressPct)}%`} /><Metric label="MAE / MFE" value={`${percent(trade.maePct)} / ${percent(trade.mfePct)}`} />{trade.status === "OPEN" && <button disabled={working} onClick={() => { setClosingTrade(trade); setClosePrice(trade.currentPrice); }}>Close paper trade</button>}</article>) : <div className="backtest-panel signals-empty">No paper positions yet. A PAPER BUY records research data only and never sends a Dhan order.</div>}</section> : <section className="live-signal-list">{visibleSignals.length ? visibleSignals.map((signal) => <SignalCard key={signal.signalId} signal={signal} readOnly={tab === "history"} onPaper={openPaper} onWatch={(item) => void decide(item, "WATCH")} onIgnore={setIgnoreSignal} />) : <div className="backtest-panel signals-empty"><CheckCircle2 size={20} /><div><strong>{emptyMessage}</strong><span>The strategy evaluates only completed 5-minute candles with the existing RSI arm → recovery and 2-of-3 confirmation rules.</span></div></div>}</section>}
     </main>
 
     {settingsOpen && draftSettings && <div className="signal-modal-backdrop" role="presentation"><section className="signal-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">

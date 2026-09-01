@@ -126,6 +126,11 @@ from ema_vwap_strong_buy import (
     aggregate_strong_buy_results,
     simulate_strong_buy_symbol,
 )
+from trade_failure_engine import (
+    TradeFailureResearchConfig,
+    extract_failure_research_lots,
+    run_trade_failure_research,
+)
 from dhan_oi import build_oi_service_from_environment
 from main import (
     ConfigurationError,
@@ -564,10 +569,25 @@ class StrongBuyConfigurationRequest(BaseModel):
     minimumQuantity: int = Field(default=1, ge=1, le=1_000_000)
     maximumEntriesPerCycle: int = Field(default=10, ge=1, le=100)
     executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
+    failureEngineMode: Literal["OFF", "RESEARCH_COMPARE"] = "OFF"
+    failureMaximumHoldingBars: int = Field(default=375, ge=1, le=10_000)
+    failureSupportLookbackBars: int = Field(default=20, ge=2, le=1_000)
+    failureEmaSlopeLookbackBars: int = Field(default=3, ge=1, le=100)
+    failureProgressLookbackBars: int = Field(default=6, ge=1, le=1_000)
+    failureMinimumProgressFraction: float = Field(default=0.25, gt=0, le=1)
+    failureDecisionPersistenceBars: int = Field(default=2, ge=1, le=100)
+    failureMinimumFailedGroups: int = Field(default=2, ge=1, le=3)
+    failureRoundTripCostBps: float = Field(default=14.0, ge=0, le=10_000)
+    failurePriorObservations: float = Field(default=20.0, gt=0, le=1_000_000)
+    failureWalkForwardFolds: int = Field(default=2, ge=1, le=10)
+    failureMinimumTrainingLots: int = Field(default=30, ge=1, le=1_000_000)
+    failureMinimumTestLots: int = Field(default=10, ge=1, le=1_000_000)
+    failureMaximumAuditRows: int = Field(default=5_000, ge=1, le=100_000)
 
     @model_validator(mode="after")
     def validate_configuration(self) -> "StrongBuyConfigurationRequest":
         self.strategy_config().validate()
+        self.failure_config().validate()
         return self
 
     def strategy_config(self) -> StrongBuyConfig:
@@ -582,6 +602,24 @@ class StrongBuyConfigurationRequest(BaseModel):
             additional_sizing_mode=self.additionalSizingMode,
             minimum_quantity=self.minimumQuantity,
             maximum_entries_per_cycle=self.maximumEntriesPerCycle,
+        )
+
+    def failure_config(self) -> TradeFailureResearchConfig:
+        return TradeFailureResearchConfig(
+            mode=self.failureEngineMode,
+            maximum_holding_bars=self.failureMaximumHoldingBars,
+            support_lookback_bars=self.failureSupportLookbackBars,
+            ema_slope_lookback_bars=self.failureEmaSlopeLookbackBars,
+            progress_lookback_bars=self.failureProgressLookbackBars,
+            minimum_progress_fraction=self.failureMinimumProgressFraction,
+            decision_persistence_bars=self.failureDecisionPersistenceBars,
+            minimum_failed_groups=self.failureMinimumFailedGroups,
+            round_trip_cost_bps=self.failureRoundTripCostBps,
+            prior_observations=self.failurePriorObservations,
+            walk_forward_folds=self.failureWalkForwardFolds,
+            minimum_training_lots=self.failureMinimumTrainingLots,
+            minimum_test_lots=self.failureMinimumTestLots,
+            maximum_audit_rows=self.failureMaximumAuditRows,
         )
 
 
@@ -3446,31 +3484,54 @@ def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore
     analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
     run_id = request.runId or str(uuid.uuid4())
     config = request.strongBuyConfiguration.strategy_config().validate()
+    failure_config = request.strongBuyConfiguration.failure_config().validate()
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
     if unavailable:
         raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
     warmup_bars = max(config.ema_slow * 3, config.adx_length + config.adx_smoothing, config.rvol_length) + 10
-    def run_symbol(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    def run_symbol(symbol: str) -> tuple[dict[str, Any] | None, dict[str, str] | None, pd.DataFrame | None]:
         try:
             candles = store.candles(symbol, request.timeframe, request.durationYears, analysis_start, now, warmup_bars=warmup_bars)
-            return simulate_strong_buy_symbol(symbol, candles, timeframe=request.timeframe, config=config, run_id=run_id, analysis_start=pd.Timestamp(analysis_start)), None
+            return simulate_strong_buy_symbol(symbol, candles, timeframe=request.timeframe, config=config, run_id=run_id, analysis_start=pd.Timestamp(analysis_start)), None, candles
         except (DhanAPIError, ValueError, OSError, KeyError) as error:
-            return None, {"symbol": symbol, "message": str(error)}
+            return None, {"symbol": symbol, "message": str(error)}, None
     workers = max(1, min(int(os.environ.get("BACKTEST_WORKERS", "4")), len(request.symbols), MAX_BACKTEST_WORKERS))
     if workers == 1:
         processed = [run_symbol(symbol) for symbol in request.symbols]
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="strong-buy-symbol") as executor:
             processed = list(executor.map(run_symbol, request.symbols))
-    results = [result for result, _ in processed if result is not None]
-    errors = [error for _, error in processed if error is not None]
+    results = [result for result, _, _ in processed if result is not None]
+    errors = [error for _, error, _ in processed if error is not None]
+    failure_research = None
+    failure_research_errors: list[dict[str, str]] = []
+    if failure_config.mode == "RESEARCH_COMPARE":
+        failure_lots: list[dict[str, Any]] = []
+        for result, _, candles in processed:
+            if result is None or candles is None:
+                continue
+            try:
+                failure_lots.extend(
+                    extract_failure_research_lots(
+                        str(result["symbol"]), candles, result,
+                        entry_config=config,
+                        failure_config=failure_config,
+                    )
+                )
+            except (ValueError, KeyError, TypeError) as error:
+                failure_research_errors.append({"symbol": str(result.get("symbol")), "message": str(error)})
+        failure_research = run_trade_failure_research(failure_lots, failure_config)
+        failure_research["errors"] = failure_research_errors
     completed = datetime.now(IST)
-    return {
-        "metadata": {"runId": run_id, "strategyMode": STRONG_BUY_STRATEGY_KEY, "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyDescription": STRONG_BUY_DESCRIPTION, "strategyVersion": STRONG_BUY_STRATEGY_VERSION, "generatedAt": completed.isoformat(), "completedAt": completed.isoformat(), "analysisStart": analysis_start.isoformat(), "durationYears": request.durationYears, "timeframe": request.timeframe, "symbolsRequested": len(request.symbols), "symbolsProcessed": len(results), "symbolsFailed": len(errors), "workerCount": workers, "configuration": config.public(), "backtestSemantics": "INDEPENDENT_LOTS"},
+    response = {
+        "metadata": {"runId": run_id, "strategyMode": STRONG_BUY_STRATEGY_KEY, "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyDescription": STRONG_BUY_DESCRIPTION, "strategyVersion": STRONG_BUY_STRATEGY_VERSION, "generatedAt": completed.isoformat(), "completedAt": completed.isoformat(), "analysisStart": analysis_start.isoformat(), "durationYears": request.durationYears, "timeframe": request.timeframe, "symbolsRequested": len(request.symbols), "symbolsProcessed": len(results), "symbolsFailed": len(errors), "workerCount": workers, "configuration": {**config.public(), "failureEngine": failure_config.public()}, "backtestSemantics": "INDEPENDENT_LOTS"},
         "summary": aggregate_strong_buy_results(results), "results": results, "errors": errors,
-        "warnings": ["Strong Buy requires EMA crossover, close above VWAP, and at least two of ADX/DMI, RVOL and confirmed 15-minute alignment.", "Entries execute at the next 5-minute open. Every lot has its own target.", "No stop loss, bearish exit or end-of-day exit. Paper research only; no broker order is sent."],
+        "warnings": ["Strong Buy requires EMA crossover, close above VWAP, and at least two of ADX/DMI, RVOL and confirmed 15-minute alignment.", "Entries execute at the next 5-minute open. Every lot has its own target.", "The baseline has no stop loss, bearish exit or end-of-day exit. Failure Engine comparisons are research-only and cannot close live paper positions.", "Paper research only; no broker order is sent."],
     }
+    if failure_research is not None:
+        response["failureEngineResearch"] = failure_research
+    return response
 
 
 def run_rsi_range_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
@@ -4478,14 +4539,15 @@ def start_backtest_job(
         alias="x-opendelta-history-owner",
     ),
 ) -> dict[str, Any]:
-    # Asynchronous progress jobs only ever served Top-5 Opening Range Breakout, and that
-    # strategy is retired from new runs, so every request is refused today. The route and
-    # its runner are kept intact: re-adding Top-5 to LAUNCHABLE_STRATEGY_KEYS restores it,
-    # and /backtest/jobs/{job_id} GET and DELETE stay available for in-flight job ids.
-    if (
-        request.strategyMode != DAILY_WATCHLIST_STRATEGY_KEY
-        or DAILY_WATCHLIST_STRATEGY_KEY not in LAUNCHABLE_STRATEGY_KEYS
-    ):
+    strong_buy_research = (
+        request.strategyMode == STRONG_BUY_STRATEGY_KEY
+        and request.strongBuyConfiguration.failureEngineMode == "RESEARCH_COMPARE"
+    )
+    top_five_launchable = (
+        request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY
+        and DAILY_WATCHLIST_STRATEGY_KEY in LAUNCHABLE_STRATEGY_KEYS
+    )
+    if not strong_buy_research and not top_five_launchable:
         raise HTTPException(status_code=422, detail=RETIRED_STRATEGY_LAUNCH_MESSAGE)
     store = get_store()
 
@@ -4493,12 +4555,20 @@ def start_backtest_job(
         progress: Callable[[dict[str, Any]], None],
         cancel_event: threading.Event,
     ) -> dict[str, Any]:
-        result = run_top_5_opening_range_breakout_backtest(
-            request,
-            store,
-            progress_callback=progress,
-            cancel_event=cancel_event,
-        )
+        if strong_buy_research:
+            progress({"currentStage": "STRONG_BUY_FAILURE_RESEARCH", "workersActive": 1})
+            if cancel_event.is_set():
+                raise BacktestCancelledError("Backtest cancellation requested")
+            result = run_strong_buy_backtest(request, store)
+            if cancel_event.is_set():
+                raise BacktestCancelledError("Backtest cancellation requested")
+        else:
+            result = run_top_5_opening_range_breakout_backtest(
+                request,
+                store,
+                progress_callback=progress,
+                cancel_event=cancel_event,
+            )
         if history_owner:
             metadata = result.setdefault("metadata", {})
             metadata["historySaved"] = True

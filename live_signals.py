@@ -157,6 +157,7 @@ class LiveSignalSettings:
     strong_buy_additional_sizing_mode: Literal["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"] = "REDUCE_EVERY_NEW_LOT"
     strong_buy_minimum_quantity: int = 1
     strong_buy_maximum_entries_per_cycle: int = 10
+    strong_buy_auto_paper_trade: bool = True
 
     def strong_buy_config(self) -> StrongBuyConfig:
         return StrongBuyConfig(
@@ -265,6 +266,7 @@ class LiveSignalSettings:
             "strongBuyAdditionalSizingMode": self.strong_buy_additional_sizing_mode,
             "strongBuyMinimumQuantity": self.strong_buy_minimum_quantity,
             "strongBuyMaximumEntriesPerCycle": self.strong_buy_maximum_entries_per_cycle,
+            "strongBuyAutoPaperTrade": self.strong_buy_auto_paper_trade,
             "oiFilterDefault": "OFF",
             "targetPct": DEFAULT_TARGET_PCT,
             "execution": "PAPER_ONLY",
@@ -318,6 +320,7 @@ def settings_from_payload(payload: Mapping[str, Any]) -> LiveSignalSettings:
         strong_buy_additional_sizing_mode=str(payload.get("strongBuyAdditionalSizingMode", defaults.strong_buy_additional_sizing_mode)).upper(),  # type: ignore[arg-type]
         strong_buy_minimum_quantity=int(payload.get("strongBuyMinimumQuantity", defaults.strong_buy_minimum_quantity)),
         strong_buy_maximum_entries_per_cycle=int(payload.get("strongBuyMaximumEntriesPerCycle", defaults.strong_buy_maximum_entries_per_cycle)),
+        strong_buy_auto_paper_trade=bool(payload.get("strongBuyAutoPaperTrade", defaults.strong_buy_auto_paper_trade)),
     ).validate()
 
 
@@ -769,6 +772,9 @@ class LiveSignalRepository:
             existing = next((item for item in self._paper if item.get("signalId") == signal_id), None)
             if existing is not None:
                 raise ValueError("This signal already has a paper-trade observation")
+            # Use this signal's own strategy target, not the RSI Recovery default -
+            # Strong Buy signals carry their configured target (1% by default) here.
+            target_pct = float(signal.get("systemTargetPct") or DEFAULT_TARGET_PCT)
             now = self.clock().astimezone(IST)
             trade = {
                 "paperTradeId": "PAPER-" + uuid.uuid4().hex[:20].upper(),
@@ -779,8 +785,8 @@ class LiveSignalRepository:
                 "entryPrice": _finite(entry_price, 4),
                 "quantity": int(quantity),
                 "paperAmount": _finite(entry_price * quantity, 2),
-                "targetPct": DEFAULT_TARGET_PCT,
-                "targetPrice": _finite(entry_price * (1.0 + DEFAULT_TARGET_PCT / 100.0), 4),
+                "targetPct": target_pct,
+                "targetPrice": _finite(entry_price * (1.0 + target_pct / 100.0), 4),
                 "status": "OPEN",
                 "exitTimestamp": None,
                 "exitPrice": None,
@@ -867,7 +873,7 @@ class LiveSignalRepository:
                     trade["exitTimestamp"] = stamp.isoformat()
                     trade["exitPrice"] = trade["targetPrice"]
                     trade["pnl"] = _finite((trade["targetPrice"] - trade["entryPrice"]) * trade["quantity"], 2)
-                    trade["pnlPct"] = DEFAULT_TARGET_PCT
+                    trade["pnlPct"] = trade.get("targetPct", DEFAULT_TARGET_PCT)
                 changed_paper = True
             if changed_signals:
                 _atomic_json(self.signals_path, self._signals)
@@ -1183,6 +1189,16 @@ class LiveSignalEngine:
                     stored, created = self.repository.add_signal(signal)
                     if created:
                         created_signals.append(stored)
+                        if settings.strong_buy_auto_paper_trade:
+                            try:
+                                self.repository.create_paper_trade(
+                                    stored["signalId"],
+                                    float(stored["signalClose"]),
+                                    int(stored["strategyQuantity"]),
+                                    notes="Auto paper trade (EMA/VWAP Strong Buy)",
+                                )
+                            except (KeyError, ValueError):
+                                pass
         self._set_state(engine="READY", message="New Strong Buy lot recorded" if created_signals else "Latest completed candles evaluated")
         return created_signals[-1] if created_signals else None
 

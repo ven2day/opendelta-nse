@@ -281,6 +281,18 @@ class RepositoryAndPaperTests(unittest.TestCase):
         reloaded = LiveSignalRepository(self.root, clock=fixed_clock())
         self.assertEqual(reloaded.signal("SIG-TEST")["manualAction"], "WATCH")
 
+    def test_paper_target_uses_signal_own_target_pct_not_recovery_default(self) -> None:
+        strong_buy = signal_record("SIG-STRONG-BUY")
+        strong_buy["systemTargetPct"] = 1.0
+        self.repo.add_signal(strong_buy)
+        trade = self.repo.create_paper_trade("SIG-STRONG-BUY", 100, 10)
+        self.assertEqual(trade["targetPct"], 1.0)
+        self.assertAlmostEqual(trade["targetPrice"], 101.0)
+        self.repo.process_completed_candle("TEST", {"timestamp": "2026-08-26T10:10:00+05:30", "Low": 99, "High": 101.1, "Close": 101.0})
+        hit = next(item for item in self.repo.paper_trades() if item["paperTradeId"] == trade["paperTradeId"])
+        self.assertEqual(hit["status"], "TARGET_HIT")
+        self.assertEqual(hit["pnlPct"], 1.0)
+
 
 class EngineSafetyTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -349,6 +361,65 @@ class EngineSafetyTests(unittest.TestCase):
         source = inspect.getsource(live_signals)
         self.assertNotIn("place_order(", source)
         self.assertTrue(live_signals.NO_ORDER_EXECUTION)
+
+
+def strong_buy_engine_result() -> dict:
+    return {
+        "signalTimestamp": pd.Timestamp("2026-08-26 10:05", tz=IST),
+        "signalClose": 100.0, "emaFast": 2.0, "emaSlow": 1.0, "vwap": 99.0,
+        "adx": 25.0, "plusDi": 30.0, "minusDi": 10.0, "relativeVolume": 1.5,
+        "confirmationScore": 3, "adxConfirmation": True, "rvolConfirmation": True,
+        "htfConfirmation": True, "indicators": pd.DataFrame(),
+    }
+
+
+class AutoPaperTradeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = LiveSignalRepository(Path(self.temp.name).resolve(), clock=fixed_clock())
+
+        class Store:
+            config = object()
+            client = object()
+
+        class Universe:
+            @staticmethod
+            def get_active_live_universe():
+                return ["TEST"], {"universeVersion": "LIVE-TEST", "frozen": True, "selected": []}
+
+        self.engine = LiveSignalEngine(self.repo, Store(), Universe(), clock=fixed_clock())
+        self.engine._symbols = ["TEST"]
+        self.engine._historical_context = {}
+        self.candle = {
+            "complete": True, "timestamp": "2026-08-26T10:05:00+05:30",
+            "Open": 100, "High": 100.2, "Low": 99.8, "Close": 100.0, "Volume": 1000,
+        }
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_new_strong_buy_signal_auto_creates_paper_trade(self) -> None:
+        with patch("live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
+            self.engine.process_completed_candle("TEST", self.candle)
+        trades = self.repo.paper_trades()
+        self.assertEqual(len(trades), 1)
+        self.assertEqual(trades[0]["quantity"], 100)
+        self.assertAlmostEqual(trades[0]["targetPrice"], 101.0)
+        self.assertIn("Auto paper trade", trades[0]["notes"])
+
+    def test_auto_paper_trade_can_be_disabled(self) -> None:
+        self.repo.save_settings(LiveSignalSettings(strong_buy_auto_paper_trade=False))
+        with patch("live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
+            self.engine.process_completed_candle("TEST", self.candle)
+        self.assertEqual(len(self.repo.paper_trades()), 0)
+        signals = [item for item in self.repo.signals() if item.get("strategyKey") == "ema_vwap_strong_buy"]
+        self.assertEqual(len(signals), 1)
+
+    def test_duplicate_signal_never_double_creates_paper_trade(self) -> None:
+        with patch("live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
+            self.engine.process_completed_candle("TEST", self.candle)
+            self.engine.process_completed_candle("TEST", self.candle)
+        self.assertEqual(len(self.repo.paper_trades()), 1)
 
 
 if __name__ == "__main__":

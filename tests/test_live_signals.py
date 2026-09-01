@@ -422,5 +422,78 @@ class AutoPaperTradeTests(unittest.TestCase):
         self.assertEqual(len(self.repo.paper_trades()), 1)
 
 
+class PollingFeedTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = LiveSignalRepository(Path(self.temp.name).resolve(), clock=fixed_clock("2026-08-26 10:16:30"))
+        self.calls: list[str] = []
+
+        candles = pd.DataFrame(
+            {
+                "Open": [100.0, 101.0, 102.0],
+                "High": [100.5, 101.5, 102.5],
+                "Low": [99.5, 100.5, 101.5],
+                "Close": [100.2, 101.2, 102.2],
+                "Volume": [1_000.0, 1_100.0, 1_200.0],
+            },
+            index=pd.DatetimeIndex(
+                [
+                    pd.Timestamp("2026-08-26 10:05", tz=IST),
+                    pd.Timestamp("2026-08-26 10:10", tz=IST),
+                    pd.Timestamp("2026-08-26 10:15", tz=IST),
+                ]
+            ),
+        )
+
+        class Store:
+            def __init__(self, outer: "PollingFeedTests") -> None:
+                self.outer = outer
+
+            def candles(self, symbol, timeframe, duration_years, analysis_start, now_ist, **kwargs):
+                self.outer.calls.append(symbol)
+                return candles
+
+        class Universe:
+            @staticmethod
+            def get_active_live_universe():
+                return ["TEST"], {"universeVersion": "LIVE-TEST", "frozen": True, "selected": []}
+
+        self.engine = LiveSignalEngine(self.repo, Store(self), Universe(), clock=fixed_clock("2026-08-26 10:16:30"))
+        self.engine._symbols = ["TEST"]
+        self.engine._historical_context = {}
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_first_poll_only_processes_the_latest_bar(self) -> None:
+        feed = live_signals.DhanPollingFeed(self.engine)
+        feed._poll_once()
+        history = self.engine._histories["TEST"]
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history.index[-1], pd.Timestamp("2026-08-26 10:15", tz=IST))
+
+    def test_second_poll_with_unchanged_data_creates_no_duplicates(self) -> None:
+        feed = live_signals.DhanPollingFeed(self.engine)
+        feed._poll_once()
+        feed._poll_once()
+        self.assertEqual(len(self.engine._histories["TEST"]), 1)
+
+    def test_poll_updates_latest_price_and_market_data_timestamp(self) -> None:
+        feed = live_signals.DhanPollingFeed(self.engine)
+        feed._poll_once()
+        self.assertEqual(self.engine._latest_prices["TEST"]["price"], 102.2)
+        self.assertIsNotNone(self.engine._last_market_data)
+
+    def test_one_symbol_provider_error_does_not_abort_the_poll(self) -> None:
+        class FlakyStore:
+            def candles(self, symbol, *args, **kwargs):
+                raise RuntimeError("boom")
+
+        self.engine.data_store = FlakyStore()
+        self.engine._symbols = ["TEST", "OTHER"]
+        feed = live_signals.DhanPollingFeed(self.engine)
+        feed._poll_once()  # must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

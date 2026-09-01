@@ -120,7 +120,12 @@ class LiveSignalSettings:
     atr_lower_multiplier: float = 0.25
     atr_upper_multiplier: float = 0.15
     paper_allocation: float = 25_000.0
-    stale_data_seconds: int = 90
+    # DhanPollingFeed polls every 120s, but a full sweep of ~300 symbols at the
+    # Dhan REST client's shared 4 req/s budget can itself take up to ~75s, so a
+    # candle reached late in a poll cycle can be ~120s+75s+settlement-lag old by
+    # the time it's evaluated here. 240s gives that a safe margin without which
+    # legitimate polled candles would be silently rejected as stale.
+    stale_data_seconds: int = 240
     fresh_minutes: int = 15
     recent_minutes: int = 60
     support_lookback_short: int = 20
@@ -973,7 +978,7 @@ class LiveSignalEngine:
             if self.feed_factory is not None:
                 feed = self.feed_factory(self)
             else:
-                feed = DhanMarketFeed(self, self.data_store.config, self.data_store.client)
+                feed = DhanPollingFeed(self)
             feed.run(self._stop)
         except Exception as error:  # noqa: BLE001 - background boundary reports a durable health state
             self._set_state(connection="DISCONNECTED", engine="ERROR", message=str(error)[:240])
@@ -1467,6 +1472,75 @@ class LiveSignalEngine:
             "ignored2h": within_2h(item for item in signals if item.get("manualAction") == "IGNORE"),
             "interpretation": "Signal research and manual paper decisions; not a portfolio backtest or live execution system.",
         }
+
+
+class DhanPollingFeed:
+    """Polls Dhan's REST intraday-candle API on a fixed interval instead of holding
+    a live WebSocket connection.
+
+    Dhan's v2 quote-stream WebSocket only tolerates a small number of connect
+    attempts before rejecting further ones with HTTP 429, and each rejection
+    starves the candle builder of ticks until the next successful reconnect -
+    which is how this pipeline went days without completing a single candle.
+    Polling settled candles avoids holding a connection open at all, and since
+    Dhan computes each candle itself, it is at least as accurate as
+    reconstructing OHLC from a live tick stream.
+    """
+
+    def __init__(self, engine: LiveSignalEngine, poll_interval_seconds: float = 120.0) -> None:
+        self.engine = engine
+        self.poll_interval_seconds = poll_interval_seconds
+
+    def run(self, stop: threading.Event) -> None:
+        engine = self.engine
+        while not stop.is_set():
+            if not engine._market_is_open():
+                engine._set_state(
+                    connection="DISCONNECTED",
+                    engine="MARKET_CLOSED",
+                    message="NSE is closed; polling resumes at the next market session",
+                )
+                stop.wait(30.0)
+                continue
+            try:
+                self._poll_once()
+                engine._set_state(connection="CONNECTED", engine="READY", message="Polling Dhan settled candles")
+            except Exception as error:  # noqa: BLE001 - one bad poll must not kill the loop
+                engine._set_state(connection="DISCONNECTED", engine="ERROR", message=f"Poll failed: {error}"[:240])
+            stop.wait(self.poll_interval_seconds)
+        engine._set_state(connection="DISCONNECTED", engine="STOPPED", message="Polling stopped")
+
+    def _poll_once(self) -> None:
+        engine = self.engine
+        now = engine.clock().astimezone(IST)
+        for symbol in list(engine._symbols):
+            try:
+                fresh = engine.data_store.candles(
+                    symbol, TIMEFRAME, 1, now - timedelta(days=2), now, warmup_bars=engine.warmup_bars,
+                )[["Open", "High", "Low", "Close", "Volume"]]
+            except Exception:  # noqa: BLE001 - one symbol's provider error must not skip the rest
+                continue
+            if fresh.empty:
+                continue
+            with engine._lock:
+                history = engine._histories.get(symbol, pd.DataFrame())
+                known_last = _as_ist(history.index[-1]) if len(history) else None
+            new_rows = fresh[fresh.index > known_last] if known_last is not None else fresh.tail(1)
+            for stamp, row in new_rows.iterrows():
+                candle = {
+                    "complete": True,
+                    "timestamp": _as_ist(stamp).isoformat(),
+                    "Open": float(row["Open"]), "High": float(row["High"]),
+                    "Low": float(row["Low"]), "Close": float(row["Close"]),
+                    "Volume": float(row["Volume"]),
+                    "marketDataTimestamp": now.isoformat(),
+                }
+                engine.process_completed_candle(symbol, candle)
+            last_close = float(fresh.iloc[-1]["Close"])
+            with engine._lock:
+                engine._latest_prices[symbol] = {"price": last_close, "timestamp": _as_ist(fresh.index[-1]).isoformat()}
+        with engine._lock:
+            engine._last_market_data = now.isoformat()
 
 
 class DhanMarketFeed:

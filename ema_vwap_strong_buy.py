@@ -169,35 +169,48 @@ def simulate_strong_buy_symbol(symbol: str, candles: pd.DataFrame, *, timeframe:
     signals, lots, open_lots = [], [], []
     pending = None
     cycle = entries = max_open = 0
-    for bar_index, (stamp, row) in enumerate(data.iterrows()):
+    # DataFrame.iterrows() builds a full pandas Series per row (boxing every value,
+    # and forcing object dtype since the row mixes bool/float/int columns) - the
+    # dominant cost of this loop at scale. Reading each column as a plain numpy
+    # array once upfront and indexing by bar_index is the same data, same values,
+    # same per-bar control flow below - just a faster way to read it.
+    timestamps = data.index
+    open_values = data["Open"].to_numpy(dtype=float, copy=False)
+    high_values = data["High"].to_numpy(dtype=float, copy=False)
+    close_values = data["Close"].to_numpy(dtype=float, copy=False)
+    strong_buy_values = data["StrongBuy"].to_numpy(dtype=bool, copy=False)
+    confirmation_score_values = data["ConfirmationScore"].to_numpy(dtype=int, copy=False)
+    adx_values = data["Adx"].to_numpy(dtype=float, copy=False)
+    relative_volume_values = data["RelativeVolume"].to_numpy(dtype=float, copy=False)
+    for bar_index, stamp in enumerate(timestamps):
         if pending:
-            price = float(row["Open"])
+            price = float(open_values[bar_index])
             quantity = cfg.quantity(pending["entryNumber"])
             lot = {**pending, "lotNumber": pending["entryNumber"] + 1, "entryTimestamp": stamp.isoformat(), "entryBarIndex": bar_index, "entryPrice": round(price, 4), "quantity": quantity, "targetPct": cfg.target_pct, "targetPrice": round(price * (1 + cfg.target_pct / 100), 4), "status": "HOLDING", "exitTimestamp": None, "exitPrice": None, "realizedPnl": None, "unrealizedPnl": None}
             lot.pop("entryNumber")
             lots.append(lot); open_lots.append(lot); pending = None; max_open = max(max_open, len(open_lots))
         remaining = []
         for lot in open_lots:
-            if bar_index > lot["entryBarIndex"] and float(row["High"]) >= lot["targetPrice"]:
+            if bar_index > lot["entryBarIndex"] and float(high_values[bar_index]) >= lot["targetPrice"]:
                 lot.update(status="TAKE_PROFIT_SOLD", exitTimestamp=stamp.isoformat(), exitPrice=lot["targetPrice"], realizedPnl=round((lot["targetPrice"] - lot["entryPrice"]) * lot["quantity"], 2), unrealizedPnl=0.0)
             else:
                 remaining.append(lot)
         open_lots = remaining
         if not open_lots and pending is None:
             entries = 0
-        if not bool(row["StrongBuy"]) or (start is not None and stamp < start):
+        if not bool(strong_buy_values[bar_index]) or (start is not None and stamp < start):
             continue
         if not open_lots and pending is None:
             cycle += 1; entries = 0
         can_order = (not open_lots or cfg.allow_additional_buys) and entries < cfg.maximum_entries_per_cycle and bar_index + 1 < len(data)
         cycle_id = f"{symbol}-Cycle{cycle}"
         lot_id = f"{cycle_id}-Lot{entries + 1}"
-        signal = {"signalId": f"{run}-{symbol}-{len(signals)+1}", "symbol": symbol, "signalTimestamp": stamp.isoformat(), "signalClose": round(float(row["Close"]), 4), "signalType": "STRONG_BUY", "confirmationScore": int(row["ConfirmationScore"]), "adx": round(float(row["Adx"]), 4), "relativeVolume": round(float(row["RelativeVolume"]), 4), "cycleId": cycle_id, "lotId": lot_id if can_order else None, "lotNumber": entries + 1 if can_order else None, "status": "PENDING_NEXT_OPEN" if can_order else "NO_ORDER", "quantity": cfg.quantity(entries) if can_order else 0}
+        signal = {"signalId": f"{run}-{symbol}-{len(signals)+1}", "symbol": symbol, "signalTimestamp": stamp.isoformat(), "signalClose": round(float(close_values[bar_index]), 4), "signalType": "STRONG_BUY", "confirmationScore": int(confirmation_score_values[bar_index]), "adx": round(float(adx_values[bar_index]), 4), "relativeVolume": round(float(relative_volume_values[bar_index]), 4), "cycleId": cycle_id, "lotId": lot_id if can_order else None, "lotNumber": entries + 1 if can_order else None, "status": "PENDING_NEXT_OPEN" if can_order else "NO_ORDER", "quantity": cfg.quantity(entries) if can_order else 0}
         signals.append(signal)
         if can_order:
-            pending = {"signalTimestamp": stamp.isoformat(), "confirmationScore": int(row["ConfirmationScore"]), "entryNumber": entries, "cycleId": cycle_id, "lotId": lot_id}
+            pending = {"signalTimestamp": stamp.isoformat(), "confirmationScore": int(confirmation_score_values[bar_index]), "entryNumber": entries, "cycleId": cycle_id, "lotId": lot_id}
             entries += 1
-    last_close = float(data.iloc[-1]["Close"]) if len(data) else 0
+    last_close = float(close_values[-1]) if len(data) else 0
     for lot in open_lots:
         lot["unrealizedPnl"] = round((last_close - lot["entryPrice"]) * lot["quantity"], 2)
     sold = [lot for lot in lots if lot["status"] == "TAKE_PROFIT_SOLD"]

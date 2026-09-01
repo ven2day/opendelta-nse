@@ -136,12 +136,36 @@ def extract_failure_research_lots(
     entry_config: StrongBuyConfig,
     failure_config: TradeFailureResearchConfig,
 ) -> list[dict[str, Any]]:
-    """Build causal per-candle observations; future candles are used only for labels."""
+    """Build causal per-candle observations; future candles are used only for labels.
+
+    Column access uses plain numpy arrays (built once per symbol) rather than
+    ``DataFrame.iloc[i]`` inside the per-bar loops: constructing a pandas Series
+    for every row access is the dominant per-lot cost at scale (hundreds of
+    symbols x dozens of lots x up to ``maximum_holding_bars`` decision bars).
+    ``future_minimum`` is likewise a running suffix-min computed once per lot in
+    O(bars held) instead of re-slicing and re-scanning the remaining bars from
+    scratch at every decision bar (which was O(bars held) per bar, i.e.
+    quadratic in the lot's holding period). Neither change alters the result,
+    only how fast it's computed.
+    """
     cfg = failure_config.validate()
     data = _research_frame(candles, entry_config, cfg)
     if data.empty:
         return []
     positions = {stamp: index for index, stamp in enumerate(data.index)}
+    timestamps = data.index
+    close = data["Close"].to_numpy(dtype=float, copy=False)
+    open_ = data["Open"].to_numpy(dtype=float, copy=False)
+    high = data["High"].to_numpy(dtype=float, copy=False)
+    low = data["Low"].to_numpy(dtype=float, copy=False)
+    vwap = data["SessionVwap"].to_numpy(dtype=float, copy=False)
+    ema_fast = data["EmaFast"].to_numpy(dtype=float, copy=False)
+    ema_slow = data["EmaSlow"].to_numpy(dtype=float, copy=False)
+    ema_fast_past = data["EmaFastPast"].to_numpy(dtype=float, copy=False)
+    previous_support = data["PreviousSupport"].to_numpy(dtype=float, copy=False)
+    minus_di = data["MinusDi"].to_numpy(dtype=float, copy=False)
+    plus_di = data["PlusDi"].to_numpy(dtype=float, copy=False)
+    relative_volume = data["RelativeVolume"].to_numpy(dtype=float, copy=False)
     research_lots: list[dict[str, Any]] = []
     for baseline_lot in baseline_result.get("lots", []):
         entry_stamp = _as_ist(baseline_lot["entryTimestamp"])
@@ -153,51 +177,55 @@ def extract_failure_research_lots(
         horizon_index = min(len(data) - 1, entry_index + cfg.maximum_holding_bars)
         resolution_index = horizon_index
         success = False
-        for candidate in range(entry_index + 1, horizon_index + 1):
-            if float(data.iloc[candidate]["High"]) >= target_price:
-                resolution_index = candidate
-                success = True
-                break
-        resolution_price = target_price if success else float(data.iloc[resolution_index]["Close"])
+        target_hits = np.flatnonzero(high[entry_index + 1 : horizon_index + 1] >= target_price)
+        if target_hits.size:
+            resolution_index = entry_index + 1 + int(target_hits[0])
+            success = True
+        resolution_price = target_price if success else float(close[resolution_index])
         resolution_status = "TAKE_PROFIT" if success else "TIME_HORIZON_FAILURE"
+        # Suffix-min of Low over (entry_index+1 .. resolution_index], so
+        # future_minimum for each decision bar is an O(1) lookup below.
+        suffix_min_low = np.minimum.accumulate(low[entry_index + 1 : resolution_index + 1][::-1])[::-1]
         observations: list[dict[str, Any]] = []
         running_high = entry_price
         for decision_index in range(entry_index, resolution_index):
             if decision_index + 1 >= len(data):
                 break
-            row = data.iloc[decision_index]
-            running_high = max(running_high, float(row["High"]))
+            running_high = max(running_high, float(high[decision_index]))
             bars_held = decision_index - entry_index + 1
             mfe_pct = (running_high / entry_price - 1.0) * 100.0
+            row_close = float(close[decision_index])
+            row_vwap, row_ema_fast, row_ema_slow, row_ema_fast_past = (
+                float(vwap[decision_index]), float(ema_fast[decision_index]),
+                float(ema_slow[decision_index]), float(ema_fast_past[decision_index]),
+            )
             features = {
-                "below_vwap": bool(np.isfinite(row["SessionVwap"]) and float(row["Close"]) < float(row["SessionVwap"])),
-                "ema_bearish": bool(np.isfinite(row["EmaFast"]) and np.isfinite(row["EmaSlow"]) and float(row["EmaFast"]) <= float(row["EmaSlow"])),
-                "ema_slope_down": bool(np.isfinite(row["EmaFast"]) and np.isfinite(row["EmaFastPast"]) and float(row["EmaFast"]) < float(row["EmaFastPast"])),
-                "support_break": bool(np.isfinite(row["PreviousSupport"]) and float(row["Close"]) < float(row["PreviousSupport"])),
-                "bearish_direction": bool(np.isfinite(row["MinusDi"]) and np.isfinite(row["PlusDi"]) and float(row["MinusDi"]) > float(row["PlusDi"])),
-                "bearish_volume": bool(float(row["Close"]) < float(row["Open"]) and np.isfinite(row["RelativeVolume"]) and float(row["RelativeVolume"]) >= entry_config.minimum_rvol),
+                "below_vwap": bool(np.isfinite(row_vwap) and row_close < row_vwap),
+                "ema_bearish": bool(np.isfinite(row_ema_fast) and np.isfinite(row_ema_slow) and row_ema_fast <= row_ema_slow),
+                "ema_slope_down": bool(np.isfinite(row_ema_fast) and np.isfinite(row_ema_fast_past) and row_ema_fast < row_ema_fast_past),
+                "support_break": bool(np.isfinite(previous_support[decision_index]) and row_close < float(previous_support[decision_index])),
+                "bearish_direction": bool(np.isfinite(minus_di[decision_index]) and np.isfinite(plus_di[decision_index]) and float(minus_di[decision_index]) > float(plus_di[decision_index])),
+                "bearish_volume": bool(row_close < float(open_[decision_index]) and np.isfinite(relative_volume[decision_index]) and float(relative_volume[decision_index]) >= entry_config.minimum_rvol),
                 "stalled_progress": bool(
                     bars_held >= cfg.progress_lookback_bars
                     and mfe_pct < entry_config.target_pct * cfg.minimum_progress_fraction
                 ),
             }
-            current_close = float(row["Close"])
-            future = data.iloc[decision_index + 1 : resolution_index + 1]
-            future_minimum = float(future["Low"].min()) if not future.empty else current_close
+            future_minimum = float(suffix_min_low[decision_index + 1 - (entry_index + 1)])
             observations.append(
                 {
-                    "decisionTimestamp": data.index[decision_index].isoformat(),
-                    "nextTimestamp": data.index[decision_index + 1].isoformat(),
-                    "nextOpen": float(data.iloc[decision_index + 1]["Open"]),
+                    "decisionTimestamp": timestamps[decision_index].isoformat(),
+                    "nextTimestamp": timestamps[decision_index + 1].isoformat(),
+                    "nextOpen": float(open_[decision_index + 1]),
                     "barsHeld": bars_held,
-                    "currentClose": current_close,
-                    "remainingTargetPct": max(0.0, (target_price / current_close - 1.0) * 100.0),
+                    "currentClose": row_close,
+                    "remainingTargetPct": max(0.0, (target_price / row_close - 1.0) * 100.0),
                     "mfePct": mfe_pct,
                     "features": features,
                     "stateKey": _state_key(features),
                     "failedGroups": _feature_groups(features),
                     "success": success,
-                    "futureAdverseLossPct": max(0.0, (current_close - future_minimum) / current_close * 100.0),
+                    "futureAdverseLossPct": max(0.0, (row_close - future_minimum) / row_close * 100.0),
                 }
             )
         research_lots.append(

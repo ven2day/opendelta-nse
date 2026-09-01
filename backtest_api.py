@@ -3507,20 +3507,27 @@ def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore
     failure_research = None
     failure_research_errors: list[dict[str, str]] = []
     if failure_config.mode == "RESEARCH_COMPARE":
-        failure_lots: list[dict[str, Any]] = []
-        for result, _, candles in processed:
+        def extract_symbol(item: tuple[dict[str, Any] | None, dict[str, str] | None, pd.DataFrame | None]) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
+            result, _, candles = item
             if result is None or candles is None:
-                continue
+                return [], None
             try:
-                failure_lots.extend(
-                    extract_failure_research_lots(
-                        str(result["symbol"]), candles, result,
-                        entry_config=config,
-                        failure_config=failure_config,
-                    )
-                )
+                return extract_failure_research_lots(
+                    str(result["symbol"]), candles, result,
+                    entry_config=config,
+                    failure_config=failure_config,
+                ), None
             except (ValueError, KeyError, TypeError) as error:
-                failure_research_errors.append({"symbol": str(result.get("symbol")), "message": str(error)})
+                return [], {"symbol": str(result.get("symbol")), "message": str(error)}
+        eligible = [item for item in processed if item[0] is not None and item[2] is not None]
+        extraction_workers = max(1, min(workers, len(eligible))) if eligible else 1
+        if extraction_workers <= 1:
+            extracted = [extract_symbol(item) for item in eligible]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=extraction_workers, thread_name_prefix="failure-engine-extract") as executor:
+                extracted = list(executor.map(extract_symbol, eligible))
+        failure_lots: list[dict[str, Any]] = [lot for lots, _ in extracted for lot in lots]
+        failure_research_errors = [error for _, error in extracted if error is not None]
         failure_research = run_trade_failure_research(failure_lots, failure_config)
         failure_research["errors"] = failure_research_errors
     completed = datetime.now(IST)

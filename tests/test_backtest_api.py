@@ -22,6 +22,7 @@ from backtest_api import (
     MAX_SYMBOLS_PER_RUN,
     PaperBuyRequest,
     PaperCloseRequest,
+    StrongBuyConfigurationRequest,
     app,
     _entry_signal,
     list_market_symbols,
@@ -38,6 +39,21 @@ from main import DhanAPIError
 
 
 class SignalTests(unittest.TestCase):
+    def test_strong_buy_failure_engine_configuration_maps_to_research_model(self) -> None:
+        request = StrongBuyConfigurationRequest(
+            failureEngineMode="RESEARCH_COMPARE",
+            failureMaximumHoldingBars=250,
+            failureDecisionPersistenceBars=3,
+            failureRoundTripCostBps=18,
+            failureMaximumAuditRows=250,
+        )
+        config = request.failure_config()
+        self.assertEqual(config.mode, "RESEARCH_COMPARE")
+        self.assertEqual(config.maximum_holding_bars, 250)
+        self.assertEqual(config.decision_persistence_bars, 3)
+        self.assertEqual(config.round_trip_cost_bps, 18)
+        self.assertEqual(config.maximum_audit_rows, 250)
+
     def test_entry_signal_fires_only_when_rsi_enters_range(self) -> None:
         values = pd.Series([35.0, 29.0, 25.0, 31.0, 30.0, 29.0])
         self.assertEqual(
@@ -512,6 +528,22 @@ class StrategyLaunchRestrictionTests(unittest.TestCase):
                 with self.assertRaises(HTTPException) as caught:
                     start_backtest_job(request)
                 self.assertEqual(caught.exception.status_code, 422)
+
+    def test_asynchronous_job_endpoint_accepts_strong_buy_failure_research(self) -> None:
+        request = BacktestRequest(
+            symbols=["LUPIN"],
+            strategyMode="ema_vwap_strong_buy",
+            timeframe="5m",
+            strongBuyConfiguration={"failureEngineMode": "RESEARCH_COMPARE"},
+        )
+        with (
+            patch("backtest_api.get_store", return_value=self.RefusingStore()),
+            patch("backtest_api._backtest_job_service.start", return_value={"jobId": "research-job"}) as start,
+        ):
+            result = start_backtest_job(request)
+
+        self.assertEqual(result, {"jobId": "research-job"})
+        self.assertEqual(start.call_args.kwargs["symbols_total"], 1)
 
 
 if __name__ == "__main__":

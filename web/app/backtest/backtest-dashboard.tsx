@@ -296,6 +296,28 @@ const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
 const top5OpeningRangeBreakoutRecommendedDefaults = strategyDefaults(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY);
 const rangeRecommendedDefaults = strategyDefaults("rsi_range");
 const recoveryRecommendedDefaults = strategyDefaults("rsi_recovery");
+const strongBuyRecommendedDefaults = {
+  emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
+  minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
+  higherTimeframe: "15m", minimumConfirmations: 2, targetPct: 1,
+  initialQuantity: 100, allowAdditionalBuys: true,
+  additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
+  minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
+  failureEngineMode: "OFF" as "OFF" | "RESEARCH_COMPARE",
+  failureMaximumHoldingBars: 375,
+  failureSupportLookbackBars: 20,
+  failureEmaSlopeLookbackBars: 3,
+  failureProgressLookbackBars: 6,
+  failureMinimumProgressFraction: 0.25,
+  failureDecisionPersistenceBars: 2,
+  failureMinimumFailedGroups: 2,
+  failureRoundTripCostBps: 14,
+  failurePriorObservations: 20,
+  failureWalkForwardFolds: 2,
+  failureMinimumTrainingLots: 30,
+  failureMinimumTestLots: 10,
+  failureMaximumAuditRows: 5000,
+};
 
 function defaultNumber(strategy: "rsi_range" | "rsi_recovery", key: string) {
   const defaults = strategy === "rsi_range" ? rangeRecommendedDefaults : recoveryRecommendedDefaults;
@@ -731,14 +753,7 @@ function PerformanceChart({
 export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceRange: initialGlobalPriceRange }: BacktestDashboardProps) {
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>(LAUNCHABLE_STRATEGY_MODE);
-  const [strongBuySettings, setStrongBuySettings] = useState({
-    emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
-    minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
-    higherTimeframe: "15m", minimumConfirmations: 2, targetPct: 1,
-    initialQuantity: 100, allowAdditionalBuys: true,
-    additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
-    minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
-  });
+  const [strongBuySettings, setStrongBuySettings] = useState({ ...strongBuyRecommendedDefaults });
   const [top5OpeningRangeBreakoutSettings, setTop5OpeningRangeBreakoutSettings] = useState<Top5OpeningRangeBreakoutSettings>({ ...top5OpeningRangeBreakoutRecommendedDefaults });
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
@@ -1124,6 +1139,23 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         setError("Strong Buy requires fast EMA below slow EMA, a positive target, and positive quantity.");
         return;
       }
+      if (strongBuySettings.failureEngineMode === "RESEARCH_COMPARE" && !(
+        Number.isInteger(strongBuySettings.failureMaximumHoldingBars) && strongBuySettings.failureMaximumHoldingBars > 0
+        && Number.isInteger(strongBuySettings.failureSupportLookbackBars) && strongBuySettings.failureSupportLookbackBars > 0
+        && Number.isInteger(strongBuySettings.failureEmaSlopeLookbackBars) && strongBuySettings.failureEmaSlopeLookbackBars > 0
+        && Number.isInteger(strongBuySettings.failureProgressLookbackBars) && strongBuySettings.failureProgressLookbackBars > 0
+        && strongBuySettings.failureMinimumProgressFraction > 0 && strongBuySettings.failureMinimumProgressFraction <= 1
+        && Number.isInteger(strongBuySettings.failureDecisionPersistenceBars) && strongBuySettings.failureDecisionPersistenceBars > 0
+        && Number.isInteger(strongBuySettings.failureMinimumFailedGroups) && strongBuySettings.failureMinimumFailedGroups >= 1 && strongBuySettings.failureMinimumFailedGroups <= 3
+        && strongBuySettings.failureRoundTripCostBps >= 0
+        && strongBuySettings.failurePriorObservations > 0
+        && Number.isInteger(strongBuySettings.failureWalkForwardFolds) && strongBuySettings.failureWalkForwardFolds > 0
+        && Number.isInteger(strongBuySettings.failureMinimumTrainingLots) && strongBuySettings.failureMinimumTrainingLots > 0
+        && Number.isInteger(strongBuySettings.failureMinimumTestLots) && strongBuySettings.failureMinimumTestLots > 0
+      )) {
+        setError("Failure Engine research requires valid positive bar/sample settings, progress from 0 to 1, and 1 to 3 evidence groups.");
+        return;
+      }
     } else if (strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
       if (top5OpeningRangeBreakoutFormInvalid) {
         setError(Object.values(numericErrors)[0] ?? Object.values(top5OpeningRangeBreakoutRelationshipErrors)[0] ?? "Review the highlighted Top-5 Opening Range Breakout settings.");
@@ -1211,9 +1243,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     const runId = crypto.randomUUID();
     try {
       let aggregate: BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
-      // Cross-symbol ranking and portfolio capacity require one chronological stream.
+      // Cross-symbol ranking and walk-forward research require one chronological stream.
       const batchSize = 10;
-      const crossSymbolStrategy = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY;
+      const crossSymbolStrategy = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY
+        || (strategyMode === "ema_vwap_strong_buy" && strongBuySettings.failureEngineMode === "RESEARCH_COMPARE");
       const effectiveBatchSize = crossSymbolStrategy ? symbolsToRun.length : batchSize;
       for (let offset = 0; offset < symbolsToRun.length; offset += effectiveBatchSize) {
         const batch = symbolsToRun.slice(offset, offset + effectiveBatchSize);
@@ -1361,6 +1394,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               results: [...previous.results, ...payload.results],
               errors: [...previous.errors, ...payload.errors],
               warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
+              failureEngineResearch: payload.failureEngineResearch ?? previous.failureEngineResearch,
             };
           })()) : payload;
         } else if (strategyMode === "rsi_recovery") {
@@ -1662,14 +1696,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
 
   const resetJsonConfiguration = () => {
     if (strategyMode === "ema_vwap_strong_buy") {
-      setStrongBuySettings({
-        emaFast: 9, emaSlow: 21, adxLength: 14, adxSmoothing: 14,
-        minimumAdx: 20, rvolLength: 20, minimumRvol: 1.2,
-        higherTimeframe: "15m", minimumConfirmations: 2, targetPct: 1,
-        initialQuantity: 100, allowAdditionalBuys: true,
-        additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
-        minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
-      });
+      setStrongBuySettings({ ...strongBuyRecommendedDefaults });
       setNumericErrors({});
       setTimeframe("5m");
     } else if (strategyMode === "rsi_range") {
@@ -1730,8 +1757,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 <span><b>BUY:</b> EMA {strongBuySettings.emaFast} crosses above EMA {strongBuySettings.emaSlow} while the close is above session VWAP.</span>
                 <span><b>CONFIRM:</b> Any two of ADX/DMI ≥ {strongBuySettings.minimumAdx}, RVOL ≥ {strongBuySettings.minimumRvol}, and confirmed 15-minute alignment.</span>
                 <span><b>ENTRY:</b> Execute at the next completed 5-minute candle open. Every lot is independent.</span>
-                <span><b>SELL:</b> Each lot exits at its own {strongBuySettings.targetPct}% target. There is no stop loss, bearish exit or end-of-day exit.</span>
-                <span>Paper research only; no broker order is sent.</span>
+                <span><b>SELL:</b> Each baseline lot exits at its own {strongBuySettings.targetPct}% target. There is no baseline stop loss, bearish exit or end-of-day exit.</span>
+                {strongBuySettings.failureEngineMode === "RESEARCH_COMPARE" && <span><b>FAILURE RESEARCH:</b> Causal thesis-failure states are trained and tested with chronological walk-forward splits, then simulated at the next bar open. They never close paper or live positions.</span>}
+                <span>Backtest research only; no broker order is sent.</span>
               </> : strategyMode === "rsi_range" ? <>
                 <strong>Buy / hold / sell conditions</strong>
                 <span><b>BUY:</b> RSI enters {entryLow}-{entryHigh}; execute at the next candle open.</span>
@@ -1773,7 +1801,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             {useAllSymbols ? (
               <div className="all-symbols-selection">
                 <strong>Entire symbols.csv universe</strong>
-                <span>{strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? "Runs as one causal cross-symbol ranking stream with bounded workers." : "Runs automatically in safe groups of 10."} Keep this page open to see progress.</span>
+                <span>{strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || (strategyMode === "ema_vwap_strong_buy" && strongBuySettings.failureEngineMode === "RESEARCH_COMPARE") ? "Runs as one causal cross-symbol research stream with bounded workers." : "Runs automatically in safe groups of 10."} Keep this page open to see progress.</span>
               </div>
             ) : (
               <div className="selected-symbols">
@@ -1818,6 +1846,25 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               <label><span>Minimum quantity</span><input type="number" min="1" value={strongBuySettings.minimumQuantity} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, minimumQuantity: Math.floor(Number(event.target.value)) })} /></label>
               <label><span>Maximum entries</span><input type="number" min="1" max="100" value={strongBuySettings.maximumEntriesPerCycle} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, maximumEntriesPerCycle: Math.floor(Number(event.target.value)) })} /></label>
               <div className="fixed-strategy-rules"><span>Next-open entry</span><span>No stop loss</span><span>Hold to each lot&apos;s target</span></div>
+            </fieldset>
+            <fieldset className="recovery-config-card position-config-card"><legend>Failure Engine research</legend>
+              <label><span>Mode</span><select aria-label="Failure Engine mode" value={strongBuySettings.failureEngineMode} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureEngineMode: event.target.value as "OFF" | "RESEARCH_COMPARE" })}><option value="OFF">Off — baseline only</option><option value="RESEARCH_COMPARE">Compare with baseline</option></select></label>
+              <label><span>Maximum outcome horizon</span><span className="suffixed-input"><input aria-label="Failure maximum holding bars" type="number" min="1" step="1" value={strongBuySettings.failureMaximumHoldingBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMaximumHoldingBars: Math.floor(Number(event.target.value)) })} /><i>bars</i></span></label>
+              <label><span>Round-trip cost</span><span className="suffixed-input"><input aria-label="Failure round-trip cost bps" type="number" min="0" step="0.01" value={strongBuySettings.failureRoundTripCostBps} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureRoundTripCostBps: Number(event.target.value) })} /><i>bps</i></span></label>
+              <details>
+                <summary>Research safeguards</summary>
+                <label><span>Support lookback</span><input type="number" min="1" step="1" value={strongBuySettings.failureSupportLookbackBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureSupportLookbackBars: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>EMA slope lookback</span><input type="number" min="1" step="1" value={strongBuySettings.failureEmaSlopeLookbackBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureEmaSlopeLookbackBars: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Progress window</span><input type="number" min="1" step="1" value={strongBuySettings.failureProgressLookbackBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureProgressLookbackBars: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Minimum target progress</span><input type="number" min="0.01" max="1" step="0.01" value={strongBuySettings.failureMinimumProgressFraction} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumProgressFraction: Number(event.target.value) })} /></label>
+                <label><span>Decision persistence</span><input type="number" min="1" step="1" value={strongBuySettings.failureDecisionPersistenceBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureDecisionPersistenceBars: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Independent groups</span><input type="number" min="1" max="3" step="1" value={strongBuySettings.failureMinimumFailedGroups} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumFailedGroups: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Prior observations</span><input type="number" min="0.01" step="0.01" value={strongBuySettings.failurePriorObservations} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failurePriorObservations: Number(event.target.value) })} /></label>
+                <label><span>Walk-forward folds</span><input type="number" min="1" step="1" value={strongBuySettings.failureWalkForwardFolds} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureWalkForwardFolds: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Minimum training lots</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumTrainingLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumTrainingLots: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Minimum test lots</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumTestLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumTestLots: Math.floor(Number(event.target.value)) })} /></label>
+              </details>
+              <div className="fixed-strategy-rules"><span>Completed candles only</span><span>Chronological walk-forward</span><span>Next-open simulated exit</span><span>Never live</span></div>
             </fieldset>
           </div> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <Top5OpeningRangeBreakoutSettingsPanel
             settings={top5OpeningRangeBreakoutSettings}

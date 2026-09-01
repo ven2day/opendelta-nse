@@ -68,7 +68,7 @@ test("existing product routes render inside the unified platform shell", async (
     ["/scanner", /Stock Scanner/],
     ["/backtest", /Historical backtest/],
     ["/backtest/crypto", /Crypto &amp; metals backtest/],
-    ["/signals", /Completed-candle research monitor/],
+    ["/signals", /Signal time/],
     ["/signals/funnel", /NSE Signal Engine V2/],
     ["/signals/crypto", /Crypto &amp; metals signals/],
     ["/admin", /Global price range/],

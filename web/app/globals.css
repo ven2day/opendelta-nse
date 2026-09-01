@@ -4381,6 +4381,11 @@ footer {
 .signals-empty > div { display: grid; gap: 4px; max-width: 720px; }
 .signals-empty strong { color: var(--text); }
 .signals-empty span { color: var(--faint); }
+.signals-plain-table th:nth-child(1) { width: 18%; }
+.signals-plain-table th:nth-child(2) { width: 24%; }
+.signals-plain-table th:nth-child(3) { width: 24%; }
+.signals-plain-table th:nth-child(4) { width: 17%; }
+.signals-plain-table th:nth-child(5) { width: 17%; }
 .paper-position-card { display: grid; grid-template-columns: minmax(140px, 1.2fr) repeat(8, minmax(85px, .7fr)) auto; align-items: center; gap: 9px; border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; background: var(--panel); }
 .paper-position-card h2 { margin: 4px 0 1px; font-size: 12px; }
 .paper-position-card small { color: var(--faint); font-size: 6.5px; }

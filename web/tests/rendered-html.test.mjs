@@ -158,10 +158,10 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   });
   assert.equal(signalsResponse.status, 200);
   const signalsHtml = await signalsResponse.text();
-  assert.match(signalsHtml, /Completed-candle research monitor/);
-  assert.match(signalsHtml, /Paper positions/);
+  assert.match(signalsHtml, /Signal time/);
+  assert.match(signalsHtml, /Entry datetime/);
+  assert.match(signalsHtml, /Take profit/);
   assert.match(signalsHtml, /Crypto &amp; metals/);
-  assert.match(signalsHtml, /Auto-refresh every 10 seconds/);
   assert.doesNotMatch(signalsHtml, /class="global-header"/);
 
   const anonymousCryptoBacktest = await fetchFromWorker(worker, "/backtest/crypto", {
@@ -417,26 +417,15 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(liveUniverseApiText, /\[PROXY_TOKEN_HEADER\] = proxyToken/);
   assert.match(liveUniverseApiText, /\/live-universe\/preview/);
   assert.match(liveUniverseApiText, /\/live-universe\/save/);
-  assert.match(liveSignalsText, /Completed-candle research monitor/);
+  assert.match(liveSignalsText, /Signal time/);
+  assert.match(liveSignalsText, /Take profit/);
   assert.match(liveSignalsText, /SIGNAL_REFRESH_INTERVAL_MS = 10_000/);
   assert.match(liveSignalsText, /document\.visibilityState === "visible"/);
-  assert.match(liveSignalsText, /Live monitoring operational/);
-  assert.match(liveSignalsText, /Market closed · automatic resume armed/);
   assert.doesNotMatch(liveSignalsText, /className="global-header"/);
   assert.match(platformChromeText, /OVERVIEW_REFRESH_INTERVAL_MS = 15_000/);
   assert.match(platformChromeText, /window\.addEventListener\("focus", refreshVisible\)/);
   assert.match(platformChromeText, /overviewUnavailable \? "UNAVAILABLE"/);
-  assert.match(liveSignalsText, /<span>Universe<\/span>/);
-  assert.match(liveSignalsText, /status\.universeVersion/);
   assert.doesNotMatch(liveSignalsText, /className="snapshot-pill"/);
-  assert.match(liveSignalsText, /PAPER BUY/i);
-  assert.match(liveSignalsText, /Actual paper entry/);
-  assert.match(liveSignalsText, /Ignore/);
-  assert.match(liveSignalsText, /resistanceBeforeTarget/);
-  assert.match(liveSignalsText, /quantitySuggestion\.recommendedQuantity/);
-  assert.match(liveSignalsText, /indicativeTargets\.atLower/);
-  assert.match(liveSignalsText, /indicativeTargets\.atUpper/);
-  assert.doesNotMatch(liveSignalsText, /quantitySuggestion\.safe/);
   assert.doesNotMatch(liveSignalsText, /placeOrder|marketOrder|place_order/);
   assert.doesNotMatch(liveUniverseText, /className="snapshot-pill"/);
   assert.match(liveSignalsApiText, /getSessionUser/);

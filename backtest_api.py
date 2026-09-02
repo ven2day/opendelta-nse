@@ -2450,6 +2450,11 @@ def get_platform_runtime() -> PlatformRuntime:
                     "NSE": lambda: DhanCandleSource(get_store()),
                     "CRYPTO": lambda: CryptoCandleSource(get_crypto_market_service()),
                 },
+                fallback_universes={
+                    # Until a screener universe is saved, fall back to what production already uses.
+                    "NSE": lambda: get_universe_service().get_active_live_universe()[0],
+                    "CRYPTO": lambda: [item.display_symbol for item in get_crypto_market_service().list_instruments() if item.signals_enabled],
+                },
             )
         return _platform_runtime_instance
 

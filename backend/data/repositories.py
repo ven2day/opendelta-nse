@@ -204,3 +204,295 @@ def _trade_value(row: Mapping[str, Any], column: str) -> Any:
     if column == "run_id":
         return uuid.UUID(str(value))
     return value
+
+
+# ---------------------------------------------------------------- live signals
+
+SIGNAL_STATUSES = ("STRONG_BUY", "HOLDING", "TARGET_HIT", "EXITED", "EXPIRED")
+OPEN_SIGNAL_STATUSES = ("STRONG_BUY", "HOLDING")
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _public_signal(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "signalId": str(row["signal_id"]),
+        "market": row["market"],
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "symbol": row["symbol"],
+        "timeframe": row["timeframe"],
+        "candleTimestamp": _iso(row["candle_timestamp"]),
+        "signalType": row["signal_type"],
+        "status": row["status"],
+        "signalPrice": row["signal_price"],
+        "targetPrice": row["target_price"],
+        "stopPrice": row["stop_price"],
+        "expiresAt": _iso(row["expires_at"]),
+        "reasons": row["reasons"],
+        "indicators": row["indicators"],
+        "configurationSnapshot": row["configuration_snapshot"],
+        "lastPrice": row["last_price"],
+        "exitTimestamp": _iso(row["exit_timestamp"]),
+        "exitPrice": row["exit_price"],
+        "createdAt": _iso(row["created_at"]),
+        "updatedAt": _iso(row["updated_at"]),
+    }
+
+
+class LiveSignalRepository:
+    """Stored signals; the database's uniqueness constraint is the duplicate guard."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def insert_new(
+        self,
+        *,
+        market: str,
+        strategy_id: str,
+        strategy_version: str,
+        symbol: str,
+        timeframe: str,
+        candle_timestamp: datetime,
+        signal_type: str,
+        signal_price: float,
+        target_price: float | None,
+        stop_price: float | None,
+        expires_at: datetime | None,
+        reasons: Sequence[str],
+        indicators: Mapping[str, Any],
+        configuration_snapshot: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Insert and return the stored signal, or ``None`` if an identical signal already exists."""
+        signal_id = uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO live_signals (
+                    signal_id, market, strategy_id, strategy_version, symbol, timeframe, candle_timestamp, signal_type, status,
+                    signal_price, target_price, stop_price, expires_at, reasons, indicators, configuration_snapshot, last_price
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'STRONG_BUY', %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT ON CONSTRAINT live_signals_unique_candle DO NOTHING
+                RETURNING *
+                """,
+                (
+                    signal_id, market, strategy_id, strategy_version, symbol, timeframe, candle_timestamp, signal_type,
+                    signal_price, target_price, stop_price, expires_at, jsonb(list(reasons)), jsonb(dict(indicators)), jsonb(dict(configuration_snapshot)), signal_price,
+                ),
+            )
+            row = cursor.fetchone()
+        return _public_signal(row) if row else None
+
+    def get(self, signal_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one("SELECT * FROM live_signals WHERE signal_id = %s", (uuid.UUID(str(signal_id)),))
+        if row is None:
+            raise KeyError(f"Signal {signal_id} was not found")
+        return _public_signal(row)
+
+    def list(self, market: str | None = None, *, status: str | None = None, symbol: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if market:
+            clauses.append("market = %s")
+            parameters.append(market)
+        if status:
+            clauses.append("status = %s")
+            parameters.append(status)
+        if symbol:
+            clauses.append("symbol = %s")
+            parameters.append(symbol)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self.database.fetch_all(f"SELECT * FROM live_signals{where} ORDER BY candle_timestamp DESC LIMIT %s", (*parameters, limit))
+        return [_public_signal(row) for row in rows]
+
+    def open(self, market: str, symbol: str | None = None) -> list[dict[str, Any]]:
+        if symbol:
+            rows = self.database.fetch_all("SELECT * FROM live_signals WHERE market = %s AND symbol = %s AND status IN ('STRONG_BUY', 'HOLDING') ORDER BY candle_timestamp", (market, symbol))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM live_signals WHERE market = %s AND status IN ('STRONG_BUY', 'HOLDING') ORDER BY candle_timestamp", (market,))
+        return [_public_signal(row) for row in rows]
+
+    def mark_holding(self, signal_id: uuid.UUID | str, *, last_price: float) -> None:
+        self.database.execute(
+            "UPDATE live_signals SET status = 'HOLDING', last_price = %s, updated_at = %s WHERE signal_id = %s AND status = 'STRONG_BUY'",
+            (last_price, _now(), uuid.UUID(str(signal_id))),
+        )
+
+    def update_last_price(self, signal_id: uuid.UUID | str, *, last_price: float) -> None:
+        self.database.execute("UPDATE live_signals SET last_price = %s, updated_at = %s WHERE signal_id = %s", (last_price, _now(), uuid.UUID(str(signal_id))))
+
+    def close(self, signal_id: uuid.UUID | str, *, status: str, exit_timestamp: datetime, exit_price: float) -> dict[str, Any]:
+        if status not in ("TARGET_HIT", "EXITED", "EXPIRED"):
+            raise ValueError(f"{status} is not a closing signal status")
+        self.database.execute(
+            "UPDATE live_signals SET status = %s, exit_timestamp = %s, exit_price = %s, last_price = %s, updated_at = %s WHERE signal_id = %s AND status IN ('STRONG_BUY', 'HOLDING')",
+            (status, exit_timestamp, exit_price, exit_price, _now(), uuid.UUID(str(signal_id))),
+        )
+        return self.get(signal_id)
+
+
+class EngineStatusRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def upsert(
+        self,
+        *,
+        engine: str,
+        market: str,
+        status: str,
+        connection_status: str | None,
+        data_age_seconds: float | None,
+        last_completed_candle: datetime | None,
+        message: str | None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.database.execute(
+            """
+            INSERT INTO engine_status (engine, market, status, connection_status, data_age_seconds, last_completed_candle, message, details, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (engine, market) DO UPDATE SET
+                status = EXCLUDED.status, connection_status = EXCLUDED.connection_status, data_age_seconds = EXCLUDED.data_age_seconds,
+                last_completed_candle = EXCLUDED.last_completed_candle, message = EXCLUDED.message, details = EXCLUDED.details, updated_at = EXCLUDED.updated_at
+            """,
+            (engine, market, status, connection_status, data_age_seconds, last_completed_candle, message, jsonb(dict(details or {})), _now()),
+        )
+
+    def get(self, engine: str, market: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one("SELECT * FROM engine_status WHERE engine = %s AND market = %s", (engine, market))
+        return _public_engine_status(row) if row else None
+
+    def list(self) -> list[dict[str, Any]]:
+        return [_public_engine_status(row) for row in self.database.fetch_all("SELECT * FROM engine_status ORDER BY engine, market")]
+
+
+def _public_engine_status(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "engine": row["engine"],
+        "market": row["market"],
+        "status": row["status"],
+        "connectionStatus": row["connection_status"],
+        "dataAgeSeconds": row["data_age_seconds"],
+        "lastCompletedCandle": _iso(row["last_completed_candle"]),
+        "message": row["message"],
+        "details": row["details"],
+        "updatedAt": _iso(row["updated_at"]),
+    }
+
+
+class StrategyConfigRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def active(self, market: str, strategy_id: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one("SELECT * FROM strategy_configs WHERE market = %s AND strategy_id = %s AND active", (market, strategy_id))
+        return _public_config(row) if row else None
+
+    def save(self, *, market: str, strategy_id: str, strategy_version: str, name: str, configuration: Mapping[str, Any], risk_settings: Mapping[str, Any], activate: bool) -> dict[str, Any]:
+        config_id = uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            if activate:
+                cursor.execute("UPDATE strategy_configs SET active = false, updated_at = %s WHERE market = %s AND strategy_id = %s AND active", (_now(), market, strategy_id))
+            cursor.execute(
+                """
+                INSERT INTO strategy_configs (config_id, market, strategy_id, strategy_version, name, configuration, risk_settings, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT ON CONSTRAINT strategy_configs_name DO UPDATE SET
+                    strategy_version = EXCLUDED.strategy_version, configuration = EXCLUDED.configuration, risk_settings = EXCLUDED.risk_settings,
+                    active = EXCLUDED.active, updated_at = now()
+                RETURNING *
+                """,
+                (config_id, market, strategy_id, strategy_version, name, jsonb(dict(configuration)), jsonb(dict(risk_settings)), activate),
+            )
+            row = cursor.fetchone()
+        return _public_config(row)
+
+    def list(self, market: str | None = None) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all("SELECT * FROM strategy_configs WHERE market = %s ORDER BY strategy_id, name", (market,))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM strategy_configs ORDER BY market, strategy_id, name")
+        return [_public_config(row) for row in rows]
+
+
+def _public_config(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "configId": str(row["config_id"]),
+        "market": row["market"],
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "name": row["name"],
+        "configuration": row["configuration"],
+        "riskSettings": row["risk_settings"],
+        "active": bool(row["active"]),
+        "createdAt": _iso(row["created_at"]),
+        "updatedAt": _iso(row["updated_at"]),
+    }
+
+
+class SavedUniverseRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def active(self, market: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one("SELECT * FROM saved_universes WHERE market = %s AND active", (market,))
+        return _public_universe(row) if row else None
+
+    def active_symbols(self, market: str) -> list[str]:
+        record = self.active(market)
+        if record is None:
+            return []
+        excluded = set(record["manualExcludes"])
+        ordered = [symbol for symbol in [*record["symbols"], *record["manualIncludes"]] if symbol not in excluded]
+        return list(dict.fromkeys(ordered))
+
+    def save(self, *, market: str, name: str, symbols: Sequence[str], source_run_id: str | None = None, manual_includes: Sequence[str] = (), manual_excludes: Sequence[str] = (), activate: bool = True) -> dict[str, Any]:
+        universe_id = uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            if activate:
+                cursor.execute("UPDATE saved_universes SET active = false WHERE market = %s AND active", (market,))
+            cursor.execute(
+                """
+                INSERT INTO saved_universes (universe_id, market, name, source_run_id, symbols, manual_includes, manual_excludes, active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING *
+                """,
+                (universe_id, market, name, uuid.UUID(str(source_run_id)) if source_run_id else None, jsonb(list(symbols)), jsonb(list(manual_includes)), jsonb(list(manual_excludes)), activate),
+            )
+            row = cursor.fetchone()
+        return _public_universe(row)
+
+    def list(self, market: str | None = None, *, limit: int = 50) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all("SELECT * FROM saved_universes WHERE market = %s ORDER BY created_at DESC LIMIT %s", (market, limit))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM saved_universes ORDER BY created_at DESC LIMIT %s", (limit,))
+        return [_public_universe(row) for row in rows]
+
+    def activate(self, universe_id: uuid.UUID | str) -> dict[str, Any]:
+        key = uuid.UUID(str(universe_id))
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT market FROM saved_universes WHERE universe_id = %s", (key,))
+            row = cursor.fetchone()
+            if row is None:
+                raise KeyError(f"Universe {universe_id} was not found")
+            cursor.execute("UPDATE saved_universes SET active = false WHERE market = %s AND active", (row["market"],))
+            cursor.execute("UPDATE saved_universes SET active = true WHERE universe_id = %s RETURNING *", (key,))
+            updated = cursor.fetchone()
+        return _public_universe(updated)
+
+
+def _public_universe(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "universeId": str(row["universe_id"]),
+        "market": row["market"],
+        "name": row["name"],
+        "sourceRunId": str(row["source_run_id"]) if row["source_run_id"] else None,
+        "symbols": row["symbols"],
+        "manualIncludes": row["manual_includes"],
+        "manualExcludes": row["manual_excludes"],
+        "active": bool(row["active"]),
+        "createdAt": _iso(row["created_at"]),
+    }

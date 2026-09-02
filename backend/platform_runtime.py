@@ -15,24 +15,49 @@ from typing import Any, Callable
 
 from fastapi import FastAPI
 
+from datetime import datetime, timezone as _timezone
+
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.settings_routes import create_settings_router
+from backend.api.signal_routes import create_signal_router
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
 from backend.data.database import Database, DatabaseUnavailable
-from backend.data.repositories import BacktestRunRepository, BacktestTradeRepository
+from backend.data.repositories import (
+    BacktestRunRepository,
+    BacktestTradeRepository,
+    EngineStatusRepository,
+    LiveSignalRepository,
+    SavedUniverseRepository,
+    StrategyConfigRepository,
+)
 from backend.markets.base import CandleSource, market_spec
+from backend.signals.engine import RiskSettings, SignalEngine
+from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
+
+DEFAULT_LIVE_STRATEGY = "ema_vwap_strong_buy"
+LIVE_TIMEFRAME = "5m"
 
 logger = logging.getLogger("opendelta.platform")
 
 
 class PlatformRuntime:
-    def __init__(self, *, database: Database | None, candle_sources: dict[str, Callable[[], CandleSource]]) -> None:
+    def __init__(
+        self,
+        *,
+        database: Database | None,
+        candle_sources: dict[str, Callable[[], CandleSource]],
+        fallback_universes: dict[str, Callable[[], list[str]]] | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.database = database
         self.candle_sources = candle_sources
+        self.fallback_universes = fallback_universes or {}
+        self.clock = clock or (lambda: datetime.now(_timezone.utc))
         self._runner: BacktestJobRunner | None = None
+        self._workers: dict[str, MarketSignalWorker] = {}
         self._lock = threading.Lock()
         self.migrated_versions: list[str] = []
         self.disabled_reason: str | None = None
@@ -63,6 +88,7 @@ class PlatformRuntime:
             interrupted = self.runner().recover()
             if interrupted:
                 logger.warning("Marked %s stale backtest run(s) INTERRUPTED after restart", interrupted)
+            self._start_signal_workers()
         except Exception as error:
             logger.error("Unified platform database is unavailable; v2 routes will fail closed: %s", error)
             self.disabled_reason = str(error)
@@ -74,10 +100,77 @@ class PlatformRuntime:
     def stop(self) -> None:
         with self._lock:
             runner, self._runner = self._runner, None
+            workers, self._workers = dict(self._workers), {}
+        for worker in workers.values():
+            worker.stop()
         if runner is not None:
             runner.shutdown()
         if self.database is not None:
             self.database.close()
+
+    # ---- live signals ------------------------------------------------------------
+
+    def _start_signal_workers(self) -> None:
+        for market in ("NSE", "CRYPTO"):
+            if not _truthy(os.environ.get(f"{market}_SIGNAL_ENGINE_V2_ENABLED")):
+                continue
+            worker = self.build_signal_worker(market)
+            with self._lock:
+                self._workers[market] = worker
+            worker.start()
+            logger.info("Started %s live-signal worker", market)
+
+    def build_signal_worker(self, market: str, *, strategy_id: str | None = None) -> MarketSignalWorker:
+        spec = market_spec(market)
+        strategy_key = strategy_id or os.environ.get(f"{market}_LIVE_STRATEGY", DEFAULT_LIVE_STRATEGY)
+        strategy = STRATEGIES.get(strategy_key)
+        active = self.strategy_configs().active(spec.market, strategy.strategy_id)
+        configuration = active["configuration"] if active else {}
+        risk = RiskSettings.from_mapping(active["riskSettings"] if active else None)
+        engine = SignalEngine(
+            market=spec,
+            strategy=strategy,
+            configuration=configuration,
+            risk=risk,
+            timeframe=LIVE_TIMEFRAME,
+            repository=self.signals(),
+            clock=self.clock,
+        )
+        universes = self.universes()
+
+        def universe() -> list[str]:
+            symbols = universes.active_symbols(spec.market)
+            if symbols:
+                return symbols
+            fallback = self.fallback_universes.get(spec.market)
+            return list(fallback()) if fallback else []
+
+        return MarketSignalWorker(
+            market=spec,
+            engine=engine,
+            source=self.candle_sources[spec.market](),
+            universe=universe,
+            status_repository=self.engine_status(),
+            clock=self.clock,
+            poll_seconds=float(os.environ.get(f"{market}_SIGNAL_POLL_SECONDS", "120" if market == "NSE" else "60")),
+        )
+
+    def worker_status(self, market: str) -> dict[str, Any] | None:
+        with self._lock:
+            worker = self._workers.get(market)
+        return worker.status() if worker else None
+
+    def signals(self) -> LiveSignalRepository:
+        return LiveSignalRepository(self.require_database())
+
+    def engine_status(self) -> EngineStatusRepository:
+        return EngineStatusRepository(self.require_database())
+
+    def strategy_configs(self) -> StrategyConfigRepository:
+        return StrategyConfigRepository(self.require_database())
+
+    def universes(self) -> SavedUniverseRepository:
+        return SavedUniverseRepository(self.require_database())
 
     def require_database(self) -> Database:
         if self.database is None:
@@ -108,11 +201,14 @@ class PlatformRuntime:
         )
 
     def status(self) -> dict[str, Any]:
+        with self._lock:
+            workers = list(self._workers)
         return {
             "databaseConfigured": self.database is not None,
             "disabledReason": self.disabled_reason,
             "migratedVersions": self.migrated_versions,
             "activeBacktests": self._runner.active_run_ids() if self._runner else [],
+            "signalWorkers": workers,
             "strategies": STRATEGIES.ids(),
         }
 
@@ -125,3 +221,4 @@ def install_platform(app: FastAPI, runtime: PlatformRuntime) -> None:
     services = BacktestServices(registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner)
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES).routes)
+    app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_status=runtime.worker_status).routes)

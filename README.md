@@ -2,19 +2,14 @@
 
 Production quant-platform architecture, contracts, data flows, lifecycles, APIs, tests, deployment, and limitations are documented in [web/docs/quant-platform-v1.md](web/docs/quant-platform-v1.md). Provider, factor, and strategy extension guides are in [web/docs/extensions.md](web/docs/extensions.md).
 
-## Research safety status
+## Unified trading platform
 
-New Research experiments are disabled by default with the server-side
-`RESEARCH_ENGINE_V2_ENABLED=false` safety gate. Results created by the former
-one-bar next-open-to-next-close observation model are retained but labelled
-`LEGACY_INVALID_RESEARCH_MODEL`; their profitability metrics are hidden because
-that model was not a strategy backtest. The factor education catalogue remains
-available. Do not enable Research V2 until its deterministic trade-lifecycle,
-multi-timeframe, worker, browser, and production acceptance checks pass.
-
-The executable Research V1 code and request contract have been removed. Legacy
-results remain read-only for audit purposes; only the versioned Research V2
-request can create a new experiment.
+The product is one website with six pages — Dashboard, Screener, Backtest,
+Signals, Paper Trading and Settings — each with an NSE / Crypto market switch,
+driven by a single strategy evaluator (`backend/strategies`). The research
+platform, Trade Failure Engine and retired strategies have been removed. See
+[docs/unified-platform.md](docs/unified-platform.md) for the architecture, the
+`/v2` API, runtime flags, the migration command and how to add a strategy.
 
 ## Canonical market-data rollout
 
@@ -75,58 +70,30 @@ point-in-time backtesting, saved account history and auditable strategy
 diagnostics.
 
 - Website: <https://nse.ventoday.com>
-- Backtest: <https://nse.ventoday.com/backtest>
-- NSE signal funnel: `/signals/funnel`
-- Crypto/Metals backtest: `/backtest/crypto`
-- Crypto/Metals signals: `/signals/crypto`
+- Unified pages: `/` (Dashboard), `/screener`, `/backtest`, `/signals`,
+  `/paper-trading`, `/settings` — all with `?market=NSE|CRYPTO`
+- Legacy pages (kept until the v2 workers are switched on): `/legacy/screener`,
+  `/legacy/backtest`, `/legacy/backtest/crypto`, `/legacy/signals`,
+  `/legacy/signals/crypto`, `/legacy/markets`
 
 ## Strategy status
 
 | Strategy | Status | Notes |
 | --- | --- | --- |
-| EMA/VWAP Strong Buy | Active | The only strategy that can start a new backtest; broker orders are disabled. |
-| RSI Range Strategy | Retired | Historical results remain read-only; new runs are blocked. |
-| RSI Recovery Scalping | Retired | Historical results remain read-only; new runs are blocked. |
-| NSE Signal Engine V2 | Research only | Long-only Trend Pullback Continuation and Breakout-Retest signals; all valid setups remain visible and broker orders are disabled. |
-| Top-5 Opening Range Breakout | Retired | Historical results remain read-only; new runs are blocked. Supported `FROZEN_OPEN` and `ROLLING`. |
-| Market-Aligned RSI Scalper | Retired | Historical results remain read-only; new runs are blocked. |
-| Market-Aligned VWAP Pullback Scalper | Retired | Historical results remain read-only; new runs are blocked. |
-| Crypto Trend Pullback Recovery | Research only | OKX/VALR public candles, completed-candle signals, next-bar backtest entry, no order path. |
+| Strong Buy (`ema_vwap_strong_buy`, STRONG_BUY_V1) | Active | The registered strategy plug-in used by the NSE and Crypto backtest, live signals and paper trading; broker orders are disabled. |
+| RSI Range Strategy | Retired | Historical results remain read-only in the legacy backtest; new runs are blocked. |
+| RSI Recovery Scalping | Retired | Historical results remain read-only in the legacy backtest; new runs are blocked. |
+| Market-Aligned RSI Scalper | Retired | Historical results remain read-only; the implementation was removed earlier. |
+| Crypto Trend Pullback Recovery | Legacy research | Still backs the legacy crypto pages; not registered as a v2 plug-in. |
 
-No strategy in this repository is represented as guaranteed profitable.
+Removed from the codebase: the Trade Failure Engine, the Research V2 platform,
+NSE Signal Engine V2 and the signal funnel/scanner, Top-5 Opening Range
+Breakout, and the Market-Aligned VWAP Pullback Scalper. No strategy in this
+repository is represented as guaranteed profitable.
 
-## Stock Scanner
+## Crypto and metals research (legacy pages)
 
-The authenticated `/scanner` page now leads with NSE Signal Engine V2; the same
-view is available under Signals at `/signals/funnel`. It reads locally cached
-completed five-minute candles for the saved global price-filtered NSE universe.
-Every eligible symbol is evaluated for two independent long-only setups:
-Trend Pullback Continuation and Breakout-Retest. Signal checks follow the latest
-completed five-minute candle. Ranking changes display order only and never
-hides a valid setup; activity Top-5 and Top-20 tables remain context, not entry
-signals.
-
-Every valid setup includes the passed rules, BUY rationale, stop-entry range,
-structural stop, 1.5R target, timeout/invalidation/session SELL conditions and
-historical-evidence record. V2 does not manufacture a probability: until its
-walk-forward gate has at least 200 trades across 50 symbols, positive net and
-stress expectancy, profit factor at least 1.20 and a positive confidence lower
-bound, the evidence is `UNVALIDATED` and the setup is a `RESEARCH_SIGNAL`.
-Paper limits decide only `PAPER_EXECUTED` versus
-`PAPER_SKIPPED_RISK_LIMIT`; qualified signals remain visible. The original RSI
-Recovery live workspace, keys, signals and history are unchanged.
-
-The complete rule and evidence contract is documented in
-[NSE Signal Engine V2](web/docs/nse-signal-engine-v2.md).
-
-The scanner never fetches missing historical candles during an HTTP request,
-never creates a broker order, and never enables live execution. The main NSE
-Dashboard is unchanged.
-
-## Crypto and metals research
-
-OpenDelta now has separate NSE and Crypto/Metals workspaces. The main Dashboard
-remains NSE-only. `/backtest/crypto` and `/signals/crypto` share one
+`/legacy/backtest/crypto` and `/legacy/signals/crypto` share one
 provider-neutral strategy implementation so signal and backtest rules cannot
 drift apart.
 

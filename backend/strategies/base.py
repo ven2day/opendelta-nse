@@ -84,6 +84,36 @@ def resolve_config(schema: ConfigSchema, config: Mapping[str, Any] | None) -> di
     return resolved
 
 
+DECISION_FRAME_COLUMNS = ("Open", "High", "Low", "Close", "Volume", "Decision", "SignalPrice", "TargetPrice", "StopPrice")
+
+
+def decision_frame(strategy: Strategy, candles: pd.DataFrame, market_context: MarketContext, config: Mapping[str, Any]) -> pd.DataFrame:
+    """One row per completed candle with the strategy's decision for that candle.
+
+    A strategy may provide ``decision_frame`` itself (a vectorised path over the
+    same evaluator); otherwise this evaluates every history prefix, which is
+    always correct but slow. Either way the result is causal: row *t* depends
+    only on candles up to *t*.
+    """
+    vectorised = getattr(strategy, "decision_frame", None)
+    if callable(vectorised):
+        frame = vectorised(candles, market_context, config)
+    else:
+        from backend.core.models import normalize_candles
+
+        data = normalize_candles(candles, market_context.timezone)
+        rows = []
+        for position in range(len(data)):
+            decision = strategy.evaluate(data.iloc[: position + 1], market_context, config)
+            rows.append((decision.decision, decision.signal_price, decision.target_price, decision.stop_price))
+        frame = data.copy()
+        frame[["Decision", "SignalPrice", "TargetPrice", "StopPrice"]] = pd.DataFrame(rows, index=data.index, columns=["Decision", "SignalPrice", "TargetPrice", "StopPrice"])
+    missing = [name for name in DECISION_FRAME_COLUMNS if name not in frame]
+    if missing:
+        raise ValueError(f"{strategy.strategy_id} decision frame is missing: {', '.join(missing)}")
+    return frame
+
+
 def assert_supported(strategy: Strategy, market_context: MarketContext) -> None:
     if market_context.market not in strategy.supported_markets:
         raise ValueError(f"{strategy.strategy_id} does not support the {market_context.market} market")

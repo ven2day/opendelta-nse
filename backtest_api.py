@@ -45,6 +45,10 @@ from application_settings import (
 )
 from crypto_api import create_crypto_router
 from crypto_engine import CryptoMarketService, service_from_environment as crypto_service_from_environment
+from backend.data.database import Database
+from backend.markets.crypto.exchange_adapter import CryptoCandleSource
+from backend.markets.nse.dhan_adapter import DhanCandleSource
+from backend.platform_runtime import PlatformRuntime, install_platform
 from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
 from backtest_jobs import BacktestJobService
 from live_signals import (
@@ -2275,9 +2279,11 @@ def create_store() -> HistoricalDataStore:
 @asynccontextmanager
 async def application_lifespan(_: FastAPI):
     start_live_signal_runtime()
+    get_platform_runtime().start()
     try:
         yield
     finally:
+        get_platform_runtime().stop()
         stop_live_signal_runtime()
 
 
@@ -2427,6 +2433,28 @@ def get_crypto_market_service() -> CryptoMarketService:
 
 
 app.router.routes.extend(create_crypto_router(get_crypto_market_service).routes)
+
+
+_platform_runtime_instance: PlatformRuntime | None = None
+_platform_runtime_lock = threading.Lock()
+
+
+def get_platform_runtime() -> PlatformRuntime:
+    """The unified NSE+Crypto platform (v2 routes), sharing this process and database."""
+    global _platform_runtime_instance
+    with _platform_runtime_lock:
+        if _platform_runtime_instance is None:
+            _platform_runtime_instance = PlatformRuntime(
+                database=Database.from_environment(),
+                candle_sources={
+                    "NSE": lambda: DhanCandleSource(get_store()),
+                    "CRYPTO": lambda: CryptoCandleSource(get_crypto_market_service()),
+                },
+            )
+        return _platform_runtime_instance
+
+
+install_platform(app, get_platform_runtime())
 
 
 def get_recovery_baseline_metadata() -> dict[str, Any]:

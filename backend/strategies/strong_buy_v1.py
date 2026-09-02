@@ -126,6 +126,21 @@ class StrongBuyV1:
         data["StrongBuy"] = data["BaseBuy"] & (data["ConfirmationScore"] >= cfg["minimum_confirmations"])
         return data
 
+    def decision_frame(self, candles: pd.DataFrame, market_context: MarketContext, config: Mapping[str, Any]) -> pd.DataFrame:
+        """Vectorised decisions for every completed candle; identical to evaluating each prefix."""
+        assert_supported(self, market_context)
+        cfg = self.resolve(config)
+        data = self.compute_indicators(candles, cfg, market_context.timezone)
+        warmup = self.required_history(cfg)
+        eligible = pd.Series(range(len(data)), index=data.index) >= warmup - 1
+        buy = data["StrongBuy"].astype(bool) & eligible
+        frame = data[["Open", "High", "Low", "Close", "Volume"]].copy()
+        frame["Decision"] = pd.Series("NONE", index=data.index).where(~buy, "BUY")
+        frame["SignalPrice"] = data["Close"]
+        frame["TargetPrice"] = (data["Close"] * (1 + cfg["target_pct"] / 100)).round(4).where(buy)
+        frame["StopPrice"] = pd.Series(float("nan"), index=data.index)
+        return frame
+
     def evaluate(self, candles: pd.DataFrame, market_context: MarketContext, config: Mapping[str, Any]) -> SignalDecision:
         assert_supported(self, market_context)
         cfg = self.resolve(config)

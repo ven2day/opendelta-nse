@@ -44,3 +44,6 @@ nse_yesterday_losers_rsi_20_40.csv
 .vscode/
 .DS_Store
 Thumbs.db
+
+# The runtime data directories above must not hide the platform persistence package.
+!backend/data/

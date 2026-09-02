@@ -36,30 +36,15 @@ from backtest_api import (
 )
 from fastapi import HTTPException
 from main import DhanAPIError, DhanConfig
+from backtest_api import (
+    _nse_session_is_open,
+    platform_instruments,
+    platform_market_context,
+    platform_overview,
+)
 
 
 class SignalTests(unittest.TestCase):
-    def test_strong_buy_failure_engine_configuration_maps_to_research_model(self) -> None:
-        request = StrongBuyConfigurationRequest(
-            failureEngineMode="RESEARCH_COMPARE",
-            failureMaximumHoldingBars=250,
-            failureDecisionPersistenceBars=3,
-            failureRoundTripCostBps=18,
-            failureMinimumStateLots=12,
-            failureMinimumCandidateExits=25,
-            failureMinimumCandidateExitsPerFold=6,
-            failureMaximumAuditRows=250,
-        )
-        config = request.failure_config()
-        self.assertEqual(config.mode, "RESEARCH_COMPARE")
-        self.assertEqual(config.maximum_holding_bars, 250)
-        self.assertEqual(config.decision_persistence_bars, 3)
-        self.assertEqual(config.round_trip_cost_bps, 18)
-        self.assertEqual(config.minimum_state_lots, 12)
-        self.assertEqual(config.minimum_candidate_exits, 25)
-        self.assertEqual(config.minimum_candidate_exits_per_fold, 6)
-        self.assertEqual(config.maximum_audit_rows, 250)
-
     def test_entry_signal_fires_only_when_rsi_enters_range(self) -> None:
         values = pd.Series([35.0, 29.0, 25.0, 31.0, 30.0, 29.0])
         self.assertEqual(
@@ -500,7 +485,6 @@ class StrategyLaunchRestrictionTests(unittest.TestCase):
         for strategy_mode, extra in (
             ("rsi_range", {"timeframe": "1d"}),
             ("rsi_recovery", {"timeframe": "5m"}),
-            ("top_5_opening_range_breakout", {"timeframe": "5m"}),
         ):
             with self.subTest(strategyMode=strategy_mode):
                 request = BacktestRequest(symbols=["LUPIN"], strategyMode=strategy_mode, **extra)
@@ -526,7 +510,7 @@ class StrategyLaunchRestrictionTests(unittest.TestCase):
 
     def test_asynchronous_job_endpoint_refuses_every_strategy(self) -> None:
         for strategy_mode, extra in (
-            ("top_5_opening_range_breakout", {"timeframe": "5m"}),
+            ("rsi_recovery", {"timeframe": "5m"}),
             ("ema_vwap_strong_buy", {"timeframe": "5m"}),
         ):
             with self.subTest(strategyMode=strategy_mode):
@@ -534,22 +518,6 @@ class StrategyLaunchRestrictionTests(unittest.TestCase):
                 with self.assertRaises(HTTPException) as caught:
                     start_backtest_job(request)
                 self.assertEqual(caught.exception.status_code, 422)
-
-    def test_asynchronous_job_endpoint_accepts_strong_buy_failure_research(self) -> None:
-        request = BacktestRequest(
-            symbols=["LUPIN"],
-            strategyMode="ema_vwap_strong_buy",
-            timeframe="5m",
-            strongBuyConfiguration={"failureEngineMode": "RESEARCH_COMPARE"},
-        )
-        with (
-            patch("backtest_api.get_store", return_value=self.RefusingStore()),
-            patch("backtest_api._backtest_job_service.start", return_value={"jobId": "research-job"}) as start,
-        ):
-            result = start_backtest_job(request)
-
-        self.assertEqual(result, {"jobId": "research-job"})
-        self.assertEqual(start.call_args.kwargs["symbols_total"], 1)
 
 
 class CacheFreshnessTests(unittest.TestCase):
@@ -615,3 +583,96 @@ class CacheFreshnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeEngine:
+    def __init__(self, status: dict) -> None:
+        self._status = status
+
+    def status(self) -> dict:
+        return self._status
+
+
+class _FakeStore:
+    def universe(self) -> list[str]:
+        return ["RELIANCE", "TCS", "INFY"]
+
+
+class _FakeInstrument:
+    instrument_id = "OKX:BTC-USDT"
+    display_symbol = "BTC/USDT"
+    provider = "OKX"
+    provider_symbol = "BTC-USDT"
+    instrument_type = "SPOT"
+    active = True
+
+
+class _FakeCryptoService:
+    def list_instruments(self) -> list[_FakeInstrument]:
+        return [_FakeInstrument()]
+
+
+class PlatformEndpointTests(unittest.TestCase):
+    """The minimal /platform endpoints that survived the research-platform removal."""
+
+    def test_nse_session_window_is_weekday_market_hours_only(self) -> None:
+        self.assertTrue(_nse_session_is_open(datetime(2026, 9, 1, 10, 0, tzinfo=IST)))   # Tuesday
+        self.assertFalse(_nse_session_is_open(datetime(2026, 9, 1, 16, 0, tzinfo=IST)))  # after close
+        self.assertFalse(_nse_session_is_open(datetime(2026, 9, 5, 10, 0, tzinfo=IST)))  # Saturday
+
+    def test_market_context_reports_sessions_and_never_fabricates_breadth(self) -> None:
+        crypto = platform_market_context("crypto")
+        self.assertEqual(crypto["session"], {"status": "OPEN_24_7", "timezone": "UTC"})
+        self.assertEqual(crypto["breadth"]["status"], "UNSUPPORTED_DATA_REQUIREMENT")
+        nse = platform_market_context("NSE")
+        self.assertIn(nse["session"]["status"], {"OPEN", "CLOSED"})
+        self.assertEqual(nse["session"]["timezone"], "Asia/Kolkata")
+        with self.assertRaises(HTTPException):
+            platform_market_context("FOREX")
+
+    def test_overview_degrades_to_unavailable_when_engine_errors(self) -> None:
+        def broken() -> None:
+            raise RuntimeError("engine offline")
+
+        with patch("backtest_api.get_live_signal_engine", broken):
+            payload = platform_overview()
+        self.assertEqual(payload["dataFreshness"]["status"], "UNAVAILABLE")
+        self.assertEqual(payload["jobStatus"]["status"], "UNAVAILABLE")
+        self.assertTrue(payload["paperOnly"])
+        self.assertFalse(payload["liveOrdersEnabled"])
+
+    def test_overview_marks_fresh_and_stale_data_during_market_hours(self) -> None:
+        fresh = _FakeEngine({"marketSession": "OPEN", "dataAgeSeconds": 120, "engineStatus": "READY", "connectionStatus": "CONNECTED"})
+        with patch("backtest_api.get_live_signal_engine", lambda: fresh):
+            payload = platform_overview()
+        self.assertEqual(payload["dataFreshness"]["status"], "FRESH")
+        self.assertEqual(payload["jobStatus"]["status"], "RUNNING")
+
+        stale = _FakeEngine({"marketSession": "OPEN", "dataAgeSeconds": 3600, "engineStatus": "STOPPED", "connectionStatus": "DISCONNECTED"})
+        with patch("backtest_api.get_live_signal_engine", lambda: stale):
+            payload = platform_overview()
+        self.assertEqual(payload["dataFreshness"]["status"], "STALE")
+        self.assertEqual(payload["jobStatus"]["status"], "STOPPED")
+
+    def test_overview_treats_last_completed_candle_as_current_after_close(self) -> None:
+        closed = _FakeEngine({"marketSession": "CLOSED", "dataAgeSeconds": 40000, "lastCompletedCandle": "2026-09-01T15:25:00+05:30", "engineStatus": "READY"})
+        with patch("backtest_api.get_live_signal_engine", lambda: closed):
+            payload = platform_overview()
+        self.assertEqual(payload["dataFreshness"]["status"], "FRESH")
+        self.assertEqual(payload["dataFreshness"]["reason"], "MARKET_CLOSED_LAST_SESSION_CURRENT")
+
+    def test_instruments_lists_nse_universe_and_crypto_catalog_with_pagination(self) -> None:
+        with patch("backtest_api.get_store", lambda: _FakeStore()):
+            nse = platform_instruments(market="NSE", offset=1, limit=1)
+        self.assertEqual(nse["count"], 3)
+        self.assertEqual([row["symbol"] for row in nse["rows"]], ["TCS"])
+        self.assertEqual(nse["rows"][0]["provider"], "DHAN")
+
+        with patch("backtest_api.get_crypto_market_service", lambda: _FakeCryptoService()):
+            crypto = platform_instruments(market="crypto", offset=0, limit=100)
+        self.assertEqual(crypto["count"], 1)
+        self.assertEqual(crypto["rows"][0]["symbol"], "BTC/USDT")
+        self.assertEqual(crypto["rows"][0]["trading_status"], "ACTIVE")
+
+        with self.assertRaises(HTTPException):
+            platform_instruments(market="FOREX", offset=0, limit=10)

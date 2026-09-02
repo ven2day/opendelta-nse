@@ -55,69 +55,16 @@ from live_signals import (
     LiveSignalSettings,
 )
 from market_data_refresh import MarketDataRefreshService
-from opendelta.core import PlatformSettings
 from opendelta.timescale_market_data import (
     CanonicalCandleWriter,
     TimescaleDualWriter,
     canonical_candles_from_dhan_frame,
     dual_writer_from_environment,
 )
-from opendelta.platform import (
-    PlatformRuntime,
-    create_platform_router,
-    install_platform_observability,
-)
-from opendelta.research import ResearchRequest
-from opendelta.research_v2 import ResearchExperimentRequestV2
-from opendelta.strategy_adapters import rsi_range_entries
 from market_symbol_registry import (
     MarketSymbolRegistry,
     SymbolAlreadyExistsError,
     SymbolNotFoundError,
-)
-from market_aligned_vwap_pullback_scalper import (
-    FEATURE_CODE_VERSION as VWAP_PULLBACK_FEATURE_VERSION,
-    PORTFOLIO_RULE_VERSION as VWAP_PULLBACK_PORTFOLIO_VERSION,
-    SESSION_RULE_VERSION as VWAP_PULLBACK_SESSION_VERSION,
-    STRATEGY_DESCRIPTION as VWAP_PULLBACK_DESCRIPTION,
-    STRATEGY_KEY as VWAP_PULLBACK_STRATEGY_KEY,
-    STRATEGY_NAME as VWAP_PULLBACK_STRATEGY_NAME,
-    STRATEGY_VERSION as VWAP_PULLBACK_STRATEGY_VERSION,
-    VwapPullbackConfig,
-    VwapPullbackResultCache,
-    build_nifty_candidate_context,
-    build_supporting_context as build_vwap_supporting_context,
-    enrich_candidates as enrich_vwap_candidates,
-    execute_portfolio as execute_vwap_portfolio,
-    file_stat_fingerprint as vwap_file_stat_fingerprint,
-    load_sector_mapping as load_vwap_sector_mapping,
-    prepare_symbol_batch as prepare_vwap_symbol_batch,
-    stable_fingerprint as vwap_fingerprint,
-    summarize_results as summarize_vwap_results,
-)
-from daily_scalping_watchlist import (
-    FEATURE_CODE_VERSION as DAILY_WATCHLIST_FEATURE_VERSION,
-    OPENING_RANGE_RULE_VERSION,
-    MINIMUM_UNTOUCHED_VALIDATION_TRADES,
-    PORTFOLIO_RULE_VERSION as DAILY_WATCHLIST_PORTFOLIO_VERSION,
-    SESSION_RULE_VERSION as DAILY_WATCHLIST_SESSION_VERSION,
-    STRATEGY_DESCRIPTION as DAILY_WATCHLIST_DESCRIPTION,
-    STRATEGY_KEY as DAILY_WATCHLIST_STRATEGY_KEY,
-    STRATEGY_NAME as DAILY_WATCHLIST_STRATEGY_NAME,
-    STRATEGY_VERSION as DAILY_WATCHLIST_STRATEGY_VERSION,
-    WATCHLIST_RULE_VERSION,
-    DailyWatchlistConfig,
-    DailyWatchlistResultCache,
-    build_watchlist_history,
-    calculate_watchlist_features,
-    compare_watchlist_variant,
-    execute_portfolio as execute_daily_watchlist_portfolio,
-    file_stat_fingerprint as daily_watchlist_file_fingerprint,
-    prepare_symbol_batch as prepare_daily_watchlist_symbol_batch,
-    select_candidates_for_history,
-    stable_fingerprint as daily_watchlist_fingerprint,
-    summarize_watchlist_history,
-    validation_decision as daily_watchlist_validation_decision,
 )
 from ema_vwap_strong_buy import (
     STRATEGY_DESCRIPTION as STRONG_BUY_DESCRIPTION,
@@ -127,11 +74,6 @@ from ema_vwap_strong_buy import (
     StrongBuyConfig,
     aggregate_strong_buy_results,
     simulate_strong_buy_symbol,
-)
-from trade_failure_engine import (
-    TradeFailureResearchConfig,
-    extract_failure_research_lots,
-    run_trade_failure_research,
 )
 from dhan_oi import build_oi_service_from_environment
 from main import (
@@ -191,7 +133,6 @@ from rsi_exit_optimizer import (
     RsiExitOptimizationGrid,
     evaluate_rsi_exit_grid,
 )
-from stock_scanner import StockScannerService
 from universe_selection import (
     DEFAULT_MAXIMUM_PRICE,
     DEFAULT_MINIMUM_BUY_OBSERVATIONS,
@@ -269,257 +210,6 @@ TIMEFRAMES: dict[str, TimeframeSpec] = {
 }
 
 
-class VwapPullbackConfigurationRequest(BaseModel):
-    """Authoritative configuration for Market-Aligned VWAP Pullback Scalper."""
-
-    executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
-    entryStartTime: str = str(parameter_definition(VWAP_PULLBACK_STRATEGY_KEY, "entryStartTime")["default"])
-    lastEntryTime: str = str(parameter_definition(VWAP_PULLBACK_STRATEGY_KEY, "lastEntryTime")["default"])
-    squareOffTime: str = str(parameter_definition(VWAP_PULLBACK_STRATEGY_KEY, "squareOffTime")["default"])
-    rsiLength: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiLength"))
-    rsiPullbackMinimum: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiPullbackMinimum"))
-    rsiPullbackMaximum: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiPullbackMaximum"))
-    rsiTriggerLevel: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rsiTriggerLevel"))
-    maximumTriggerRsi: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumTriggerRsi"))
-    setupExpiryBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "setupExpiryBars"))
-    emaFast: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "emaFast"))
-    emaSlow: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "emaSlow"))
-    emaSlopeLookbackBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "emaSlopeLookbackBars"))
-    atrLength: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "atrLength"))
-    rvolPeriod: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rvolPeriod"))
-    minimumTriggerRvol: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumTriggerRvol"))
-    pullbackApproachAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "pullbackApproachAtr"))
-    materialBelowEmaAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "materialBelowEmaAtr"))
-    maximumEntryGapAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumEntryGapAtr"))
-    structuralStopBufferAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "structuralStopBufferAtr"))
-    volatilityStopAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "volatilityStopAtr"))
-    minimumStopPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumStopPct"))
-    maximumStopPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumStopPct"))
-    rewardRiskRatio: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rewardRiskRatio"))
-    maximumHoldingBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumHoldingBars"))
-    minimumAverageTradedValue: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumAverageTradedValue"))
-    maximumCandleRangeAtr: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumCandleRangeAtr"))
-    historicalSpreadMode: Literal["ADVISORY"] = "ADVISORY"
-    liveMaximumSpreadPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "liveMaximumSpreadPct"))
-    marketContextFailPolicy: Literal["ADVISORY", "REJECT"] = "ADVISORY"
-    marketContextStaleSeconds: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "marketContextStaleSeconds"))
-    minimumBreadthPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumBreadthPct"))
-    minimumBreadthSymbols: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumBreadthSymbols"))
-    minimumSectorMembers: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumSectorMembers"))
-    minimumSectorBullishPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumSectorBullishPct"))
-    relativeStrengthLookbackBars: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "relativeStrengthLookbackBars"))
-    qualityRvolThreshold: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "qualityRvolThreshold"))
-    enforceMinimumQualityScore: bool = False
-    minimumQualityScore: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "minimumQualityScore"))
-    oiMode: Literal["OFF", "ADVISORY"] = "OFF"
-    oiStaleDataSeconds: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "oiStaleDataSeconds"))
-    positionSizing: Literal["FIXED_QUANTITY", "RISK_BUDGET"] = "FIXED_QUANTITY"
-    quantityPerTrade: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "quantityPerTrade"))
-    rupeeRiskBudget: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "rupeeRiskBudget"))
-    maximumQuantity: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumQuantity"))
-    configuredCapital: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "configuredCapital"))
-    maximumCapitalPerPosition: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumCapitalPerPosition"))
-    maximumTradesPerDay: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumTradesPerDay"))
-    maximumConcurrentTrades: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumConcurrentTrades"))
-    stopAfterDailyLosses: int = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "stopAfterDailyLosses"))
-    maximumDailyLossPct: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "maximumDailyLossPct"))
-    buyCostBps: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "buyCostBps"))
-    sellCostBps: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "sellCostBps"))
-    slippageBps: float = Field(**numeric_field_kwargs(VWAP_PULLBACK_STRATEGY_KEY, "slippageBps"))
-
-    @model_validator(mode="after")
-    def validate_configuration(self) -> "VwapPullbackConfigurationRequest":
-        self.strategy_config().validate()
-        return self
-
-    def strategy_config(self) -> VwapPullbackConfig:
-        return VwapPullbackConfig(
-            execution_model=self.executionModel,
-            entry_start_time=self.entryStartTime,
-            last_entry_time=self.lastEntryTime,
-            square_off_time=self.squareOffTime,
-            rsi_length=self.rsiLength,
-            rsi_pullback_minimum=self.rsiPullbackMinimum,
-            rsi_pullback_maximum=self.rsiPullbackMaximum,
-            rsi_trigger_level=self.rsiTriggerLevel,
-            maximum_trigger_rsi=self.maximumTriggerRsi,
-            setup_expiry_bars=self.setupExpiryBars,
-            ema_fast=self.emaFast,
-            ema_slow=self.emaSlow,
-            ema_slope_lookback_bars=self.emaSlopeLookbackBars,
-            atr_length=self.atrLength,
-            rvol_period=self.rvolPeriod,
-            minimum_trigger_rvol=self.minimumTriggerRvol,
-            pullback_approach_atr=self.pullbackApproachAtr,
-            material_below_ema_atr=self.materialBelowEmaAtr,
-            maximum_entry_gap_atr=self.maximumEntryGapAtr,
-            structural_stop_buffer_atr=self.structuralStopBufferAtr,
-            volatility_stop_atr=self.volatilityStopAtr,
-            minimum_stop_pct=self.minimumStopPct,
-            maximum_stop_pct=self.maximumStopPct,
-            reward_risk_ratio=self.rewardRiskRatio,
-            maximum_holding_bars=self.maximumHoldingBars,
-            minimum_average_traded_value=self.minimumAverageTradedValue,
-            maximum_candle_range_atr=self.maximumCandleRangeAtr,
-            historical_spread_mode=self.historicalSpreadMode,
-            live_maximum_spread_pct=self.liveMaximumSpreadPct,
-            market_context_fail_policy=self.marketContextFailPolicy,
-            market_context_stale_seconds=self.marketContextStaleSeconds,
-            minimum_breadth_pct=self.minimumBreadthPct,
-            minimum_breadth_symbols=self.minimumBreadthSymbols,
-            minimum_sector_members=self.minimumSectorMembers,
-            minimum_sector_bullish_pct=self.minimumSectorBullishPct,
-            relative_strength_lookback_bars=self.relativeStrengthLookbackBars,
-            quality_rvol_threshold=self.qualityRvolThreshold,
-            enforce_minimum_quality_score=self.enforceMinimumQualityScore,
-            minimum_quality_score=self.minimumQualityScore,
-            oi_mode=self.oiMode,
-            oi_stale_data_seconds=self.oiStaleDataSeconds,
-            position_sizing=self.positionSizing,
-            quantity_per_trade=self.quantityPerTrade,
-            rupee_risk_budget=self.rupeeRiskBudget,
-            maximum_quantity=self.maximumQuantity,
-            configured_capital=self.configuredCapital,
-            maximum_capital_per_position=self.maximumCapitalPerPosition,
-            maximum_trades_per_day=self.maximumTradesPerDay,
-            maximum_concurrent_trades=self.maximumConcurrentTrades,
-            stop_after_daily_losses=self.stopAfterDailyLosses,
-            maximum_daily_loss_pct=self.maximumDailyLossPct,
-            buy_cost_bps=self.buyCostBps,
-            sell_cost_bps=self.sellCostBps,
-            slippage_bps=self.slippageBps,
-        )
-
-    def public(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-
-class Top5OpeningRangeBreakoutConfigurationRequest(BaseModel):
-    executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
-    openingRangeStartTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "openingRangeStartTime")["default"])
-    openingRangeEndTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "openingRangeEndTime")["default"])
-    lastEntryTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "lastEntryTime")["default"])
-    squareOffTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "squareOffTime")["default"])
-    rsiLength: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rsiLength"))
-    emaFast: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "emaFast"))
-    emaSlow: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "emaSlow"))
-    atrLength: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "atrLength"))
-    rvolPeriod: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rvolPeriod"))
-    watchlistMode: Literal["FROZEN_OPEN", "ROLLING"] = "FROZEN_OPEN"
-    watchlistSelectionTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistSelectionTime")["default"])
-    watchlistRescanIntervalMinutes: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistRescanIntervalMinutes"))
-    watchlistRescanEndTime: str = str(parameter_definition(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistRescanEndTime")["default"])
-    watchlistSelectedSymbols: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistSelectedSymbols"))
-    watchlistPrimarySymbols: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistPrimarySymbols"))
-    watchlistMinimumPromotionScore: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistMinimumPromotionScore"))
-    watchlistRequiredPromotionAdvantage: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistRequiredPromotionAdvantage"))
-    watchlistMinimumResidenceMinutes: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistMinimumResidenceMinutes"))
-    watchlistMaximumReplacementsPerRescan: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistMaximumReplacementsPerRescan"))
-    watchlistMaximumSymbolsPerSector: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistMaximumSymbolsPerSector"))
-    watchlistHistoricalSessions: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistHistoricalSessions"))
-    watchlistRollingWindowMinutes: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "watchlistRollingWindowMinutes"))
-    openingBreakoutMinimumRvol: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "openingBreakoutMinimumRvol"))
-    rollingBreakoutLookbackBars: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rollingBreakoutLookbackBars"))
-    rollingBreakoutMinimumRvol: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rollingBreakoutMinimumRvol"))
-    rollingMaximumVwapDistanceAtr: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rollingMaximumVwapDistanceAtr"))
-    minimumCloseLocation: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumCloseLocation"))
-    maximumEntryGapAtr: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumEntryGapAtr"))
-    structuralStopBufferAtr: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "structuralStopBufferAtr"))
-    volatilityStopAtr: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "volatilityStopAtr"))
-    minimumStopPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumStopPct"))
-    maximumStopPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumStopPct"))
-    rewardRiskRatio: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "rewardRiskRatio"))
-    maximumHoldingBars: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumHoldingBars"))
-    minimumAverageTradedValue: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumAverageTradedValue"))
-    minimumPrice: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumPrice"))
-    maximumPrice: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumPrice"))
-    minimumMedianDailyTradedValue: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumMedianDailyTradedValue"))
-    minimumOpeningTradedValue: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumOpeningTradedValue"))
-    minimumDailyAtrPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "minimumDailyAtrPct"))
-    maximumDailyAtrPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumDailyAtrPct"))
-    maximumOpeningGapPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumOpeningGapPct"))
-    maximumCandleRangeAtr: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumCandleRangeAtr"))
-    liveMaximumSpreadPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "liveMaximumSpreadPct"))
-    maximumTradesPerSymbolPerDay: Literal[1] = 1
-    quantityPerTrade: Literal[50] = 50
-    configuredCapital: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "configuredCapital"))
-    maximumCapitalPerPosition: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumCapitalPerPosition"))
-    maximumTradesPerDay: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumTradesPerDay"))
-    maximumConcurrentTrades: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumConcurrentTrades"))
-    stopAfterDailyLosses: int = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "stopAfterDailyLosses"))
-    maximumDailyLossPct: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "maximumDailyLossPct"))
-    buyCostBps: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "buyCostBps"))
-    sellCostBps: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "sellCostBps"))
-    slippageBps: float = Field(**numeric_field_kwargs(DAILY_WATCHLIST_STRATEGY_KEY, "slippageBps"))
-
-    @model_validator(mode="after")
-    def validate_configuration(self) -> "Top5OpeningRangeBreakoutConfigurationRequest":
-        self.strategy_config().validate()
-        return self
-
-    def strategy_config(self) -> DailyWatchlistConfig:
-        return DailyWatchlistConfig(
-            execution_model=self.executionModel,
-            opening_range_start_time=self.openingRangeStartTime,
-            opening_range_end_time=self.openingRangeEndTime,
-            last_entry_time=self.lastEntryTime,
-            square_off_time=self.squareOffTime,
-            rsi_length=self.rsiLength,
-            ema_fast=self.emaFast,
-            ema_slow=self.emaSlow,
-            atr_length=self.atrLength,
-            rvol_period=self.rvolPeriod,
-            mode=self.watchlistMode,
-            selection_time=self.watchlistSelectionTime,
-            rescan_interval_minutes=self.watchlistRescanIntervalMinutes,
-            rescan_end_time=self.watchlistRescanEndTime,
-            selected_symbols=self.watchlistSelectedSymbols,
-            primary_symbols=self.watchlistPrimarySymbols,
-            minimum_promotion_score=self.watchlistMinimumPromotionScore,
-            required_promotion_advantage=self.watchlistRequiredPromotionAdvantage,
-            minimum_residence_minutes=self.watchlistMinimumResidenceMinutes,
-            maximum_replacements_per_rescan=self.watchlistMaximumReplacementsPerRescan,
-            maximum_symbols_per_sector=self.watchlistMaximumSymbolsPerSector,
-            historical_sessions=self.watchlistHistoricalSessions,
-            rolling_window_minutes=self.watchlistRollingWindowMinutes,
-            breakout_lookback_bars=self.rollingBreakoutLookbackBars,
-            breakout_minimum_rvol=self.rollingBreakoutMinimumRvol,
-            maximum_vwap_distance_atr=self.rollingMaximumVwapDistanceAtr,
-            maximum_trades_per_symbol_per_day=self.maximumTradesPerSymbolPerDay,
-            opening_breakout_minimum_rvol=self.openingBreakoutMinimumRvol,
-            minimum_close_location=self.minimumCloseLocation,
-            maximum_entry_gap_atr=self.maximumEntryGapAtr,
-            structural_stop_buffer_atr=self.structuralStopBufferAtr,
-            volatility_stop_atr=self.volatilityStopAtr,
-            minimum_stop_pct=self.minimumStopPct,
-            maximum_stop_pct=self.maximumStopPct,
-            reward_risk_ratio=self.rewardRiskRatio,
-            maximum_holding_bars=self.maximumHoldingBars,
-            minimum_average_traded_value=self.minimumAverageTradedValue,
-            minimum_price=self.minimumPrice,
-            maximum_price=self.maximumPrice,
-            minimum_median_daily_traded_value=self.minimumMedianDailyTradedValue,
-            minimum_opening_traded_value=self.minimumOpeningTradedValue,
-            minimum_daily_atr_pct=self.minimumDailyAtrPct,
-            maximum_daily_atr_pct=self.maximumDailyAtrPct,
-            maximum_opening_gap_pct=self.maximumOpeningGapPct,
-            maximum_candle_range_atr=self.maximumCandleRangeAtr,
-            live_maximum_spread_pct=self.liveMaximumSpreadPct,
-            quantity_per_trade=self.quantityPerTrade,
-            configured_capital=self.configuredCapital,
-            maximum_capital_per_position=self.maximumCapitalPerPosition,
-            maximum_trades_per_day=self.maximumTradesPerDay,
-            maximum_concurrent_trades=self.maximumConcurrentTrades,
-            stop_after_daily_losses=self.stopAfterDailyLosses,
-            maximum_daily_loss_pct=self.maximumDailyLossPct,
-            buy_cost_bps=self.buyCostBps,
-            sell_cost_bps=self.sellCostBps,
-            slippage_bps=self.slippageBps,
-        )
-
-    def public(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
 ANNUALIZATION = {
     "5m": 252 * 75,
     "15m": 252 * 25,
@@ -538,9 +228,6 @@ class BacktestHistorySaveRequest(BaseModel):
         "rsi_range",
         "rsi_recovery",
         "ema_vwap_strong_buy",
-        "top_5_opening_range_breakout",
-        "daily_scalping_watchlist",
-        "market_aligned_vwap_pullback_scalper",
         "market_aligned_rsi_scalper",
     ]
     strategyName: str = Field(min_length=1, max_length=120)
@@ -571,28 +258,10 @@ class StrongBuyConfigurationRequest(BaseModel):
     minimumQuantity: int = Field(default=1, ge=1, le=1_000_000)
     maximumEntriesPerCycle: int = Field(default=10, ge=1, le=100)
     executionModel: Literal["NEXT_BAR_OPEN"] = "NEXT_BAR_OPEN"
-    failureEngineMode: Literal["OFF", "RESEARCH_COMPARE"] = "OFF"
-    failureMaximumHoldingBars: int = Field(default=375, ge=1, le=10_000)
-    failureSupportLookbackBars: int = Field(default=20, ge=2, le=1_000)
-    failureEmaSlopeLookbackBars: int = Field(default=3, ge=1, le=100)
-    failureProgressLookbackBars: int = Field(default=6, ge=1, le=1_000)
-    failureMinimumProgressFraction: float = Field(default=0.25, gt=0, le=1)
-    failureDecisionPersistenceBars: int = Field(default=2, ge=1, le=100)
-    failureMinimumFailedGroups: int = Field(default=2, ge=1, le=3)
-    failureRoundTripCostBps: float = Field(default=14.0, ge=0, le=10_000)
-    failurePriorObservations: float = Field(default=20.0, gt=0, le=1_000_000)
-    failureWalkForwardFolds: int = Field(default=2, ge=1, le=10)
-    failureMinimumTrainingLots: int = Field(default=30, ge=1, le=1_000_000)
-    failureMinimumTestLots: int = Field(default=10, ge=1, le=1_000_000)
-    failureMinimumStateLots: int = Field(default=10, ge=1, le=1_000_000)
-    failureMinimumCandidateExits: int = Field(default=20, ge=1, le=1_000_000)
-    failureMinimumCandidateExitsPerFold: int = Field(default=5, ge=1, le=1_000_000)
-    failureMaximumAuditRows: int = Field(default=5_000, ge=1, le=100_000)
 
     @model_validator(mode="after")
     def validate_configuration(self) -> "StrongBuyConfigurationRequest":
         self.strategy_config().validate()
-        self.failure_config().validate()
         return self
 
     def strategy_config(self) -> StrongBuyConfig:
@@ -609,35 +278,14 @@ class StrongBuyConfigurationRequest(BaseModel):
             maximum_entries_per_cycle=self.maximumEntriesPerCycle,
         )
 
-    def failure_config(self) -> TradeFailureResearchConfig:
-        return TradeFailureResearchConfig(
-            mode=self.failureEngineMode,
-            maximum_holding_bars=self.failureMaximumHoldingBars,
-            support_lookback_bars=self.failureSupportLookbackBars,
-            ema_slope_lookback_bars=self.failureEmaSlopeLookbackBars,
-            progress_lookback_bars=self.failureProgressLookbackBars,
-            minimum_progress_fraction=self.failureMinimumProgressFraction,
-            decision_persistence_bars=self.failureDecisionPersistenceBars,
-            minimum_failed_groups=self.failureMinimumFailedGroups,
-            round_trip_cost_bps=self.failureRoundTripCostBps,
-            prior_observations=self.failurePriorObservations,
-            walk_forward_folds=self.failureWalkForwardFolds,
-            minimum_training_lots=self.failureMinimumTrainingLots,
-            minimum_test_lots=self.failureMinimumTestLots,
-            minimum_state_lots=self.failureMinimumStateLots,
-            minimum_candidate_exits=self.failureMinimumCandidateExits,
-            minimum_candidate_exits_per_fold=self.failureMinimumCandidateExitsPerFold,
-            maximum_audit_rows=self.failureMaximumAuditRows,
-        )
-
 
 class BacktestRequest(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=MAX_SYMBOLS_PER_RUN)
     strategyMode: Literal[
-        "rsi_range", "rsi_recovery", "ema_vwap_strong_buy", "top_5_opening_range_breakout",
+        "rsi_range", "rsi_recovery", "ema_vwap_strong_buy",
     ] = "rsi_range"
     strategyKey: Literal[
-        "rsi_range", "rsi_recovery", "ema_vwap_strong_buy", "top_5_opening_range_breakout",
+        "rsi_range", "rsi_recovery", "ema_vwap_strong_buy",
     ] | None = None
     universeMode: Literal["selected", "all"] = "selected"
     runId: str | None = Field(default=None, min_length=1, max_length=80)
@@ -712,9 +360,6 @@ class BacktestRequest(BaseModel):
     oiStronglyBullishThreshold: float = Field(default=60, ge=-100, le=100)
     oiElevatedQualityThreshold: float = Field(default=95, ge=0, le=100)
     oiFailPolicy: Literal["SKIP", "ALLOW"] = "SKIP"
-    top5OpeningRangeBreakoutConfiguration: Top5OpeningRangeBreakoutConfigurationRequest = Field(
-        default_factory=Top5OpeningRangeBreakoutConfigurationRequest
-    )
     strongBuyConfiguration: StrongBuyConfigurationRequest = Field(
         default_factory=StrongBuyConfigurationRequest
     )
@@ -760,12 +405,6 @@ class BacktestRequest(BaseModel):
             if self.timeframe != "5m":
                 raise ValueError("EMA/VWAP Strong Buy requires completed 5-minute candles")
             self.strongBuyConfiguration.validate_configuration()
-            return self
-
-        if self.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
-            if self.timeframe != "5m":
-                raise ValueError("Top-5 Opening Range Breakout requires completed 5-minute candles")
-            self.top5OpeningRangeBreakoutConfiguration.validate_configuration()
             return self
 
         if (
@@ -1303,7 +942,8 @@ def _fee(turnover: float) -> float:
 
 
 def _entry_signal(rsi: pd.Series, low: float, high: float) -> pd.Series:
-    return rsi_range_entries(rsi, low, high)
+    inside = rsi.between(low, high, inclusive="both").fillna(False)
+    return inside & ~inside.shift(1, fill_value=False)
 
 
 def _resample_session(frame: pd.DataFrame, target_minutes: int, base_minutes: int) -> pd.DataFrame:
@@ -2501,1023 +2141,12 @@ def run_rsi_exit_comparison(
     return payload
 
 
-def _vwap_support_plan(
-    *,
-    universe: set[str],
-    requested_symbols: list[str],
-    config: VwapPullbackConfig,
-    sector_by_symbol: Mapping[str, str],
-    breadth_file: Path | None,
-) -> dict[str, Any]:
-    configured_breadth = _support_symbols_from_file(breadth_file)
-    breadth_pool = [
-        symbol for symbol in (configured_breadth or sorted(universe))
-        if symbol in universe
-    ]
-    breadth_symbols = _evenly_spaced_symbols(
-        breadth_pool,
-        max(config.minimum_breadth_symbols, 50),
-    )
-    requested_sectors = {
-        sector_by_symbol.get(symbol)
-        for symbol in requested_symbols
-        if sector_by_symbol.get(symbol)
-    }
-    sector_symbols = sorted({
-        symbol
-        for symbol, sector in sector_by_symbol.items()
-        if symbol in universe and sector in requested_sectors
-    })
-    return {
-        "breadthSymbols": breadth_symbols,
-        "sectorSymbols": sector_symbols,
-        "allSymbols": sorted(set(breadth_symbols) | set(sector_symbols)),
-        "breadthSource": (
-            str(breadth_file)
-            if configured_breadth and breadth_file is not None
-            else "DETERMINISTIC_LOCAL_UNIVERSE_SAMPLE"
-        ),
-    }
-
-
-def _local_nifty_candles(
-    store: HistoricalDataStore,
-    duration_years: int,
-    analysis_start: datetime,
-    now: datetime,
-) -> pd.DataFrame:
-    path = store._cache_path("NIFTY50", "5", duration_years)
-    if not path.is_file():
-        return pd.DataFrame()
-    raw = pd.read_csv(path, index_col="Timestamp", parse_dates=["Timestamp"])
-    raw.index = pd.DatetimeIndex(raw.index)
-    raw.index = raw.index.tz_localize(IST) if raw.index.tz is None else raw.index.tz_convert(IST)
-    return prepare_candles(raw, "5m", analysis_start, now, warmup_bars=100)
-
-
-def _vwap_period_metrics(
-    trades: Sequence[Mapping[str, Any]],
-    start: datetime,
-    end: datetime,
-) -> dict[str, Any]:
-    selected = [
-        item for item in trades
-        if _as_ist_timestamp(item["entryTimestamp"]) >= start
-        and _as_ist_timestamp(item["entryTimestamp"]) < end
-    ]
-    net = [float(item["netPnl"]) for item in selected]
-    winners = [value for value in net if value > 0]
-    losers = [value for value in net if value < 0]
-    gross_loss = abs(sum(losers))
-    cumulative = np.cumsum(np.asarray(net, dtype=float)) if net else np.asarray([], dtype=float)
-    equity = np.concatenate(([0.0], cumulative))
-    peaks = np.maximum.accumulate(equity)
-    maximum_drawdown = float(np.max(peaks - equity)) if len(equity) else 0.0
-    consecutive = 0
-    maximum_consecutive = 0
-    for value in net:
-        consecutive = consecutive + 1 if value < 0 else 0
-        maximum_consecutive = max(maximum_consecutive, consecutive)
-    return {
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "trades": len(selected),
-        "winRate": round(len(winners) / len(selected) * 100.0, 2) if selected else 0.0,
-        "averageWinner": round(float(np.mean(winners)), 2) if winners else None,
-        "averageLoser": round(float(np.mean(losers)), 2) if losers else None,
-        "netPnlAfterCosts": round(sum(net), 2),
-        "expectancy": round(float(np.mean(net)), 2) if net else None,
-        "profitFactor": round(sum(winners) / gross_loss, 4) if gross_loss else None,
-        "maximumDrawdown": round(maximum_drawdown, 2),
-        "averageR": round(float(np.mean([float(item["rMultiple"]) for item in selected])), 6) if selected else None,
-        "maximumConsecutiveLosses": maximum_consecutive,
-        "tradesPerDay": round(len(selected) / max((end.date() - start.date()).days, 1), 6),
-    }
-
-
-def _as_ist_timestamp(value: Any) -> datetime:
-    stamp = pd.Timestamp(value)
-    if stamp.tzinfo is None:
-        stamp = stamp.tz_localize(IST)
-    else:
-        stamp = stamp.tz_convert(IST)
-    return stamp.to_pydatetime()
-
-
-def _vwap_walk_forward(
-    trades: Sequence[Mapping[str, Any]],
-    analysis_start: datetime,
-    analysis_end: datetime,
-    duration_years: int,
-) -> dict[str, Any]:
-    folds: list[dict[str, Any]] = []
-    if duration_years == 1:
-        validation_start = (pd.Timestamp(analysis_start) + pd.DateOffset(months=9)).to_pydatetime()
-        folds.append({
-            "development": _vwap_period_metrics(trades, analysis_start, validation_start),
-            "validation": _vwap_period_metrics(trades, validation_start, analysis_end),
-        })
-        method = "First 9 months development; final 3 months untouched validation"
-    else:
-        cursor = pd.Timestamp(analysis_start)
-        end = pd.Timestamp(analysis_end)
-        while cursor + pd.DateOffset(months=15) <= end:
-            validation_start = cursor + pd.DateOffset(months=12)
-            validation_end = validation_start + pd.DateOffset(months=3)
-            folds.append({
-                "development": _vwap_period_metrics(
-                    trades, cursor.to_pydatetime(), validation_start.to_pydatetime()
-                ),
-                "validation": _vwap_period_metrics(
-                    trades, validation_start.to_pydatetime(), validation_end.to_pydatetime()
-                ),
-            })
-            cursor += pd.DateOffset(months=3)
-        method = "12 months development; 3 months validation; roll forward by 3 months"
-    return {
-        "method": method,
-        "parametersOptimizedOnValidation": False,
-        "folds": folds,
-        "label": "Research candidate — paper trading required",
-    }
-
-
-def run_vwap_pullback_backtest(
-    request: BacktestRequest,
-    store: HistoricalDataStore,
-    now_ist: datetime | None = None,
-    progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    cancel_event: threading.Event | None = None,
-) -> dict[str, Any]:
-    raise ValueError("Retired strategy - Market-Aligned VWAP Pullback Scalper cannot run again")
-
-    # Retained temporarily below solely to preserve source-level recovery history.
-    # The active request schema and dispatcher cannot reach this retired code.
-    started_clock = time.perf_counter()
-    started_at = datetime.now(IST)
-    now = (now_ist or started_at).astimezone(IST)
-    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
-    run_id = request.runId or str(uuid.uuid4())
-    requested = request.vwapPullbackConfiguration
-    config = requested.strategy_config().validate()
-    universe = set(store.universe())
-    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
-    if unavailable:
-        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
-
-    sector_value = (
-        os.environ.get("MARKET_CONTEXT_SECTOR_MAP_FILE")
-        or os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
-    )
-    breadth_value = (
-        os.environ.get("MARKET_CONTEXT_BREADTH_UNIVERSE_FILE")
-        or os.environ.get("MARKET_ALIGNED_BREADTH_UNIVERSE_FILE")
-    )
-    sector_path = Path(sector_value).expanduser() if sector_value else None
-    breadth_path = Path(breadth_value).expanduser() if breadth_value else None
-    if sector_path is not None and not sector_path.is_absolute():
-        raise ValueError("MARKET_CONTEXT_SECTOR_MAP_FILE must be an absolute path")
-    if breadth_path is not None and not breadth_path.is_absolute():
-        raise ValueError("MARKET_CONTEXT_BREADTH_UNIVERSE_FILE must be an absolute path")
-    sector_by_symbol = load_vwap_sector_mapping(sector_path)
-    support_plan = _vwap_support_plan(
-        universe=universe,
-        requested_symbols=request.symbols,
-        config=config,
-        sector_by_symbol=sector_by_symbol,
-        breadth_file=breadth_path,
-    )
-
-    raw_paths = {
-        symbol: store._cache_path(symbol, "5", request.durationYears)
-        for symbol in sorted(set(request.symbols) | set(support_plan["allSymbols"]))
-    }
-    configuration_hash = vwap_fingerprint(requested.public())
-    fingerprint = vwap_fingerprint({
-        "strategyKey": VWAP_PULLBACK_STRATEGY_KEY,
-        "strategyVersion": VWAP_PULLBACK_STRATEGY_VERSION,
-        "featureVersion": VWAP_PULLBACK_FEATURE_VERSION,
-        "sessionVersion": VWAP_PULLBACK_SESSION_VERSION,
-        "portfolioVersion": VWAP_PULLBACK_PORTFOLIO_VERSION,
-        "configuration": requested.public(),
-        "symbols": request.symbols,
-        "universeMode": request.universeMode,
-        "durationYears": request.durationYears,
-        "analysisStartCompletedBucket": pd.Timestamp(analysis_start).floor("5min").isoformat(),
-        "analysisEndCompletedBucket": pd.Timestamp(now).floor("5min").isoformat(),
-        "timeframe": request.timeframe,
-        "executionModel": requested.executionModel,
-        "data": {symbol: vwap_file_stat_fingerprint(path) for symbol, path in raw_paths.items()},
-        "nifty": vwap_file_stat_fingerprint(store._cache_path("NIFTY50", "5", request.durationYears)),
-        "sector": vwap_file_stat_fingerprint(sector_path),
-        "breadth": vwap_file_stat_fingerprint(breadth_path),
-        "oi": "OFF" if config.oi_mode == "OFF" else "POINT_IN_TIME_REPOSITORY",
-    })
-    result_cache = VwapPullbackResultCache(
-        store.cache_directory / "vwap-pullback-results-v2"
-    )
-    if request.cachePolicy == "USE_CACHE":
-        cached = result_cache.load(fingerprint)
-        if cached is not None:
-            return cached
-
-    worker_limit = max(
-        1,
-        min(int(os.environ.get("BACKTEST_WORKERS", str(_market_worker_default()))), 8),
-    )
-    workers = min(worker_limit, len(request.symbols))
-    feature_root = store.cache_directory / "vwap-pullback-features-v2"
-    common = {
-        "cacheDirectory": str(store.cache_directory),
-        "featureCacheDirectory": str(feature_root),
-        "config": config,
-        "durationYears": request.durationYears,
-        "analysisStart": analysis_start,
-        "now": now,
-    }
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "STOCK_FEATURES_AND_PULLBACKS",
-            "symbolsCompleted": 0,
-            "symbolsTotal": len(request.symbols),
-            "workersActive": workers,
-        })
-    rows = _execute_market_batches(
-        [{**common, "symbol": symbol, "detectCandidates": True} for symbol in request.symbols],
-        workers,
-        prepare_vwap_symbol_batch,
-        cancel_event=cancel_event,
-        progress_callback=(
-            lambda completed: progress_callback({
-                "currentStage": "STOCK_FEATURES_AND_PULLBACKS",
-                "symbolsCompleted": completed,
-                "symbolsTotal": len(request.symbols),
-                "workersActive": workers,
-            }) if progress_callback is not None else None
-        ),
-    )
-    prepared = [row["item"] for row in rows if row.get("item") is not None]
-    errors = [row["error"] for row in rows if row.get("error") is not None]
-    support_errors: list[dict[str, str]] = []
-    feature_paths = {str(item["symbol"]): str(item["featurePath"]) for item in prepared}
-    symbol_results = [item["result"] for item in prepared if item.get("result") is not None]
-    candidates = [candidate for result in symbol_results for candidate in result.get("candidates", [])]
-    support_symbols = [symbol for symbol in support_plan["allSymbols"] if symbol not in feature_paths]
-    if support_symbols:
-        support_workers = max(1, min(worker_limit, len(support_symbols)))
-        if progress_callback is not None:
-            progress_callback({
-                "currentStage": "SUPPORTING_MARKET_FEATURES",
-                "symbolsCompleted": len(request.symbols),
-                "symbolsTotal": len(request.symbols),
-                "supportSymbolsCompleted": 0,
-                "supportSymbolsTotal": len(support_symbols),
-                "candidatesFound": len(candidates),
-                "workersActive": support_workers,
-            })
-        support_rows = _execute_market_batches(
-            [{**common, "symbol": symbol, "detectCandidates": False} for symbol in support_symbols],
-            support_workers,
-            prepare_vwap_symbol_batch,
-            cancel_event=cancel_event,
-        )
-        feature_paths.update({
-            str(row["item"]["symbol"]): str(row["item"]["featurePath"])
-            for row in support_rows if row.get("item") is not None
-        })
-        support_errors.extend(
-            row["error"] for row in support_rows if row.get("error") is not None
-        )
-
-    def unique_error_rows(values: Sequence[dict[str, str]]) -> list[dict[str, str]]:
-        unique: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        for error in values:
-            key = (str(error.get("symbol") or ""), str(error.get("message") or ""))
-            if key not in seen:
-                unique.append(error)
-                seen.add(key)
-        return unique
-
-    errors = unique_error_rows(errors)
-    support_errors = unique_error_rows(support_errors)
-    if cancel_event is not None and cancel_event.is_set():
-        raise BacktestCancelledError("Backtest cancellation requested")
-
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "POINT_IN_TIME_MARKET_CONTEXT",
-            "symbolsCompleted": len(request.symbols),
-            "symbolsTotal": len(request.symbols),
-            "candlesProcessed": sum(int(item["metrics"].get("candles", 0)) for item in prepared),
-            "candidatesFound": len(candidates),
-            "workersActive": 1,
-        })
-    nifty = _local_nifty_candles(store, request.durationYears, analysis_start, now)
-    nifty_context = build_nifty_candidate_context(nifty, candidates, config)
-    support_context = build_vwap_supporting_context(
-        candidates,
-        feature_paths_by_symbol=feature_paths,
-        breadth_symbols=support_plan["breadthSymbols"],
-        sector_by_symbol=sector_by_symbol,
-        config=config,
-    )
-    oi_repository = None
-    if config.oi_mode == "ADVISORY":
-        try:
-            oi_repository = get_oi_repository()
-        except (OSError, RuntimeError, ValueError):
-            oi_repository = None
-    enriched = enrich_vwap_candidates(
-        candidates,
-        nifty_by_candidate=nifty_context,
-        support_by_candidate=support_context,
-        config=config,
-        oi_repository=oi_repository,
-    )
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "CHRONOLOGICAL_PORTFOLIO",
-            "symbolsCompleted": len(request.symbols),
-            "symbolsTotal": len(request.symbols),
-            "candidatesFound": len(enriched),
-            "acceptedSignals": sum(not item.get("primaryReason") for item in enriched),
-            "workersActive": 1,
-        })
-    trades, rejected = execute_vwap_portfolio(enriched, config)
-    by_symbol_candidates: dict[str, list[dict[str, Any]]] = {}
-    by_symbol_trades: dict[str, list[dict[str, Any]]] = {}
-    by_symbol_rejected: dict[str, list[dict[str, Any]]] = {}
-    for candidate in enriched:
-        by_symbol_candidates.setdefault(str(candidate["symbol"]), []).append(candidate)
-    for trade in trades:
-        by_symbol_trades.setdefault(str(trade["symbol"]), []).append(trade)
-    for candidate in rejected:
-        by_symbol_rejected.setdefault(str(candidate["symbol"]), []).append(candidate)
-    results = []
-    for result in symbol_results:
-        symbol = str(result["symbol"])
-        results.append({
-            **{key: value for key, value in result.items() if key not in {"candidates", "events"}},
-            "rawCandidates": len(by_symbol_candidates.get(symbol, [])),
-            "executedTrades": len(by_symbol_trades.get(symbol, [])),
-            "trades": by_symbol_trades.get(symbol, []),
-            "candidateDiagnostics": by_symbol_candidates.get(symbol, []),
-            "skippedCandidates": by_symbol_rejected.get(symbol, []),
-        })
-    summary = summarize_vwap_results(symbol_results, enriched, trades, rejected, config)
-    completed_at = datetime.now(IST)
-    response = {
-        "metadata": {
-            "runId": run_id,
-            "strategyMode": VWAP_PULLBACK_STRATEGY_KEY,
-            "strategyKey": VWAP_PULLBACK_STRATEGY_KEY,
-            "strategyName": VWAP_PULLBACK_STRATEGY_NAME,
-            "strategyDescription": VWAP_PULLBACK_DESCRIPTION,
-            "strategyVersion": VWAP_PULLBACK_STRATEGY_VERSION,
-            "featureCodeVersion": VWAP_PULLBACK_FEATURE_VERSION,
-            "sessionRuleVersion": VWAP_PULLBACK_SESSION_VERSION,
-            "portfolioRuleVersion": VWAP_PULLBACK_PORTFOLIO_VERSION,
-            "startedAt": started_at.isoformat(),
-            "completedAt": completed_at.isoformat(),
-            "generatedAt": completed_at.isoformat(),
-            "analysisStart": analysis_start.isoformat(),
-            "analysisEnd": now.isoformat(),
-            "durationYears": request.durationYears,
-            "timeframe": request.timeframe,
-            "universeMode": request.universeMode,
-            "symbolsRequested": len(request.symbols),
-            "symbolsProcessed": len(results),
-            "symbolsFailed": len(errors),
-            "workerCount": workers,
-            "runtimeSeconds": round(time.perf_counter() - started_clock, 4),
-            "configuration": requested.public(),
-            "effectiveConfiguration": requested.public(),
-            "configurationHash": configuration_hash,
-            "fingerprint": fingerprint,
-            "dataSnapshot": fingerprint,
-            "cachedResult": False,
-            "resultSource": "FRESH_CALCULATION",
-            "researchLabel": "Research candidate — paper trading required",
-            "historicalSpread": "UNAVAILABLE_ADVISORY",
-            "supportingData": {
-                "sectorMappingFile": str(sector_path) if sector_path else None,
-                "breadthSource": support_plan["breadthSource"],
-                "breadthSymbols": len(support_plan["breadthSymbols"]),
-                "sectorSymbols": len(support_plan["sectorSymbols"]),
-                "supportSymbolsUnavailable": len(support_errors),
-            },
-        },
-        "summary": summary,
-        "results": results,
-        "trades": trades,
-        "rejectedCandidates": rejected,
-        "walkForwardValidation": _vwap_walk_forward(
-            trades, analysis_start, now, request.durationYears
-        ),
-        "errors": errors,
-        "supportingDataErrors": support_errors,
-        "warnings": [
-            "Signals and indicators use completed candles; NEXT_BAR_OPEN entries do not use the entry candle for signal decisions.",
-            "Historical bid/ask spread is unavailable and is not fabricated.",
-            "Sector, breadth, relative strength, and optional OI affect quality diagnostics or ranking; they are not mandatory gates by default.",
-            "The current symbol universe introduces survivorship bias. Past performance does not guarantee future returns.",
-            "Research candidate — paper trading required.",
-        ],
-    }
-    response["metadata"]["resultCacheBytes"] = result_cache.save(fingerprint, response)
-    return response
-
-
-def _local_top_5_opening_range_nifty(
-    store: HistoricalDataStore,
-    duration_years: int,
-    analysis_start: datetime,
-    now: datetime,
-) -> pd.DataFrame:
-    path = store._cache_path("NIFTY50", "5", duration_years)
-    if not path.is_file():
-        return pd.DataFrame()
-    raw = pd.read_csv(path, index_col="Timestamp", parse_dates=["Timestamp"])
-    raw.index = pd.DatetimeIndex(raw.index)
-    raw.index = raw.index.tz_localize(IST) if raw.index.tz is None else raw.index.tz_convert(IST)
-    return prepare_candles(raw, "5m", analysis_start, now, warmup_bars=2_000)
-
-
-def run_top_5_opening_range_breakout_backtest(
-    request: BacktestRequest,
-    store: HistoricalDataStore,
-    now_ist: datetime | None = None,
-    progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    cancel_event: threading.Event | None = None,
-) -> dict[str, Any]:
-    started_clock = time.perf_counter()
-    started_at = datetime.now(IST)
-    now = (now_ist or started_at).astimezone(IST)
-    analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
-    run_id = request.runId or str(uuid.uuid4())
-    requested = request.top5OpeningRangeBreakoutConfiguration
-    config = requested.strategy_config().validate()
-    universe = set(store.universe())
-    unavailable = [symbol for symbol in request.symbols if symbol not in universe]
-    if unavailable:
-        raise ValueError("Symbols are not in symbols.csv: " + ", ".join(unavailable))
-
-    sector_value = (
-        os.environ.get("MARKET_CONTEXT_SECTOR_MAP_FILE")
-        or os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
-    )
-    sector_path = Path(sector_value).expanduser() if sector_value else None
-    if sector_path is not None and not sector_path.is_absolute():
-        raise ValueError("MARKET_CONTEXT_SECTOR_MAP_FILE must be an absolute path")
-    sector_by_symbol = load_vwap_sector_mapping(sector_path)
-    requested_sectors = {
-        sector_by_symbol.get(symbol)
-        for symbol in request.symbols
-        if sector_by_symbol.get(symbol)
-    }
-    support_symbols = sorted({
-        symbol for symbol, sector in sector_by_symbol.items()
-        if symbol in universe and sector in requested_sectors and symbol not in request.symbols
-    })
-    all_data_symbols = sorted(set(request.symbols) | set(support_symbols))
-    raw_paths = {
-        symbol: store._cache_path(symbol, "5", request.durationYears)
-        for symbol in all_data_symbols
-    }
-    configuration_hash = daily_watchlist_fingerprint(requested.public())
-    fingerprint = daily_watchlist_fingerprint({
-        "strategyKey": DAILY_WATCHLIST_STRATEGY_KEY,
-        "strategyVersion": DAILY_WATCHLIST_STRATEGY_VERSION,
-        "featureVersion": DAILY_WATCHLIST_FEATURE_VERSION,
-        "sessionVersion": DAILY_WATCHLIST_SESSION_VERSION,
-        "portfolioVersion": DAILY_WATCHLIST_PORTFOLIO_VERSION,
-        "watchlistVersion": WATCHLIST_RULE_VERSION,
-        "openingRangeVersion": OPENING_RANGE_RULE_VERSION,
-        "configuration": requested.public(),
-        "symbols": request.symbols,
-        "universeMode": request.universeMode,
-        "durationYears": request.durationYears,
-        "timeframe": request.timeframe,
-        "analysisStart": pd.Timestamp(analysis_start).floor("5min").isoformat(),
-        "analysisEnd": pd.Timestamp(now).floor("5min").isoformat(),
-        "data": {
-            symbol: daily_watchlist_file_fingerprint(path)
-            for symbol, path in raw_paths.items()
-        },
-        "nifty": daily_watchlist_file_fingerprint(
-            store._cache_path("NIFTY50", "5", request.durationYears)
-        ),
-        "sector": daily_watchlist_file_fingerprint(sector_path),
-    })
-    result_cache = DailyWatchlistResultCache(
-        store.cache_directory / "top-5-opening-range-breakout-results-v1"
-    )
-    if request.cachePolicy == "USE_CACHE":
-        cached = result_cache.load(fingerprint)
-        if cached is not None:
-            return cached
-
-    worker_limit = max(
-        1,
-        min(int(os.environ.get("BACKTEST_WORKERS", str(_market_worker_default()))), 8),
-    )
-    feature_root = store.cache_directory / "top-5-opening-range-breakout-features-v1"
-    common = {
-        "cacheDirectory": str(store.cache_directory),
-        "featureCacheDirectory": str(feature_root),
-        "config": config,
-        "durationYears": request.durationYears,
-        "analysisStart": analysis_start,
-        "now": now,
-    }
-    workers = max(1, min(worker_limit, len(request.symbols)))
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "TOP_5_OPENING_RANGE_STOCK_FEATURES",
-            "symbolsCompleted": 0,
-            "symbolsTotal": len(request.symbols),
-            "workersActive": workers,
-        })
-    rows = _execute_market_batches(
-        [{**common, "symbol": symbol, "detectCandidates": True} for symbol in request.symbols],
-        workers,
-        prepare_daily_watchlist_symbol_batch,
-        cancel_event=cancel_event,
-        progress_callback=(
-            lambda completed: progress_callback({
-                "currentStage": "TOP_5_OPENING_RANGE_STOCK_FEATURES",
-                "symbolsCompleted": completed,
-                "symbolsTotal": len(request.symbols),
-                "workersActive": workers,
-            }) if progress_callback is not None else None
-        ),
-    )
-    prepared = [row["item"] for row in rows if row.get("item") is not None]
-    errors = [row["error"] for row in rows if row.get("error") is not None]
-    feature_paths = {str(item["symbol"]): str(item["featurePath"]) for item in prepared}
-    opening_candidates = [
-        candidate for item in prepared for candidate in item.get("openingCandidates", [])
-    ]
-    midday_candidates = [
-        candidate for item in prepared for candidate in item.get("middayCandidates", [])
-    ]
-    missing_support = [symbol for symbol in support_symbols if symbol not in feature_paths]
-    support_errors: list[dict[str, str]] = []
-    if missing_support:
-        support_workers = max(1, min(worker_limit, len(missing_support)))
-        if progress_callback is not None:
-            progress_callback({
-                "currentStage": "TOP_5_OPENING_RANGE_SECTOR_CONTEXT",
-                "symbolsCompleted": len(request.symbols),
-                "symbolsTotal": len(request.symbols),
-                "supportSymbolsCompleted": 0,
-                "supportSymbolsTotal": len(missing_support),
-                "workersActive": support_workers,
-            })
-        support_rows = _execute_market_batches(
-            [{**common, "symbol": symbol, "detectCandidates": False} for symbol in missing_support],
-            support_workers,
-            prepare_daily_watchlist_symbol_batch,
-            cancel_event=cancel_event,
-        )
-        feature_paths.update({
-            str(row["item"]["symbol"]): str(row["item"]["featurePath"])
-            for row in support_rows if row.get("item") is not None
-        })
-        support_errors = [row["error"] for row in support_rows if row.get("error") is not None]
-    if cancel_event is not None and cancel_event.is_set():
-        raise BacktestCancelledError("Backtest cancellation requested")
-
-    opening_minutes = (
-        datetime_time.fromisoformat(config.selection_time).hour * 60
-        + datetime_time.fromisoformat(config.selection_time).minute
-    )
-    ending_minutes = (
-        datetime_time.fromisoformat(config.rescan_end_time).hour * 60
-        + datetime_time.fromisoformat(config.rescan_end_time).minute
-    )
-    snapshot_columns = [
-        "Open", "High", "Low", "Close", "Volume", "RSI", "EMAFast", "EMASlow",
-        "ATR", "SessionVWAP", "AverageTradedValue", "ValidOHLCV", "RollingWindowVolume",
-        "RollingTradedValue", "RollingReturnPct", "RollingWindowRvol", "PriceAccelerationPct",
-        "CloseLocation", "UpperWickFraction", "DistanceFromVwapAtr", "CandleRangeAtr",
-        "BullishEmaTrend", "EmaFastRising", "AtrPct", "MedianDailyTradedValue",
-        "OpeningTradedValue", "DailyAtrPct", "OpeningGapPct", "SpreadPct",
-    ]
-
-    def read_rescan_rows(path_value: str) -> pd.DataFrame:
-        frame = pd.read_parquet(path_value, columns=snapshot_columns)
-        frame.index = pd.DatetimeIndex(frame.index)
-        frame.index = frame.index.tz_localize(IST) if frame.index.tz is None else frame.index.tz_convert(IST)
-        minutes = np.asarray(frame.index.hour * 60 + frame.index.minute)
-        mask = (
-            (minutes >= opening_minutes)
-            & (minutes <= ending_minutes)
-            & ((minutes - opening_minutes) % config.rescan_interval_minutes == 0)
-            & (frame.index >= pd.Timestamp(analysis_start))
-            & (frame.index <= pd.Timestamp(now))
-        )
-        return frame.loc[mask]
-
-    candidate_frames = {
-        symbol: read_rescan_rows(feature_paths[symbol])
-        for symbol in request.symbols if symbol in feature_paths
-    }
-    context_frames = {
-        symbol: (
-            candidate_frames[symbol]
-            if symbol in candidate_frames
-            else read_rescan_rows(path)
-        )
-        for symbol, path in feature_paths.items()
-    }
-    nifty_candles = _local_top_5_opening_range_nifty(
-        store, request.durationYears, analysis_start, now
-    )
-    nifty_features = (
-        calculate_watchlist_features(nifty_candles, config)
-        if not nifty_candles.empty else None
-    )
-    if nifty_features is not None:
-        nifty_minutes = np.asarray(nifty_features.index.hour * 60 + nifty_features.index.minute)
-        nifty_features = nifty_features.loc[
-            (nifty_minutes >= opening_minutes)
-            & (nifty_minutes <= ending_minutes)
-            & ((nifty_minutes - opening_minutes) % config.rescan_interval_minutes == 0)
-            & (nifty_features.index >= pd.Timestamp(analysis_start))
-            & (nifty_features.index <= pd.Timestamp(now))
-        ]
-    selection_seed = daily_watchlist_fingerprint({
-        "version": WATCHLIST_RULE_VERSION,
-        "symbols": sorted(request.symbols),
-        "analysisStart": pd.Timestamp(analysis_start).floor("5min").isoformat(),
-        "analysisEnd": pd.Timestamp(now).floor("5min").isoformat(),
-        "data": {
-            symbol: daily_watchlist_file_fingerprint(raw_paths[symbol])
-            for symbol in sorted(request.symbols)
-        },
-    })
-    frozen_config = replace(config, mode="FROZEN_OPEN")
-    rolling_config = replace(config, mode="ROLLING")
-    top_two_config = replace(
-        frozen_config,
-        selected_symbols=min(2, len(request.symbols)),
-        primary_symbols=min(2, len(request.symbols)),
-        maximum_replacements_per_rescan=min(2, len(request.symbols)),
-    )
-    history_arguments = {
-        "candidate_frames": candidate_frames,
-        "context_frames": context_frames,
-        "nifty_frame": nifty_features,
-        "sector_by_symbol": sector_by_symbol,
-        "minimum_average_traded_value": config.minimum_average_traded_value,
-        "maximum_candle_range_atr": config.maximum_candle_range_atr,
-        "maximum_spread_pct": config.live_maximum_spread_pct,
-        "deterministic_seed": selection_seed,
-    }
-    frozen_eligibility_audit: dict[str, Any] = {}
-    rolling_eligibility_audit: dict[str, Any] = {}
-    frozen_history = build_watchlist_history(
-        **history_arguments, config=frozen_config, selection_method="SCORE",
-        eligibility_audit=frozen_eligibility_audit,
-    )
-    rolling_history = build_watchlist_history(
-        **history_arguments, config=rolling_config, selection_method="SCORE",
-        eligibility_audit=rolling_eligibility_audit,
-    )
-    top_two_history = build_watchlist_history(
-        **history_arguments, config=top_two_config, selection_method="SCORE"
-    )
-    full_history = build_watchlist_history(
-        **history_arguments, config=frozen_config, selection_method="FULL"
-    )
-    liquidity_history = build_watchlist_history(
-        **history_arguments, config=frozen_config, selection_method="LIQUIDITY"
-    )
-    random_history = build_watchlist_history(
-        **history_arguments, config=frozen_config, selection_method="RANDOM"
-    )
-
-    def candidates_for(
-        history: Sequence[Mapping[str, Any]],
-        mode: Literal["FROZEN_OPEN", "ROLLING"],
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        return select_candidates_for_history(
-            opening_candidates,
-            midday_candidates,
-            history,
-            mode=mode,
-            opening_time=config.selection_time,
-        )
-
-    comparison_sources: dict[str, tuple[Sequence[Mapping[str, Any]], Literal["FROZEN_OPEN", "ROLLING"]]] = {
-        "FROZEN_OPEN_TOP_FIVE": (frozen_history, "FROZEN_OPEN"),
-        "ROLLING_TOP_FIVE": (rolling_history, "ROLLING"),
-        "FROZEN_OPEN_TOP_TWO": (top_two_history, "FROZEN_OPEN"),
-        "FULL_ELIGIBLE_UNIVERSE": (full_history, "FROZEN_OPEN"),
-        "LIQUIDITY_ONLY_TOP_FIVE": (liquidity_history, "FROZEN_OPEN"),
-        "CAUSALLY_MATCHED_RANDOM_FIVE": (random_history, "FROZEN_OPEN"),
-    }
-    comparison: dict[str, Any] = {}
-    variant_payloads: dict[str, tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]] = {}
-    for label, (history, mode) in comparison_sources.items():
-        variant_candidates, excluded = candidates_for(history, mode)
-        variant_trades, rejected = execute_daily_watchlist_portfolio(variant_candidates, config)
-        variant_payloads[label] = (variant_candidates, variant_trades, rejected + excluded)
-        comparison[label] = compare_watchlist_variant(
-            history=history,
-            candidates=variant_candidates,
-            trades=variant_trades,
-            analysis_start=analysis_start,
-            analysis_end=now,
-            duration_years=request.durationYears,
-        )
-    active_label = (
-        "ROLLING_TOP_FIVE" if config.mode == "ROLLING" else "FROZEN_OPEN_TOP_FIVE"
-    )
-    active_history = rolling_history if config.mode == "ROLLING" else frozen_history
-    active_candidates, trades, rejected = variant_payloads[active_label]
-    accepted_signals = [item for item in active_candidates if not item.get("primaryReason")]
-    decision = daily_watchlist_validation_decision(comparison)
-    if progress_callback is not None:
-        progress_callback({
-            "currentStage": "TOP_5_OPENING_RANGE_COMPARISON_COMPLETE",
-            "symbolsCompleted": len(request.symbols),
-            "symbolsTotal": len(request.symbols),
-            "candlesProcessed": sum(int(item["metrics"].get("candles", 0)) for item in prepared),
-            "candidatesFound": len(opening_candidates) + len(midday_candidates),
-            "acceptedSignals": sum(not item.get("primaryReason") for item in active_candidates),
-            "workersActive": 1,
-        })
-    if any(int(trade.get("executedQuantity") or 0) != 50 for trade in trades):
-        raise AssertionError("Daily Scalping Watchlist fixed-quantity invariant failed")
-    if any(
-        int(trade.get("entryBarIndex") or -1) != int(trade.get("signalBarIndex") or -2) + 1
-        for trade in trades
-    ):
-        raise AssertionError("NEXT_BAR_OPEN must use entryBarIndex = signalBarIndex + 1")
-    rejection_counts: dict[str, int] = {}
-    for item in rejected:
-        reason = str(item.get("primaryReason") or item.get("reason") or "UNEXPLAINED_REJECTION")
-        rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
-    daily_selection_rows = [
-        {
-            "sessionDate": snapshot["sessionDate"],
-            "selectionTimestamp": snapshot["rescanTimestamp"],
-            "symbols": [
-                {
-                    "symbol": entry["symbol"],
-                    "rank": entry["rankAfter"],
-                    "tier": entry["tier"],
-                    "score": entry["score"],
-                }
-                for entry in snapshot.get("entries", [])
-            ],
-        }
-        for snapshot in active_history
-        if int(snapshot.get("rescanNumber", 0)) == 1
-    ]
-    rolling_replacement_rows = [
-        snapshot
-        for snapshot in rolling_history
-        if int(snapshot.get("replacements", 0)) > 0
-    ]
-    midday_replacement_rows = rolling_replacement_rows if config.mode == "ROLLING" else []
-    primary_selections = sum(
-        item.get("tier") == "PRIMARY"
-        for row in daily_selection_rows
-        for item in row["symbols"]
-    )
-    reserve_selections = sum(
-        item.get("tier") == "RESERVE"
-        for row in daily_selection_rows
-        for item in row["symbols"]
-    )
-    frozen_watchlist_summary = summarize_watchlist_history(
-        frozen_history, variant_payloads["FROZEN_OPEN_TOP_FIVE"][0]
-    )
-    rolling_watchlist_summary = summarize_watchlist_history(
-        rolling_history, variant_payloads["ROLLING_TOP_FIVE"][0]
-    )
-
-    def eligibility_report(audit: Mapping[str, Any]) -> dict[str, Any]:
-        processed_symbols = {str(item["symbol"]) for item in prepared}
-        eligible_symbols = {str(value) for value in audit.get("eligibleSymbols", set())}
-        scored_symbols = {str(value) for value in audit.get("scoredSymbols", set())}
-        reasons_by_symbol = {
-            str(symbol): {str(reason) for reason in reasons}
-            for symbol, reasons in audit.get("reasonsBySymbol", {}).items()
-        }
-        failed_symbols = {str(item.get("symbol")) for item in errors}
-        rejected_symbols = set(request.symbols) - eligible_symbols
-        reason_priority = (
-            "CANDLE_DATA_UNAVAILABLE", "INVALID_OHLCV", "PRICE_UNAVAILABLE",
-            "PRICE_BELOW_MINIMUM", "PRICE_ABOVE_MAXIMUM",
-            "MEDIAN_DAILY_TRADED_VALUE_UNAVAILABLE", "MEDIAN_DAILY_TRADED_VALUE_BELOW_MINIMUM",
-            "OPENING_TRADED_VALUE_UNAVAILABLE", "OPENING_TRADED_VALUE_BELOW_MINIMUM",
-            "DAILY_ATR_UNAVAILABLE", "DAILY_ATR_BELOW_MINIMUM", "DAILY_ATR_ABOVE_MAXIMUM",
-            "OPENING_GAP_UNAVAILABLE", "OPENING_GAP_ABOVE_MAXIMUM",
-            "AVERAGE_TRADED_VALUE_UNAVAILABLE", "AVERAGE_TRADED_VALUE_BELOW_MINIMUM",
-            "ROLLING_RVOL_UNAVAILABLE", "ROLLING_TRADED_VALUE_UNAVAILABLE",
-            "CANDLE_RANGE_QUALITY_UNAVAILABLE", "CANDLE_RANGE_QUALITY_FAILED",
-            "VOLUME_NOT_POSITIVE", "ATR_UNAVAILABLE", "EXCESSIVE_SPREAD",
-        )
-        rows: list[dict[str, Any]] = []
-        symbol_reason_counts: dict[str, int] = {}
-        for symbol in sorted(rejected_symbols):
-            reasons = set(reasons_by_symbol.get(symbol, set()))
-            if symbol in failed_symbols or symbol not in processed_symbols:
-                reasons.add("CANDLE_DATA_UNAVAILABLE")
-            ordered_reasons = [reason for reason in reason_priority if reason in reasons]
-            ordered_reasons.extend(sorted(reasons - set(ordered_reasons)))
-            if not ordered_reasons:
-                ordered_reasons = ["NO_ELIGIBLE_SELECTION_OBSERVATION"]
-            for reason in ordered_reasons:
-                symbol_reason_counts[reason] = symbol_reason_counts.get(reason, 0) + 1
-            rows.append({
-                "symbol": symbol,
-                "primaryReason": ordered_reasons[0],
-                "reasons": ordered_reasons,
-            })
-        return {
-            "symbolsRequested": len(request.symbols),
-            "symbolsWithCandleData": len(processed_symbols),
-            "symbolsEligibleAtLeastOnce": len(eligible_symbols),
-            "symbolsRejectedForEntirePeriod": len(rejected_symbols),
-            "symbolsActuallyScored": len(scored_symbols),
-            "eligibilityEvaluations": int(audit.get("evaluations", 0)),
-            "rejectionReasonEvaluationCounts": dict(sorted(
-                (
-                    (str(reason), int(count))
-                    for reason, count in audit.get("evaluationReasonCounts", {}).items()
-                ),
-                key=lambda pair: (-pair[1], pair[0]),
-            )),
-            "rejectionReasonSymbolCounts": dict(sorted(
-                symbol_reason_counts.items(), key=lambda pair: (-pair[1], pair[0])
-            )),
-            "rejectedSymbols": rows,
-        }
-
-    frozen_eligibility = eligibility_report(frozen_eligibility_audit)
-    rolling_eligibility = eligibility_report(rolling_eligibility_audit)
-    active_eligibility = rolling_eligibility if config.mode == "ROLLING" else frozen_eligibility
-    summary = {
-        **comparison[active_label]["overall"],
-        **summarize_watchlist_history(active_history, active_candidates),
-        "rawOpeningCandidates": len(opening_candidates),
-        "rawMiddayCandidates": len(midday_candidates),
-        "acceptedBuySignals": len(accepted_signals),
-        "executedTrades": len(trades),
-        "executedQuantity": 50,
-        "universeEvaluated": len(prepared),
-        "tradingDays": len(daily_selection_rows),
-        "dailyWatchlists": len(daily_selection_rows),
-        "primarySelections": int(primary_selections),
-        "reserveSelections": int(reserve_selections),
-        "watchlistReplacements": int(summarize_watchlist_history(active_history, active_candidates)["replacements"]),
-        "frozenWatchlists": sum(int(row.get("rescanNumber", 0)) == 1 for row in frozen_history),
-        "frozenReplacements": 0,
-        "rollingWatchlists": sum(int(row.get("rescanNumber", 0)) == 1 for row in rolling_history),
-        "rollingRescans": len(rolling_history),
-        "rollingPromotions": int(rolling_watchlist_summary["newlyPromotedSymbols"]),
-        "rollingRemovals": sum(len(row.get("removed", [])) for row in rolling_history),
-        "openingBreakoutCandidates": len(opening_candidates),
-        "rejectionCounts": dict(sorted(rejection_counts.items(), key=lambda pair: (-pair[1], pair[0]))),
-        "funnel": {
-            "rawOpeningObservations": len(opening_candidates),
-            "rawMiddayObservations": len(midday_candidates),
-            "watchlistMatchedCandidates": len(active_candidates),
-            "entryReadySignals": len(accepted_signals),
-            "portfolioAccepted": len(trades),
-            "executedTrades": len(trades),
-        },
-    }
-    completed_at = datetime.now(IST)
-    response = {
-        "metadata": {
-            "runId": run_id,
-            "strategyMode": DAILY_WATCHLIST_STRATEGY_KEY,
-            "strategyKey": DAILY_WATCHLIST_STRATEGY_KEY,
-            "strategyName": DAILY_WATCHLIST_STRATEGY_NAME,
-            "strategyDescription": DAILY_WATCHLIST_DESCRIPTION,
-            "strategyVersion": DAILY_WATCHLIST_STRATEGY_VERSION,
-            "watchlistMode": config.mode,
-            "featureCodeVersion": DAILY_WATCHLIST_FEATURE_VERSION,
-            "sessionRuleVersion": DAILY_WATCHLIST_SESSION_VERSION,
-            "portfolioRuleVersion": DAILY_WATCHLIST_PORTFOLIO_VERSION,
-            "watchlistRuleVersion": WATCHLIST_RULE_VERSION,
-            "openingRangeRuleVersion": OPENING_RANGE_RULE_VERSION,
-            "minimumUntouchedValidationTrades": MINIMUM_UNTOUCHED_VALIDATION_TRADES,
-            "openingRangeAssumption": "09:15-09:30 completed-candle range; first completed close above its high; next-bar-open entry",
-            "startedAt": started_at.isoformat(),
-            "completedAt": completed_at.isoformat(),
-            "generatedAt": completed_at.isoformat(),
-            "analysisStart": analysis_start.isoformat(),
-            "analysisEnd": now.isoformat(),
-            "durationYears": request.durationYears,
-            "timeframe": request.timeframe,
-            "universeMode": request.universeMode,
-            "symbolsRequested": len(request.symbols),
-            "symbolsProcessed": len(prepared),
-            "symbolsEligible": active_eligibility["symbolsEligibleAtLeastOnce"],
-            "symbolsRejected": active_eligibility["symbolsRejectedForEntirePeriod"],
-            "symbolsActuallyScored": active_eligibility["symbolsActuallyScored"],
-            "universeEvaluated": len(prepared),
-            "tradingDays": len(daily_selection_rows),
-            "symbolsFailed": len(errors),
-            "workerCount": workers,
-            "runtimeSeconds": round(time.perf_counter() - started_clock, 4),
-            "configuration": requested.public(),
-            "submittedConfiguration": requested.public(),
-            "effectiveConfiguration": requested.public(),
-            "submittedMaximumHoldingBars": requested.maximumHoldingBars,
-            "effectiveMaximumHoldingBars": config.maximum_holding_bars,
-            "configurationHash": configuration_hash,
-            "fingerprint": fingerprint,
-            "dataSnapshot": fingerprint,
-            "resultSource": "FRESH_CALCULATION",
-            "cachedResult": False,
-            "researchLabel": "Rejected/research-only until untouched validation passes",
-            "liveOrdersEnabled": False,
-            "historicalSpread": "UNAVAILABLE_ADVISORY",
-            "supportingData": {
-                "niftyAvailable": nifty_features is not None,
-                "sectorMappingConfigured": sector_path is not None,
-                "sectorSupportSymbols": len(support_symbols),
-                "supportSymbolsUnavailable": len(support_errors),
-            },
-            "universeEligibility": active_eligibility,
-        },
-        "summary": summary,
-        "watchlist": {
-            "mode": config.mode,
-            "summary": summarize_watchlist_history(active_history, active_candidates),
-            "history": active_history,
-        },
-        "allWatchlistHistory": [
-            *({**row, "benchmarkVariant": "FROZEN_OPEN_TOP_FIVE"} for row in frozen_history),
-            *({**row, "benchmarkVariant": "ROLLING_TOP_FIVE"} for row in rolling_history),
-        ],
-        "dailySelections": daily_selection_rows,
-        "middayReplacements": midday_replacement_rows,
-        "watchlistModeSummaries": {
-            "FROZEN_OPEN": {
-                "watchlists": summary["frozenWatchlists"],
-                "replacements": 0,
-                **frozen_watchlist_summary,
-                "eligibility": frozen_eligibility,
-            },
-            "ROLLING": {
-                "watchlists": summary["rollingWatchlists"],
-                "rescans": summary["rollingRescans"],
-                "promotions": summary["rollingPromotions"],
-                "removals": summary["rollingRemovals"],
-                **rolling_watchlist_summary,
-                "eligibility": rolling_eligibility,
-            },
-        },
-        "candidates": sorted(
-            [*opening_candidates, *midday_candidates],
-            key=lambda row: (str(row.get("signalTimestamp")), str(row.get("symbol")), str(row.get("candidateId"))),
-        ),
-        "signals": accepted_signals,
-        "openingSignals": [
-            item for item in accepted_signals if item.get("signalType") == "OPENING_RANGE_BREAKOUT"
-        ],
-        "middaySignals": [
-            item for item in accepted_signals if item.get("signalType") == "ROLLING_MOMENTUM_BREAKOUT"
-        ],
-        "trades": trades,
-        "rejectedCandidates": rejected,
-        "comparison": comparison,
-        "validationDecision": decision,
-        "results": [
-            {"variant": label, **payload["overall"]}
-            for label, payload in comparison.items()
-        ],
-        "errors": errors,
-        "supportingDataErrors": support_errors,
-        "warnings": [
-            "Research and paper-signal only. This strategy has no broker-order integration.",
-            "Opening-range rules are an explicit configurable research assumption because no prior ORB implementation existed in the repository.",
-            "All ranking, signals, and entries use only completed candles available at the decision timestamp.",
-            "Historical bid/ask spread is unavailable and is not fabricated.",
-            "The current symbol universe introduces survivorship bias. Past performance does not guarantee future returns.",
-        ],
-    }
-    response["metadata"]["resultCacheBytes"] = result_cache.save(fingerprint, response)
-    return response
-
-
 def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: datetime | None = None) -> dict[str, Any]:
     started_at = datetime.now(IST)
     now = (now_ist or started_at).astimezone(IST)
     analysis_start = now - timedelta(days=round(365.25 * request.durationYears))
     run_id = request.runId or str(uuid.uuid4())
     config = request.strongBuyConfiguration.strategy_config().validate()
-    failure_config = request.strongBuyConfiguration.failure_config().validate()
     universe = set(store.universe())
     unavailable = [symbol for symbol in request.symbols if symbol not in universe]
     if unavailable:
@@ -3537,47 +2166,13 @@ def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore
             processed = list(executor.map(run_symbol, request.symbols))
     results = [result for result, _, _ in processed if result is not None]
     errors = [error for _, error, _ in processed if error is not None]
-    failure_research = None
-    failure_research_errors: list[dict[str, str]] = []
-    if failure_config.mode == "RESEARCH_COMPARE":
-        def extract_symbol(item: tuple[dict[str, Any] | None, dict[str, str] | None, pd.DataFrame | None]) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
-            result, _, candles = item
-            if result is None or candles is None:
-                return [], None
-            try:
-                return extract_failure_research_lots(
-                    str(result["symbol"]), candles, result,
-                    entry_config=config,
-                    failure_config=failure_config,
-                ), None
-            except (ValueError, KeyError, TypeError) as error:
-                return [], {"symbol": str(result.get("symbol")), "message": str(error)}
-        eligible = [item for item in processed if item[0] is not None and item[2] is not None]
-        extraction_workers = max(1, min(workers, len(eligible))) if eligible else 1
-        if extraction_workers <= 1:
-            extracted = [extract_symbol(item) for item in eligible]
-        else:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=extraction_workers, thread_name_prefix="failure-engine-extract") as executor:
-                extracted = list(executor.map(extract_symbol, eligible))
-        failure_lots: list[dict[str, Any]] = [lot for lots, _ in extracted for lot in lots]
-        failure_research_errors = [error for _, error in extracted if error is not None]
-        # `processed`/`eligible` hold every symbol's full candle DataFrame; extraction is
-        # the last thing that needs them. Drop them before the walk-forward analysis below,
-        # which is the run's peak-memory step, instead of leaving hundreds of DataFrames
-        # alive as dead weight for the rest of the function.
-        del processed, eligible, extracted
-        failure_research = run_trade_failure_research(failure_lots, failure_config)
-        failure_research["errors"] = failure_research_errors
-    else:
-        del processed
+    del processed
     completed = datetime.now(IST)
     response = {
-        "metadata": {"runId": run_id, "strategyMode": STRONG_BUY_STRATEGY_KEY, "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyDescription": STRONG_BUY_DESCRIPTION, "strategyVersion": STRONG_BUY_STRATEGY_VERSION, "generatedAt": completed.isoformat(), "completedAt": completed.isoformat(), "analysisStart": analysis_start.isoformat(), "durationYears": request.durationYears, "timeframe": request.timeframe, "symbolsRequested": len(request.symbols), "symbolsProcessed": len(results), "symbolsFailed": len(errors), "workerCount": workers, "configuration": {**config.public(), "failureEngine": failure_config.public()}, "backtestSemantics": "INDEPENDENT_LOTS"},
+        "metadata": {"runId": run_id, "strategyMode": STRONG_BUY_STRATEGY_KEY, "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyDescription": STRONG_BUY_DESCRIPTION, "strategyVersion": STRONG_BUY_STRATEGY_VERSION, "generatedAt": completed.isoformat(), "completedAt": completed.isoformat(), "analysisStart": analysis_start.isoformat(), "durationYears": request.durationYears, "timeframe": request.timeframe, "symbolsRequested": len(request.symbols), "symbolsProcessed": len(results), "symbolsFailed": len(errors), "workerCount": workers, "configuration": config.public(), "backtestSemantics": "INDEPENDENT_LOTS"},
         "summary": aggregate_strong_buy_results(results), "results": results, "errors": errors,
-        "warnings": ["Strong Buy requires EMA crossover, close above VWAP, and at least two of ADX/DMI, RVOL and confirmed 15-minute alignment.", "Entries execute at the next 5-minute open. Every lot has its own target.", "The baseline has no stop loss, bearish exit or end-of-day exit. Failure Engine comparisons are research-only and cannot close live paper positions.", "Paper research only; no broker order is sent."],
+        "warnings": ["Strong Buy requires EMA crossover, close above VWAP, and at least two of ADX/DMI, RVOL and confirmed 15-minute alignment.", "Entries execute at the next 5-minute open. Every lot has its own target.", "The baseline has no stop loss, bearish exit or end-of-day exit.", "Paper research only; no broker order is sent."],
     }
-    if failure_research is not None:
-        response["failureEngineResearch"] = failure_research
     return response
 
 
@@ -3666,8 +2261,6 @@ def run_backtest(request: BacktestRequest, store: HistoricalDataStore, now_ist: 
         return run_recovery_backtest(request, store, now_ist)
     if request.strategyMode == STRONG_BUY_STRATEGY_KEY:
         return run_strong_buy_backtest(request, store, now_ist)
-    if request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY:
-        return run_top_5_opening_range_breakout_backtest(request, store, now_ist)
     return run_rsi_range_backtest(request, store, now_ist)
 
 
@@ -3705,9 +2298,7 @@ _market_data_refresh_service: MarketDataRefreshService | None = None
 _oi_repository: OiRegimeRepository | None = None
 _backtest_history_repository: BacktestHistoryRepository | None = None
 _application_settings_repository: ApplicationSettingsRepository | None = None
-_stock_scanner_service: StockScannerService | None = None
 _crypto_market_service: CryptoMarketService | None = None
-_platform_runtime: PlatformRuntime | None = None
 _canonical_market_data_writer: TimescaleDualWriter | None = None
 
 
@@ -3723,13 +2314,6 @@ def get_canonical_market_data_writer() -> TimescaleDualWriter:
     if _canonical_market_data_writer is None:
         _canonical_market_data_writer = dual_writer_from_environment()
     return _canonical_market_data_writer
-
-
-def get_stock_scanner_service() -> StockScannerService:
-    global _stock_scanner_service
-    if _stock_scanner_service is None:
-        _stock_scanner_service = StockScannerService(get_store())
-    return _stock_scanner_service
 
 
 def get_report_directory() -> Path:
@@ -3845,108 +2429,6 @@ def get_crypto_market_service() -> CryptoMarketService:
 app.router.routes.extend(create_crypto_router(get_crypto_market_service).routes)
 
 
-def _platform_crypto_instruments() -> list[dict[str, Any]]:
-    return [item.public() for item in get_crypto_market_service().list_instruments()]
-
-
-def _platform_candles(request: ResearchRequest) -> pd.DataFrame:
-    timeframe = (
-        str(request.executionTimeframe)
-        if isinstance(request, ResearchExperimentRequestV2)
-        else request.timeframe
-    )
-    symbol = request.symbol
-    if request.market == "NSE":
-        if timeframe not in TIMEFRAMES:
-            raise ValueError(
-                f"{timeframe} NSE candles are unavailable from the configured provider"
-            )
-        if isinstance(request, ResearchExperimentRequestV2):
-            analysis_start = datetime.combine(request.startDate, datetime_time.min, tzinfo=IST)
-            requested_end = datetime.combine(request.endDate, datetime_time.max, tzinfo=IST)
-            now_ist = min(datetime.now(IST), requested_end)
-        else:
-            now_ist = datetime.now(IST)
-            analysis_start = now_ist - timedelta(days=366 * request.durationYears)
-        frame = get_store().candles(
-            symbol,
-            timeframe,
-            request.durationYears,
-            analysis_start,
-            now_ist,
-            warmup_bars=500,
-        )
-        # HistoricalDataStore intentionally exposes the legacy backtest schema.
-        # Normalize only the Research boundary so existing strategy semantics and
-        # stored backtest results remain unchanged.
-        return frame.rename(
-            columns={
-                "Open": "open",
-                "High": "high",
-                "Low": "low",
-                "Close": "close",
-                "Volume": "volume",
-            }
-        )
-
-    service = get_crypto_market_service()
-    exact_symbol = symbol.strip().upper()
-    matches = [
-        instrument
-        for instrument in service.list_instruments()
-        if instrument.provider == request.provider
-        and exact_symbol
-        in {
-            instrument.instrument_id.upper(),
-            instrument.provider_symbol.upper(),
-            instrument.display_symbol.upper(),
-        }
-    ]
-    if len(matches) != 1:
-        raise ValueError(
-            f"{request.provider} does not publish the exact configured instrument {symbol}"
-        )
-    if isinstance(request, ResearchExperimentRequestV2):
-        start = datetime.combine(request.startDate, datetime_time.min, tzinfo=UTC)
-        end = min(datetime.now(UTC), datetime.combine(request.endDate, datetime_time.max, tzinfo=UTC))
-    else:
-        end = datetime.now(UTC)
-        start = end - timedelta(days=request.durationDays)
-    candles = service.sync_candles(matches[0], timeframe, start, end)
-    return pd.DataFrame(
-        [
-            {
-                "timestamp": candle.close_time,
-                "open": candle.open,
-                "high": candle.high,
-                "low": candle.low,
-                "close": candle.close,
-                "volume": candle.base_volume,
-            }
-            for candle in candles
-            if candle.complete
-        ]
-    )
-
-
-def get_platform_runtime() -> PlatformRuntime:
-    global _platform_runtime
-    if _platform_runtime is None:
-        _platform_runtime = PlatformRuntime.build(
-            PlatformSettings.from_environment(),
-            _platform_candles,
-            _platform_crypto_instruments,
-            lambda: get_crypto_market_service().status(),
-            lambda identifier: get_universe_service().get_frozen_universe(identifier)[0],
-            lambda: get_canonical_market_data_writer().status(),
-        )
-    return _platform_runtime
-
-
-app.router.routes.extend(create_platform_router(get_platform_runtime).routes)
-install_platform_observability(app, get_platform_runtime)
-
-
 def get_recovery_baseline_metadata() -> dict[str, Any]:
     analysis = load_feature_analysis(get_report_directory())
     metadata = analysis.get("metadata")
@@ -3988,6 +2470,109 @@ def health() -> dict[str, Any]:
         return {"status": "ok", "symbols": symbols}
     except (OSError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+# The three /platform endpoints below are the minimal, research-free remnants of
+# the removed quant-research platform router. They exist only because the shared
+# navigation chrome (data/worker status pills) and the /markets page still read
+# them; they are derived from the live-signal engine and the instrument sources
+# that remain, and will be superseded by the unified engine_status/dashboard work.
+
+UNSUPPORTED_DATA_REQUIREMENT = "UNSUPPORTED_DATA_REQUIREMENT"
+FRESH_DATA_AGE_SECONDS = 15 * 60
+
+
+def _nse_session_is_open(now: datetime | None = None) -> bool:
+    current = (now or datetime.now(IST)).astimezone(IST)
+    return current.weekday() < 5 and MARKET_OPEN <= current.time() <= MARKET_CLOSE
+
+
+@app.get("/platform/overview")
+def platform_overview() -> dict[str, Any]:
+    try:
+        engine = get_live_signal_engine().status()
+    except Exception:  # noqa: BLE001 - the chrome must degrade, never fail, on engine errors
+        engine = {}
+    age = engine.get("dataAgeSeconds")
+    if engine.get("marketSession") == "OPEN":
+        if age is None:
+            freshness = {"status": "UNAVAILABLE", "ageSeconds": None, "reason": "NO_MARKET_DATA"}
+        elif float(age) <= FRESH_DATA_AGE_SECONDS:
+            freshness = {"status": "FRESH", "ageSeconds": age, "reason": "MARKET_OPEN"}
+        else:
+            freshness = {"status": "STALE", "ageSeconds": age, "reason": "MARKET_OPEN_DATA_LAGGING"}
+    elif engine.get("lastCompletedCandle"):
+        freshness = {"status": "FRESH", "ageSeconds": age, "reason": "MARKET_CLOSED_LAST_SESSION_CURRENT"}
+    else:
+        freshness = {"status": "UNAVAILABLE", "ageSeconds": age, "reason": "NO_COMPLETED_CANDLE"}
+    engine_status = str(engine.get("engineStatus") or "UNAVAILABLE")
+    worker = "RUNNING" if engine_status in {"READY", "RECOVERING"} else "STOPPED" if engine else "UNAVAILABLE"
+    return {
+        "environment": os.environ.get("OPENDELTA_ENVIRONMENT", "production"),
+        "dataFreshness": freshness,
+        "jobStatus": {"status": worker, "engineStatus": engine_status, "connectionStatus": engine.get("connectionStatus")},
+        "paperOnly": True,
+        "liveOrdersEnabled": False,
+    }
+
+
+@app.get("/platform/instruments")
+def platform_instruments(
+    market: str = Query(default="NSE"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict[str, Any]:
+    market_key = market.strip().upper()
+    if market_key == "NSE":
+        rows = [
+            {
+                "instrument_id": f"NSE:{symbol}",
+                "symbol": symbol,
+                "provider": "DHAN",
+                "provider_symbol": symbol,
+                "market_type": "EQUITY",
+                "trading_status": "ACTIVE",
+                "company_name": None,
+                "sector": None,
+            }
+            for symbol in get_store().universe()
+        ]
+    elif market_key == "CRYPTO":
+        rows = [
+            {
+                "instrument_id": instrument.instrument_id,
+                "symbol": instrument.display_symbol,
+                "provider": instrument.provider,
+                "provider_symbol": instrument.provider_symbol,
+                "market_type": instrument.instrument_type,
+                "trading_status": "ACTIVE" if instrument.active else "INACTIVE",
+                "company_name": None,
+                "sector": None,
+            }
+            for instrument in get_crypto_market_service().list_instruments()
+        ]
+    else:
+        raise HTTPException(status_code=422, detail="market must be NSE or CRYPTO")
+    return {"rows": rows[offset : offset + limit], "count": len(rows), "offset": offset, "limit": limit}
+
+
+@app.get("/platform/market-context")
+def platform_market_context(market: str = Query(default="NSE")) -> dict[str, Any]:
+    market_key = market.strip().upper()
+    if market_key == "NSE":
+        session = {"status": "OPEN" if _nse_session_is_open() else "CLOSED", "timezone": "Asia/Kolkata"}
+    elif market_key == "CRYPTO":
+        session = {"status": "OPEN_24_7", "timezone": "UTC"}
+    else:
+        raise HTTPException(status_code=422, detail="market must be NSE or CRYPTO")
+    unsupported = {"status": UNSUPPORTED_DATA_REQUIREMENT}
+    return {
+        "market": market_key,
+        "session": session,
+        "breadth": unsupported,
+        "benchmarkDirection": unsupported,
+        "sectorDirection": unsupported,
+    }
 
 
 @app.get("/backtest-history")
@@ -4300,53 +2885,6 @@ def list_market_symbols() -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
-def _stock_scanner_company_names(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        return {}
-    frame = pd.read_csv(path, dtype=str).fillna("")
-    normalized = {str(column).strip().casefold(): column for column in frame.columns}
-    symbol_column = normalized.get("symbol")
-    name_column = normalized.get("company_name") or normalized.get("company name")
-    if symbol_column is None or name_column is None:
-        return {}
-    return {
-        str(symbol).strip().upper().removesuffix(".NS"): str(name).strip()
-        for symbol, name in zip(frame[symbol_column], frame[name_column], strict=False)
-        if str(symbol).strip() and str(name).strip()
-    }
-
-
-@app.get("/stock-scanner")
-def stock_scanner(refresh: bool = Query(default=False)) -> dict[str, Any]:
-    """Return the causal, paper-only NSE signal funnel and activity context."""
-    try:
-        market_symbols = list_market_symbols()
-        settings = get_application_settings_repository().get()
-        market_data_path = Path(
-            os.environ.get(
-                "LIVE_MARKET_DATA_FILE",
-                "/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv",
-            )
-        ).expanduser()
-        sector_value = (
-            os.environ.get("MARKET_CONTEXT_SECTOR_MAP_FILE")
-            or os.environ.get("MARKET_ALIGNED_SECTOR_MAP_FILE")
-        )
-        sector_path = Path(sector_value).expanduser() if sector_value else None
-        return get_stock_scanner_service().snapshot(
-            market_symbols["symbols"],
-            minimum_price=settings.minimum_price,
-            maximum_price=settings.maximum_price,
-            sector_by_symbol=load_vwap_sector_mapping(sector_path),
-            company_names=_stock_scanner_company_names(market_data_path),
-            force=refresh,
-        )
-    except HTTPException:
-        raise
-    except (OSError, RuntimeError, sqlite3.Error, ValueError) as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-
-
 @app.get("/live-signals/settings")
 def live_signals_settings() -> dict[str, Any]:
     engine = get_live_signal_engine()
@@ -4586,54 +3124,10 @@ def start_backtest_job(
         alias="x-opendelta-history-owner",
     ),
 ) -> dict[str, Any]:
-    strong_buy_research = (
-        request.strategyMode == STRONG_BUY_STRATEGY_KEY
-        and request.strongBuyConfiguration.failureEngineMode == "RESEARCH_COMPARE"
-    )
-    top_five_launchable = (
-        request.strategyMode == DAILY_WATCHLIST_STRATEGY_KEY
-        and DAILY_WATCHLIST_STRATEGY_KEY in LAUNCHABLE_STRATEGY_KEYS
-    )
-    if not strong_buy_research and not top_five_launchable:
-        raise HTTPException(status_code=422, detail=RETIRED_STRATEGY_LAUNCH_MESSAGE)
-    store = get_store()
-
-    def runner(
-        progress: Callable[[dict[str, Any]], None],
-        cancel_event: threading.Event,
-    ) -> dict[str, Any]:
-        if strong_buy_research:
-            progress({"currentStage": "STRONG_BUY_FAILURE_RESEARCH", "workersActive": 1})
-            if cancel_event.is_set():
-                raise BacktestCancelledError("Backtest cancellation requested")
-            result = run_strong_buy_backtest(request, store)
-            if cancel_event.is_set():
-                raise BacktestCancelledError("Backtest cancellation requested")
-        else:
-            result = run_top_5_opening_range_breakout_backtest(
-                request,
-                store,
-                progress_callback=progress,
-                cancel_event=cancel_event,
-            )
-        if history_owner:
-            metadata = result.setdefault("metadata", {})
-            metadata["historySaved"] = True
-            try:
-                get_backtest_history_repository().save(
-                    history_owner,
-                    _job_history_record(result, request),
-                )
-            except (OSError, RuntimeError, ValueError, sqlite3.Error) as error:
-                metadata["historySaved"] = False
-                metadata["historySaveError"] = str(error)
-        progress(_completed_job_progress(result, len(request.symbols)))
-        return result
-
-    return _backtest_job_service.start(
-        symbols_total=len(request.symbols),
-        runner=runner,
-    )
+    # Every strategy that previously ran through this asynchronous job endpoint
+    # (Strong Buy Failure Engine research, Top-5 Opening Range Breakout) has been
+    # retired; nothing may launch a new job here anymore.
+    raise HTTPException(status_code=422, detail=RETIRED_STRATEGY_LAUNCH_MESSAGE)
 
 
 @app.get("/backtest/jobs/{job_id}")
@@ -4692,8 +3186,6 @@ def stop_live_signal_runtime() -> None:
         _market_data_refresh_service.shutdown()
     if _crypto_market_service is not None:
         _crypto_market_service.stop()
-    if _platform_runtime is not None:
-        _platform_runtime.shutdown()
     if _canonical_market_data_writer is not None:
         _canonical_market_data_writer.close()
     _backtest_job_service.shutdown()

@@ -129,45 +129,6 @@ function relationshipErrors(strategyKey, settings) {
     }
     if (settings.hardStopLossPct >= 100) errors.push("hardStopLossPct must be below 100");
   }
-
-  if (strategyKey === "market_aligned_vwap_pullback_scalper") {
-    if (settings.timeframe !== "5m") errors.push("Market-Aligned VWAP Pullback Scalper requires timeframe 5m");
-    if (!(settings.rsiPullbackMinimum < settings.rsiPullbackMaximum
-      && settings.rsiPullbackMaximum <= settings.rsiTriggerLevel
-      && settings.rsiTriggerLevel < settings.maximumTriggerRsi)) {
-      errors.push("RSI levels must satisfy rsiPullbackMinimum < rsiPullbackMaximum <= rsiTriggerLevel < maximumTriggerRsi");
-    }
-    if (!(settings.emaFast < settings.emaSlow)) errors.push("emaFast must be below emaSlow");
-    if (!(settings.entryStartTime < settings.lastEntryTime && settings.lastEntryTime < settings.squareOffTime)) {
-      errors.push("Session times must satisfy entryStartTime < lastEntryTime < squareOffTime");
-    }
-    if (!(settings.minimumStopPct <= settings.maximumStopPct)) errors.push("minimumStopPct cannot exceed maximumStopPct");
-    if (settings.executionModel !== "NEXT_BAR_OPEN") errors.push("executionModel must be NEXT_BAR_OPEN");
-  }
-
-  if (strategyKey === "top_5_opening_range_breakout") {
-    if (settings.timeframe !== "5m") errors.push("Top-5 Opening Range Breakout requires timeframe 5m");
-    if (!(settings.emaFast < settings.emaSlow)) errors.push("emaFast must be below emaSlow");
-    if (!(settings.minimumStopPct <= settings.maximumStopPct)) errors.push("minimumStopPct cannot exceed maximumStopPct");
-    if (settings.watchlistPrimarySymbols > settings.watchlistSelectedSymbols) {
-      errors.push("watchlistPrimarySymbols cannot exceed watchlistSelectedSymbols");
-    }
-    if (settings.watchlistMaximumReplacementsPerRescan > settings.watchlistSelectedSymbols) {
-      errors.push("watchlistMaximumReplacementsPerRescan cannot exceed watchlistSelectedSymbols");
-    }
-    if (settings.watchlistRescanIntervalMinutes % 5 !== 0 || settings.watchlistRollingWindowMinutes % 5 !== 0) {
-      errors.push("watchlistRescanIntervalMinutes and watchlistRollingWindowMinutes must be multiples of 5");
-    }
-    if (!(settings.openingRangeStartTime < settings.openingRangeEndTime
-      && settings.openingRangeEndTime <= settings.watchlistSelectionTime
-      && settings.watchlistSelectionTime <= settings.watchlistRescanEndTime
-      && settings.watchlistRescanEndTime < settings.lastEntryTime
-      && settings.lastEntryTime < settings.squareOffTime)) {
-      errors.push("Session times must satisfy opening start < opening end <= selection <= final rescan < last entry < square-off");
-    }
-    if (settings.executionModel !== "NEXT_BAR_OPEN") errors.push("executionModel must be NEXT_BAR_OPEN");
-    if (settings.quantityPerTrade !== 50) errors.push("quantityPerTrade must be exactly 50");
-  }
   return errors;
 }
 

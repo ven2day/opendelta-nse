@@ -48,15 +48,14 @@ test("the last ten completed results sync to the signed-in account with browser 
   assert.match(dashboard, /View result/);
 });
 
-test("long backtests report trading and supporting progress and retry the symbol registry", async () => {
+test("long backtests report batch progress and retry the symbol registry", async () => {
   const [dashboard, route] = await Promise.all([
     readFile(new URL("app/backtest/backtest-dashboard.tsx", root), "utf8"),
     readFile(new URL("app/api/backtest/route.ts", root), "utf8"),
   ]);
 
-  assert.match(dashboard, /supportSymbolsCompleted/);
-  assert.match(dashboard, /SUPPORTING_MARKET_FEATURES/);
-  assert.match(dashboard, /supporting symbols/);
+  assert.match(dashboard, /setRunProgress\(\{ completed, total: symbolsToRun\.length \}\)/);
+  assert.match(dashboard, /symbols completed/);
   assert.match(dashboard, /window\.setTimeout\(loadSymbols, 5_000\)/);
   assert.match(route, /x-opendelta-history-owner/);
   assert.match(route, /historyOwnerKey\(sessionUser\)/);

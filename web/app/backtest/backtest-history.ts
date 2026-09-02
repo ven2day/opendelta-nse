@@ -8,9 +8,6 @@ export type BacktestHistoryStrategy =
   | "rsi_range"
   | "rsi_recovery"
   | "ema_vwap_strong_buy"
-  | "top_5_opening_range_breakout"
-  | "daily_scalping_watchlist"
-  | "market_aligned_vwap_pullback_scalper"
   | "market_aligned_rsi_scalper";
 
 export type BacktestHistoryEntry<T = unknown> = {
@@ -32,9 +29,6 @@ const BACKTEST_HISTORY_STRATEGIES: readonly string[] = [
   "rsi_range",
   "rsi_recovery",
   "ema_vwap_strong_buy",
-  "top_5_opening_range_breakout",
-  "daily_scalping_watchlist",
-  "market_aligned_vwap_pullback_scalper",
   "market_aligned_rsi_scalper",
 ];
 

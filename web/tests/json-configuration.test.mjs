@@ -12,7 +12,6 @@ const definitions = JSON.parse(await readFile(new URL("../../strategy-parameters
 const strategyNames = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
-  top_5_opening_range_breakout: "Top-5 Opening Range Breakout",
 };
 
 function currentSettings(strategyKey, overrides = {}) {
@@ -49,22 +48,22 @@ test("all registered strategies produce complete valid JSON configurations", () 
 });
 
 test("valid JSON is summarized and can update form-controlled values", () => {
-  const settings = currentSettings("top_5_opening_range_breakout");
-  const configuration = createJsonConfiguration("top_5_opening_range_breakout", {
+  const settings = currentSettings("rsi_recovery");
+  const configuration = createJsonConfiguration("rsi_recovery", {
     ...settings,
-    watchlistMode: "ROLLING",
-    maximumTradesPerDay: 2,
+    executionModel: "NEXT_BAR_OPEN",
+    maxHoldingTradingDays: 3,
   }, definitions);
   const result = parseAndValidateJsonConfiguration(formatJsonConfiguration(configuration), {
-    strategyKey: "top_5_opening_range_breakout",
+    strategyKey: "rsi_recovery",
     strategyNames,
     definitions,
     currentSettings: settings,
   });
   assert.equal(result.valid, true);
   assert.equal(result.summary.changed, 2);
-  assert.equal(result.configuration.settings.watchlistMode, "ROLLING");
-  assert.equal(result.configuration.settings.maximumTradesPerDay, 2);
+  assert.equal(result.configuration.settings.executionModel, "NEXT_BAR_OPEN");
+  assert.equal(result.configuration.settings.maxHoldingTradingDays, 3);
 });
 
 test("unknown, missing, invalid and wrong-strategy settings are never partially accepted", () => {
@@ -96,19 +95,20 @@ test("unknown, missing, invalid and wrong-strategy settings are never partially 
 });
 
 test("schema, enum, type, range, step and related-field validation is strict", () => {
-  const settings = currentSettings("top_5_opening_range_breakout");
-  const base = createJsonConfiguration("top_5_opening_range_breakout", settings, definitions);
+  const settings = currentSettings("rsi_recovery");
+  const base = createJsonConfiguration("rsi_recovery", settings, definitions);
   for (const [key, value, expected] of [
     ["schemaVersion", 2, "Unsupported schemaVersion: 2"],
-    ["watchlistMode", "UNKNOWN", "watchlistMode must be one of"],
-    ["maximumTradesPerDay", 2.5, "maximumTradesPerDay must be a whole number"],
-    ["openingBreakoutMinimumRvol", 101, "openingBreakoutMinimumRvol must be at most 100"],
+    ["exitModel", "UNKNOWN", "exitModel must be one of"],
+    ["maxHoldingTradingDays", 2.5, "maxHoldingTradingDays must be a whole number"],
+    ["rsiArmHigh", 101, "rsiArmHigh must be at most 100"],
+    ["targetPct", 0.005, "targetPct must use increments of 0.01"],
   ]) {
     const candidate = structuredClone(base);
     if (key === "schemaVersion") candidate.schemaVersion = value;
     else candidate.settings[key] = value;
     const result = parseAndValidateJsonConfiguration(JSON.stringify(candidate), {
-      strategyKey: "top_5_opening_range_breakout",
+      strategyKey: "rsi_recovery",
       strategyNames,
       definitions,
       currentSettings: settings,
@@ -118,26 +118,26 @@ test("schema, enum, type, range, step and related-field validation is strict", (
   }
 
   const related = structuredClone(base);
-  related.settings.watchlistPrimarySymbols = related.settings.watchlistSelectedSymbols + 1;
+  related.settings.rsiArmLow = related.settings.rsiArmHigh + 1;
   const relatedResult = parseAndValidateJsonConfiguration(JSON.stringify(related), {
-    strategyKey: "top_5_opening_range_breakout",
+    strategyKey: "rsi_recovery",
     strategyNames,
     definitions,
     currentSettings: settings,
   });
   assert.equal(relatedResult.valid, false);
-  assert.ok(relatedResult.errors.some((error) => error.includes("watchlistPrimarySymbols")));
+  assert.ok(relatedResult.errors.some((error) => error.includes("rsiArmLow must be below rsiArmHigh")));
 });
 
 test("resolved output includes advanced values but excludes unregistered secrets", () => {
-  const configuration = createJsonConfiguration("top_5_opening_range_breakout", {
-    ...currentSettings("top_5_opening_range_breakout"),
-    watchlistRequiredPromotionAdvantage: 10,
+  const configuration = createJsonConfiguration("rsi_recovery", {
+    ...currentSettings("rsi_recovery"),
+    rupeeRiskBudget: 10,
     dhanToken: "never-copy-this",
     databasePassword: "never-copy-this",
   }, definitions);
   const source = formatJsonConfiguration(configuration);
-  assert.match(source, /"watchlistRequiredPromotionAdvantage": 10/);
+  assert.match(source, /"rupeeRiskBudget": 10/);
   assert.doesNotMatch(source, /dhanToken|databasePassword|never-copy-this/);
 });
 

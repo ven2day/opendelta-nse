@@ -15,7 +15,6 @@ import {
   Moon,
   Radio,
   RotateCcw,
-  ScanSearch,
   Search,
   Settings2,
   Square,
@@ -46,20 +45,6 @@ import {
 } from "./strategy-parameters";
 import { JsonConfigurationEditor } from "./json-configuration-editor";
 import { createJsonConfiguration } from "./json-configuration.mjs";
-import {
-  VwapPullbackResults,
-  type VwapPullbackResponse,
-} from "./vwap-pullback-results";
-import {
-  Top5OpeningRangeBreakoutSettingsPanel,
-  TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY,
-  type Top5OpeningRangeBreakoutSettings,
-} from "./daily-watchlist-settings";
-import {
-  Top5OpeningRangeBreakoutResults,
-  type Top5OpeningRangeBreakoutResponse,
-} from "./daily-watchlist-results";
-import { createTop5OpeningRangeBreakoutRequest } from "./top-5-opening-range-breakout-contract.mjs";
 import { StrongBuyResults, type StrongBuyBacktestResponse } from "./strong-buy-results";
 import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
 import {
@@ -184,25 +169,7 @@ type BacktestResponse = {
   warnings: string[];
 };
 
-type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | StrongBuyBacktestResponse) & { detail?: string };
-type BacktestJobStatus = {
-  jobId: string;
-  status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETE" | "FAILED";
-  currentStage: string;
-  symbolsCompleted: number;
-  symbolsTotal: number;
-  supportSymbolsCompleted: number;
-  supportSymbolsTotal: number;
-  candlesProcessed: number;
-  candidatesFound: number;
-  acceptedSignals: number;
-  elapsedSeconds: number;
-  estimatedRemainingSeconds: number | null;
-  workersActive: number;
-  result: BacktestPayload | null;
-  error: string | null;
-  detail?: string;
-};
+type BacktestPayload = (BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse) & { detail?: string };
 
 type RetiredMarketAlignedResponse = {
   metadata: {
@@ -222,18 +189,9 @@ type RetiredMarketAlignedResponse = {
 type RunProgress = {
   completed: number;
   total: number;
-  supportCompleted?: number;
-  supportTotal?: number;
-  candles?: number;
-  candidates?: number;
-  accepted?: number;
-  elapsedSeconds?: number;
-  estimatedRemainingSeconds?: number | null;
-  stage?: string;
-  workers?: number;
 };
-type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | VwapPullbackResponse | Top5OpeningRangeBreakoutResponse | StrongBuyBacktestResponse | RetiredMarketAlignedResponse;
-type StrategyMode = "rsi_range" | "rsi_recovery" | "ema_vwap_strong_buy" | "top_5_opening_range_breakout";
+type ActiveResponse = BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse | RetiredMarketAlignedResponse;
+type StrategyMode = "rsi_range" | "rsi_recovery" | "ema_vwap_strong_buy";
 type StoredBacktest = BacktestHistoryEntry<ActiveResponse>;
 type StoredBacktestSummary = BacktestHistorySummary;
 
@@ -280,7 +238,6 @@ const STRATEGY_NAMES: Record<StrategyMode, string> = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",
   ema_vwap_strong_buy: "EMA 9/21 + VWAP Strong Buy",
-  top_5_opening_range_breakout: "Top-5 Opening Range Breakout",
 };
 
 // EMA/VWAP Strong Buy is the only strategy that can start a new backtest. Every other
@@ -293,7 +250,6 @@ const LAUNCHABLE_STRATEGY_NAMES: Record<string, string> = {
 const RETIRED_STRATEGY_NOTICE = "Retired strategy — cannot run again.";
 
 const timeframes = ["5m", "15m", "30m", "1h", "2h", "4h", "1d"] as const;
-const top5OpeningRangeBreakoutRecommendedDefaults = strategyDefaults(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY);
 const rangeRecommendedDefaults = strategyDefaults("rsi_range");
 const recoveryRecommendedDefaults = strategyDefaults("rsi_recovery");
 const strongBuyRecommendedDefaults = {
@@ -303,23 +259,6 @@ const strongBuyRecommendedDefaults = {
   initialQuantity: 100, allowAdditionalBuys: true,
   additionalQuantityPct: 50, additionalSizingMode: "REDUCE_EVERY_NEW_LOT",
   minimumQuantity: 1, maximumEntriesPerCycle: 10, executionModel: "NEXT_BAR_OPEN",
-  failureEngineMode: "OFF" as "OFF" | "RESEARCH_COMPARE",
-  failureMaximumHoldingBars: 375,
-  failureSupportLookbackBars: 20,
-  failureEmaSlopeLookbackBars: 3,
-  failureProgressLookbackBars: 6,
-  failureMinimumProgressFraction: 0.25,
-  failureDecisionPersistenceBars: 2,
-  failureMinimumFailedGroups: 2,
-  failureRoundTripCostBps: 14,
-  failurePriorObservations: 20,
-  failureWalkForwardFolds: 2,
-  failureMinimumTrainingLots: 30,
-  failureMinimumTestLots: 10,
-  failureMinimumStateLots: 10,
-  failureMinimumCandidateExits: 20,
-  failureMinimumCandidateExitsPerFold: 5,
-  failureMaximumAuditRows: 5000,
 };
 
 function defaultNumber(strategy: "rsi_range" | "rsi_recovery", key: string) {
@@ -342,15 +281,6 @@ function isRecoveryResponse(value: ActiveResponse | null): value is RecoveryBack
 
 function isStrongBuyResponse(value: ActiveResponse | null): value is StrongBuyBacktestResponse {
   return value?.metadata.strategyMode === "ema_vwap_strong_buy";
-}
-
-function isVwapPullbackResponse(value: ActiveResponse | null): value is VwapPullbackResponse {
-  return value?.metadata.strategyMode === "market_aligned_vwap_pullback_scalper";
-}
-
-function isTop5OpeningRangeBreakoutResponse(value: ActiveResponse | null): value is Top5OpeningRangeBreakoutResponse {
-  return value?.metadata.strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY
-    && value.metadata.strategyKey === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY;
 }
 
 function isRetiredMarketAlignedResponse(value: ActiveResponse | null): value is RetiredMarketAlignedResponse {
@@ -757,7 +687,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const [darkMode, setDarkMode] = useState(true);
   const [strategyMode, setStrategyMode] = useState<StrategyMode>(LAUNCHABLE_STRATEGY_MODE);
   const [strongBuySettings, setStrongBuySettings] = useState({ ...strongBuyRecommendedDefaults });
-  const [top5OpeningRangeBreakoutSettings, setTop5OpeningRangeBreakoutSettings] = useState<Top5OpeningRangeBreakoutSettings>({ ...top5OpeningRangeBreakoutRecommendedDefaults });
   const [availableSymbols, setAvailableSymbols] = useState<string[]>(symbols);
   const [globalPriceRange, setGlobalPriceRange] = useState(initialGlobalPriceRange);
   const [symbolRegistryError, setSymbolRegistryError] = useState<string | null>(null);
@@ -807,19 +736,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const [upperRsiLevel, setUpperRsiLevel] = useState(defaultNumber("rsi_recovery", "upperRsiLevel"));
   const [hardStopLossPct, setHardStopLossPct] = useState(defaultNumber("rsi_recovery", "hardStopLossPct"));
   const [rsiExitExecutionModel, setRsiExitExecutionModel] = useState<"SIGNAL_CLOSE" | "NEXT_BAR_OPEN">("SIGNAL_CLOSE");
-  const [numericErrors, setNumericErrors] = useState<Record<string, string>>({});
-
-  const setNumericValidity = (key: string, value: string | null) => {
-    setNumericErrors((current) => {
-      if (!value) {
-        if (!(key in current)) return current;
-        const next = { ...current };
-        delete next[key];
-        return next;
-      }
-      return current[key] === value ? current : { ...current, [key]: value };
-    });
-  };
 
   const applyRangeValues = (values: Record<string, unknown>) => {
     setEntryLow(Number(values.entryLow ?? rangeRecommendedDefaults.entryLow));
@@ -868,18 +784,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     setRsiExitExecutionModel(String(values.rsiExitExecutionModel ?? recoveryRecommendedDefaults.rsiExitExecutionModel) as typeof rsiExitExecutionModel);
     setOptimization(null);
     setRsiComparison(null);
-    setNumericErrors({});
-  };
-
-  const applyTop5OpeningRangeBreakoutValues = (values: Record<string, number | string | boolean>) => {
-    setTop5OpeningRangeBreakoutSettings({ ...top5OpeningRangeBreakoutRecommendedDefaults, ...values, quantityPerTrade: 50 });
-    setNumericErrors({});
   };
 
   const currentStrategyValues = (strategy: StrategyMode): Record<string, unknown> => {
     if (strategy === "rsi_range") return { entryLow, entryHigh, exitLow, exitHigh };
     if (strategy === "ema_vwap_strong_buy") return strongBuySettings;
-    if (strategy === "rsi_recovery") return {
+    return {
       rsiLength, rsiArmLow, rsiArmHigh, rsiRecovery, setupExpiryBars,
       emaFast, emaSlow, volumeEma, minimumConfirmations, targetPct,
       fixedStopLossPct, quantityPerTrade, maxOpenLotsPerSymbol, maxHoldingTradingDays,
@@ -890,32 +800,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       executionModel, exitModel, exitProtectionEnabled, positionSizing,
       rsiExitExecutionModel, timeExit: "NEXT_TRADING_SESSION_OPEN",
     };
-    return top5OpeningRangeBreakoutSettings;
   };
-
-  const top5OpeningRangeBreakoutRelationshipErrors = useMemo(() => {
-    const errors: Record<string, string> = {};
-    const setting = (key: string) => Number(top5OpeningRangeBreakoutSettings[key]);
-    const time = (key: string) => String(top5OpeningRangeBreakoutSettings[key]);
-    if (setting("quantityPerTrade") !== 50) errors.quantity = "Top-5 Opening Range Breakout quantity must remain exactly 50 shares.";
-    if (setting("emaFast") >= setting("emaSlow")) errors.ema = "EMA fast length must be below EMA slow length.";
-    if (setting("minimumStopPct") > setting("maximumStopPct")) errors.stop = "Minimum stop cannot exceed maximum stop.";
-    if (setting("minimumPrice") >= setting("maximumPrice")) errors.priceEligibility = "Minimum eligible price must be below maximum eligible price.";
-    if (setting("minimumDailyAtrPct") >= setting("maximumDailyAtrPct")) errors.dailyAtrEligibility = "Minimum daily ATR must be below maximum daily ATR.";
-    if (setting("watchlistPrimarySymbols") > setting("watchlistSelectedSymbols")) errors.watchlistPrimary = "Primary symbols cannot exceed selected watchlist symbols.";
-    if (setting("watchlistMaximumReplacementsPerRescan") > setting("watchlistSelectedSymbols")) errors.watchlistReplacements = "Maximum replacements cannot exceed selected watchlist symbols.";
-    if (setting("watchlistRescanIntervalMinutes") % 5 !== 0 || setting("watchlistRollingWindowMinutes") % 5 !== 0) errors.watchlistBarAlignment = "Rescan interval and rolling window must be multiples of five minutes.";
-    if (!(time("openingRangeStartTime") < time("openingRangeEndTime")
-      && time("openingRangeEndTime") <= time("watchlistSelectionTime")
-      && time("watchlistSelectionTime") <= time("watchlistRescanEndTime")
-      && time("watchlistRescanEndTime") < time("lastEntryTime")
-      && time("lastEntryTime") < time("squareOffTime"))) {
-      errors.sessionTimes = "Use opening start < opening end ≤ selection ≤ final rescan < last entry < square-off.";
-    }
-    return errors;
-  }, [top5OpeningRangeBreakoutSettings]);
-
-  const top5OpeningRangeBreakoutFormInvalid = Object.keys(numericErrors).length > 0 || Object.keys(top5OpeningRangeBreakoutRelationshipErrors).length > 0;
 
   const [optimizerGrid, setOptimizerGrid] = useState({
     stopAtrMultipliers: "0.75, 1.00, 1.25, 1.50, 2.00",
@@ -945,9 +830,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const [historyMessage, setHistoryMessage] = useState<string | null>(null);
   const [detailSymbol, setDetailSymbol] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<RunProgress | null>(null);
-  const [cachePolicy, setCachePolicy] = useState<"USE_CACHE" | "RUN_AGAIN">("USE_CACHE");
   const runAbortRef = useRef<AbortController | null>(null);
-  const runJobIdRef = useRef<string | null>(null);
   const exitProtectionEnabled = exitModel !== "LEGACY_FIXED_TARGET";
 
   useEffect(() => {
@@ -1079,21 +962,16 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     }
     if (next === "ema_vwap_strong_buy") {
       setStrongBuySettings((current) => ({ ...current, minimumConfirmations: 2, higherTimeframe: "15m", executionModel: "NEXT_BAR_OPEN" }));
-    } else if (next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
-      const values = { ...top5OpeningRangeBreakoutRecommendedDefaults, ...saved, quantityPerTrade: 50 };
-      applyTop5OpeningRangeBreakoutValues(values as Record<string, number | string | boolean>);
-      setExitModel("LEGACY_FIXED_TARGET");
     } else if (next === "rsi_recovery") {
       applyRecoveryValues({ ...recoveryRecommendedDefaults, ...saved });
     } else {
       applyRangeValues({ ...rangeRecommendedDefaults, ...saved });
     }
-    setNumericErrors({});
     setStrategyMode(next);
     const savedTimeframe = typeof saved.timeframe === "string" && timeframes.includes(saved.timeframe as typeof timeframes[number])
       ? saved.timeframe as typeof timeframes[number]
       : next === "rsi_range" ? "1d" : "5m";
-    setTimeframe(next === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || next === "ema_vwap_strong_buy" ? "5m" : savedTimeframe);
+    setTimeframe(next === "ema_vwap_strong_buy" ? "5m" : savedTimeframe);
     setResponse(null); setActiveHistoryId(null); setError(null);
   };
 
@@ -1115,13 +993,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   };
 
   const cancelCurrentRun = () => {
-    const jobId = runJobIdRef.current;
-    if (jobId) {
-      void fetch(`/api/backtest/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" })
-        .finally(() => runAbortRef.current?.abort());
-      setRunProgress((current) => current ? { ...current, stage: "CANCELLING", workers: 0 } : current);
-      return;
-    }
     runAbortRef.current?.abort();
   };
 
@@ -1140,31 +1011,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     } else if (strategyMode === "ema_vwap_strong_buy") {
       if (!(strongBuySettings.emaFast < strongBuySettings.emaSlow && strongBuySettings.targetPct > 0 && strongBuySettings.initialQuantity > 0)) {
         setError("Strong Buy requires fast EMA below slow EMA, a positive target, and positive quantity.");
-        return;
-      }
-      if (strongBuySettings.failureEngineMode === "RESEARCH_COMPARE" && !(
-        Number.isInteger(strongBuySettings.failureMaximumHoldingBars) && strongBuySettings.failureMaximumHoldingBars > 0
-        && Number.isInteger(strongBuySettings.failureSupportLookbackBars) && strongBuySettings.failureSupportLookbackBars > 0
-        && Number.isInteger(strongBuySettings.failureEmaSlopeLookbackBars) && strongBuySettings.failureEmaSlopeLookbackBars > 0
-        && Number.isInteger(strongBuySettings.failureProgressLookbackBars) && strongBuySettings.failureProgressLookbackBars > 0
-        && strongBuySettings.failureMinimumProgressFraction > 0 && strongBuySettings.failureMinimumProgressFraction <= 1
-        && Number.isInteger(strongBuySettings.failureDecisionPersistenceBars) && strongBuySettings.failureDecisionPersistenceBars > 0
-        && Number.isInteger(strongBuySettings.failureMinimumFailedGroups) && strongBuySettings.failureMinimumFailedGroups >= 1 && strongBuySettings.failureMinimumFailedGroups <= 3
-        && strongBuySettings.failureRoundTripCostBps >= 0
-        && strongBuySettings.failurePriorObservations > 0
-        && Number.isInteger(strongBuySettings.failureWalkForwardFolds) && strongBuySettings.failureWalkForwardFolds > 0
-        && Number.isInteger(strongBuySettings.failureMinimumTrainingLots) && strongBuySettings.failureMinimumTrainingLots > 0
-        && Number.isInteger(strongBuySettings.failureMinimumTestLots) && strongBuySettings.failureMinimumTestLots > 0
-        && Number.isInteger(strongBuySettings.failureMinimumStateLots) && strongBuySettings.failureMinimumStateLots > 0
-        && Number.isInteger(strongBuySettings.failureMinimumCandidateExits) && strongBuySettings.failureMinimumCandidateExits > 0
-        && Number.isInteger(strongBuySettings.failureMinimumCandidateExitsPerFold) && strongBuySettings.failureMinimumCandidateExitsPerFold > 0
-      )) {
-        setError("Failure Engine research requires valid positive bar/sample settings, progress from 0 to 1, and 1 to 3 evidence groups.");
-        return;
-      }
-    } else if (strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY) {
-      if (top5OpeningRangeBreakoutFormInvalid) {
-        setError(Object.values(numericErrors)[0] ?? Object.values(top5OpeningRangeBreakoutRelationshipErrors)[0] ?? "Review the highlighted Top-5 Opening Range Breakout settings.");
         return;
       }
     } else {
@@ -1248,14 +1094,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     let completedCount = 0;
     const runId = crypto.randomUUID();
     try {
-      let aggregate: BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse | Top5OpeningRangeBreakoutResponse | null = null;
-      // Cross-symbol ranking and walk-forward research require one chronological stream.
+      let aggregate: BacktestResponse | RecoveryBacktestResponse | StrongBuyBacktestResponse | null = null;
       const batchSize = 10;
-      const crossSymbolStrategy = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY
-        || (strategyMode === "ema_vwap_strong_buy" && strongBuySettings.failureEngineMode === "RESEARCH_COMPARE");
-      const effectiveBatchSize = crossSymbolStrategy ? symbolsToRun.length : batchSize;
-      for (let offset = 0; offset < symbolsToRun.length; offset += effectiveBatchSize) {
-        const batch = symbolsToRun.slice(offset, offset + effectiveBatchSize);
+      for (let offset = 0; offset < symbolsToRun.length; offset += batchSize) {
+        const batch = symbolsToRun.slice(offset, offset + batchSize);
         const strategyPayload = strategyMode === "rsi_range" ? {
           entryLow,
           entryHigh,
@@ -1263,8 +1105,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           exitHigh,
         } : strategyMode === "ema_vwap_strong_buy" ? {
           strongBuyConfiguration: strongBuySettings,
-        } : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? {
-          top5OpeningRangeBreakoutConfiguration: top5OpeningRangeBreakoutSettings,
         } : {
           rsiLength,
           rsiArmLow,
@@ -1305,7 +1145,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           rsiExitExecutionModel,
           timeExit: "NEXT_TRADING_SESSION_OPEN",
         };
-        const commonRequest = {
+        const requestBody = {
           symbols: batch,
           strategyMode,
           strategyKey: strategyMode,
@@ -1313,67 +1153,17 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           runId,
           durationYears,
           timeframe,
-          cachePolicy: crossSymbolStrategy ? cachePolicy : "RUN_AGAIN",
+          cachePolicy: "RUN_AGAIN",
           ...strategyPayload,
         };
-        const requestBody = strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY
-          ? createTop5OpeningRangeBreakoutRequest(commonRequest, top5OpeningRangeBreakoutSettings)
-          : commonRequest;
-        let payload: BacktestPayload;
-        if (crossSymbolStrategy) {
-          const started = await fetch("/api/backtest?action=start-job", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(requestBody),
-            signal: controller.signal,
-          });
-          const initial = JSON.parse(await started.text()) as BacktestJobStatus;
-          if (!started.ok || !initial.jobId) throw new Error(initial.detail ?? "Backtest job could not be started.");
-          runJobIdRef.current = initial.jobId;
-          let job = initial;
-          while (!(["COMPLETE", "CANCELLED", "FAILED"] as string[]).includes(job.status)) {
-            await new Promise<void>((resolve, reject) => {
-              const timer = window.setTimeout(resolve, 750);
-              controller.signal.addEventListener("abort", () => {
-                window.clearTimeout(timer);
-                reject(new DOMException("Aborted", "AbortError"));
-              }, { once: true });
-            });
-            const polled = await fetch(`/api/backtest/jobs/${encodeURIComponent(initial.jobId)}`, {
-              cache: "no-store",
-              signal: controller.signal,
-            });
-            job = JSON.parse(await polled.text()) as BacktestJobStatus;
-            if (!polled.ok) throw new Error(job.detail ?? "Backtest progress is unavailable.");
-            completedCount = job.symbolsCompleted;
-            setRunProgress({
-              completed: job.symbolsCompleted,
-              total: job.symbolsTotal,
-              supportCompleted: job.supportSymbolsCompleted,
-              supportTotal: job.supportSymbolsTotal,
-              candles: job.candlesProcessed,
-              candidates: job.candidatesFound,
-              accepted: job.acceptedSignals,
-              elapsedSeconds: job.elapsedSeconds,
-              estimatedRemainingSeconds: job.estimatedRemainingSeconds,
-              stage: job.currentStage,
-              workers: job.workersActive,
-            });
-          }
-          runJobIdRef.current = null;
-          if (job.status === "CANCELLED") throw new DOMException("Aborted", "AbortError");
-          if (job.status === "FAILED" || !job.result) throw new Error(job.error ?? "Backtest failed.");
-          payload = job.result;
-        } else {
-          const result = await fetch("/api/backtest", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(requestBody),
-            signal: controller.signal,
-          });
-          payload = await readBacktestPayload(result, batch[0]);
-          if (!result.ok) throw new Error(payload.detail ?? `Backtest stopped near ${batch[0]}.`);
-        }
+        const result = await fetch("/api/backtest", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+        const payload = await readBacktestPayload(result, batch[0]);
+        if (!result.ok) throw new Error(payload.detail ?? `Backtest stopped near ${batch[0]}.`);
         if (!Array.isArray(payload.results) || !Array.isArray(payload.errors) || !Array.isArray(payload.warnings)) {
           throw new Error(`Backtest service returned incomplete data near ${batch[0]}. Please retry.`);
         }
@@ -1400,7 +1190,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               results: [...previous.results, ...payload.results],
               errors: [...previous.errors, ...payload.errors],
               warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
-              failureEngineResearch: payload.failureEngineResearch ?? previous.failureEngineResearch,
             };
           })()) : payload;
         } else if (strategyMode === "rsi_recovery") {
@@ -1410,7 +1199,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             isRecoveryResponse(aggregate) ? aggregate : null,
             payload,
           );
-        } else if (strategyMode === "rsi_range") {
+        } else {
           if (!isRangeResponse(payload)) throw new Error("Backtest service returned the wrong strategy mode.");
           const previous = aggregate as BacktestResponse | null;
           aggregate = previous ? {
@@ -1419,9 +1208,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             errors: [...previous.errors, ...payload.errors],
             warnings: Array.from(new Set([...previous.warnings, ...payload.warnings])),
           } : payload;
-        } else {
-          if (!isTop5OpeningRangeBreakoutResponse(payload)) throw new Error("Backtest service returned the wrong strategy key.");
-          aggregate = payload;
         }
 
         const completed = Math.min(offset + batch.length, symbolsToRun.length);
@@ -1474,7 +1260,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       }
     } finally {
       runAbortRef.current = null;
-      runJobIdRef.current = null;
       setLoading(false);
     }
   };
@@ -1683,16 +1468,11 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
     if (universeMode === "selected") setSelectedSymbols(nextSymbols);
     setDurationYears(Number(settings.durationYears) as 1 | 3);
     setTimeframe(String(settings.timeframe) as typeof timeframe);
-    if (strategyMode === "ema_vwap_strong_buy") {
-      // Strong Buy has no JSON-managed strategy parameters; only the run settings above apply.
-      setNumericErrors({});
-    } else if (strategyMode === "rsi_range") {
+    // Strong Buy has no JSON-managed strategy parameters; only the run settings above apply.
+    if (strategyMode === "rsi_range") {
       applyRangeValues(settings);
     } else if (strategyMode === "rsi_recovery") {
       applyRecoveryValues(settings);
-    } else {
-      if (Number(settings.quantityPerTrade) !== 50) return "Top-5 Opening Range Breakout quantity must remain exactly 50 shares.";
-      applyTop5OpeningRangeBreakoutValues(settings as Record<string, number | string | boolean>);
     }
     setResponse(null);
     setActiveHistoryId(null);
@@ -1703,16 +1483,12 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
   const resetJsonConfiguration = () => {
     if (strategyMode === "ema_vwap_strong_buy") {
       setStrongBuySettings({ ...strongBuyRecommendedDefaults });
-      setNumericErrors({});
       setTimeframe("5m");
     } else if (strategyMode === "rsi_range") {
       applyRangeValues(rangeRecommendedDefaults);
       setTimeframe("1d");
-    } else if (strategyMode === "rsi_recovery") {
-      applyRecoveryValues(recoveryRecommendedDefaults);
-      setTimeframe("5m");
     } else {
-      applyTop5OpeningRangeBreakoutValues(top5OpeningRangeBreakoutRecommendedDefaults);
+      applyRecoveryValues(recoveryRecommendedDefaults);
       setTimeframe("5m");
     }
     setDurationYears(1);
@@ -1731,7 +1507,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           </a>
           <nav className="top-nav" aria-label="Main navigation">
             <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
-            <a className="nav-item" href="/scanner"><ScanSearch size={16} />Stock Scanner</a>
             <a className="nav-item active" href="/backtest" aria-current="page"><TrendingUp size={16} />Backtest</a>
             <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
             <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>
@@ -1753,10 +1528,10 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           <button type="button" className={strategyMode === LAUNCHABLE_STRATEGY_MODE ? "active" : ""} onClick={() => switchStrategy(LAUNCHABLE_STRATEGY_MODE)}>EMA/VWAP Strong Buy</button>
         </div>
         <section className="backtest-intro">
-          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : strategyMode === "ema_vwap_strong_buy" ? "EMA 9/21 crossover above VWAP with any two of ADX, relative volume and confirmed 15-minute alignment." : "Select a causal top-five watchlist at the open or on rolling rescans, then test opening-range and midday momentum breakouts."}</p></div>
+          <div><span className="section-kicker">Strategy lab</span><h1>Historical backtest</h1><p>{strategyMode === "rsi_range" ? "Buy at low RSI. At high RSI, sell only for at least 1% net profit after fees; otherwise keep holding." : strategyMode === "rsi_recovery" ? "RSI recovery entries using the existing EMA, VWAP and volume confirmation logic." : "EMA 9/21 crossover above VWAP with any two of ADX, relative volume and confirmed 15-minute alignment."}</p></div>
           <button type="button" className="method-pill strategy-rule-trigger" aria-label="Hover or focus to view all backtest conditions">
             <Clock3 size={16} />
-            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : strategyMode === "ema_vwap_strong_buy" ? "EMA 9/21 crossover above VWAP, next-open entry" : "Causal Top-5 watchlist + next-bar ORB"}; hover for all conditions</span>
+            <span><strong>Investment rules</strong>{strategyMode === "rsi_range" ? "Signals execute at the next candle open" : strategyMode === "rsi_recovery" ? "Existing RSI recovery behavior" : "EMA 9/21 crossover above VWAP, next-open entry"}; hover for all conditions</span>
             <span className="strategy-rules-popover" role="tooltip">
               {strategyMode === "ema_vwap_strong_buy" ? <>
                 <strong>EMA/VWAP Strong Buy conditions</strong>
@@ -1764,7 +1539,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 <span><b>CONFIRM:</b> Any two of ADX/DMI ≥ {strongBuySettings.minimumAdx}, RVOL ≥ {strongBuySettings.minimumRvol}, and confirmed 15-minute alignment.</span>
                 <span><b>ENTRY:</b> Execute at the next completed 5-minute candle open. Every lot is independent.</span>
                 <span><b>SELL:</b> Each baseline lot exits at its own {strongBuySettings.targetPct}% target. There is no baseline stop loss, bearish exit or end-of-day exit.</span>
-                {strongBuySettings.failureEngineMode === "RESEARCH_COMPARE" && <span><b>FAILURE RESEARCH:</b> Causal thesis-failure states are trained and tested with chronological walk-forward splits, then simulated at the next bar open. They never close paper or live positions.</span>}
                 <span>Backtest research only; no broker order is sent.</span>
               </> : strategyMode === "rsi_range" ? <>
                 <strong>Buy / hold / sell conditions</strong>
@@ -1772,13 +1546,6 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 <span><b>CHECK:</b> When RSI is {exitLow}-{exitHigh}, estimate the next-open sale after entry fee, exit fee, and slippage.</span>
                 <span><b>SELL:</b> Execute only when estimated net profit is at least 1% of the buy cost.</span>
                 <span><b>HOLD:</b> If net profit is below 1%, cancel that exit and wait for a later high-RSI opportunity.</span>
-              </> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <>
-                <strong>Top-5 Opening Range Breakout</strong>
-                <span>FROZEN_OPEN selects five symbols at 09:30. ROLLING rescans completed candles every 30 minutes through 14:00.</span>
-                <span>The opening range is 09:15–09:30. A completed breakout candle can enter only at the next candle open.</span>
-                <span>Symbols promoted midday use a six-bar momentum breakout that excludes the trigger candle.</span>
-                <span>Every executed trade is exactly 50 shares. Costs, 1.5R exits and portfolio limits are identical across all comparison baselines.</span>
-                <span>Research and paper-signal only; no live broker orders.</span>
               </> : <>
                 <strong>RSI Recovery BUY and hold conditions</strong>
                 <span><b>ARM:</b> RSI enters {rsiArmLow}–{rsiArmHigh}. Falling below the arm range does not cancel it.</span>
@@ -1807,7 +1574,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             {useAllSymbols ? (
               <div className="all-symbols-selection">
                 <strong>Entire symbols.csv universe</strong>
-                <span>{strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || (strategyMode === "ema_vwap_strong_buy" && strongBuySettings.failureEngineMode === "RESEARCH_COMPARE") ? "Runs as one causal cross-symbol research stream with bounded workers." : "Runs automatically in safe groups of 10."} Keep this page open to see progress.</span>
+                <span>Runs automatically in safe groups of 10. Keep this page open to see progress.</span>
               </div>
             ) : (
               <div className="selected-symbols">
@@ -1832,7 +1599,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
           </div>
 
           <div className="control-block compact-control"><span className="control-title">Duration</span><div className="segmented backtest-segmented">{([1, 3] as const).map((years) => <button key={years} type="button" className={durationYears === years ? "active" : ""} onClick={() => setDurationYears(years)}>{years} year{years > 1 ? "s" : ""}</button>)}</div></div>
-          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" disabled={(strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY || strategyMode === "ema_vwap_strong_buy") && item !== "5m"} className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
+          <div className="control-block timeframe-control"><span className="control-title">Timeframe</span><div className="segmented backtest-segmented">{timeframes.map((item) => <button key={item} type="button" disabled={strategyMode === "ema_vwap_strong_buy" && item !== "5m"} className={timeframe === item ? "active" : ""} onClick={() => setTimeframe(item)}>{item}</button>)}</div></div>
           {strategyMode === "rsi_range" ? <>
             <div className="control-block range-control"><span className="control-title">Buy RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "entryLow")} value={entryLow} onChange={(event) => setEntryLow(Number(event.target.value))} aria-label="Buy RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "entryHigh")} value={entryHigh} onChange={(event) => setEntryHigh(Number(event.target.value))} aria-label="Buy RSI upper value" /></div></div>
             <div className="control-block range-control"><span className="control-title">Sell RSI range</span><div className="range-inputs"><input type="number" {...numericConstraints("rsi_range", "exitLow")} value={exitLow} onChange={(event) => setExitLow(Number(event.target.value))} aria-label="Sell RSI lower value" /><span>to</span><input type="number" {...numericConstraints("rsi_range", "exitHigh")} value={exitHigh} onChange={(event) => setExitHigh(Number(event.target.value))} aria-label="Sell RSI upper value" /></div></div>
@@ -1853,35 +1620,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
               <label><span>Maximum entries</span><input type="number" min="1" max="100" value={strongBuySettings.maximumEntriesPerCycle} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, maximumEntriesPerCycle: Math.floor(Number(event.target.value)) })} /></label>
               <div className="fixed-strategy-rules"><span>Next-open entry</span><span>No stop loss</span><span>Hold to each lot&apos;s target</span></div>
             </fieldset>
-            <fieldset className="recovery-config-card position-config-card"><legend>Failure Engine research</legend>
-              <label><span>Mode</span><select aria-label="Failure Engine mode" value={strongBuySettings.failureEngineMode} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureEngineMode: event.target.value as "OFF" | "RESEARCH_COMPARE" })}><option value="OFF">Off — baseline only</option><option value="RESEARCH_COMPARE">Compare with baseline</option></select></label>
-              <label><span>Maximum outcome horizon</span><span className="suffixed-input"><input aria-label="Failure maximum holding bars" type="number" min="1" step="1" value={strongBuySettings.failureMaximumHoldingBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMaximumHoldingBars: Math.floor(Number(event.target.value)) })} /><i>bars</i></span></label>
-              <label><span>Round-trip cost</span><span className="suffixed-input"><input aria-label="Failure round-trip cost bps" type="number" min="0" step="0.01" value={strongBuySettings.failureRoundTripCostBps} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureRoundTripCostBps: Number(event.target.value) })} /><i>bps</i></span></label>
-              <details>
-                <summary>Research safeguards</summary>
-                <label><span>Support lookback</span><input type="number" min="1" step="1" value={strongBuySettings.failureSupportLookbackBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureSupportLookbackBars: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>EMA slope lookback</span><input type="number" min="1" step="1" value={strongBuySettings.failureEmaSlopeLookbackBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureEmaSlopeLookbackBars: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Progress window</span><input type="number" min="1" step="1" value={strongBuySettings.failureProgressLookbackBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureProgressLookbackBars: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Minimum target progress</span><input type="number" min="0.01" max="1" step="0.01" value={strongBuySettings.failureMinimumProgressFraction} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumProgressFraction: Number(event.target.value) })} /></label>
-                <label><span>Decision persistence</span><input type="number" min="1" step="1" value={strongBuySettings.failureDecisionPersistenceBars} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureDecisionPersistenceBars: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Independent groups</span><input type="number" min="1" max="3" step="1" value={strongBuySettings.failureMinimumFailedGroups} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumFailedGroups: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Prior observations</span><input type="number" min="0.01" step="0.01" value={strongBuySettings.failurePriorObservations} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failurePriorObservations: Number(event.target.value) })} /></label>
-                <label><span>Walk-forward folds</span><input type="number" min="1" step="1" value={strongBuySettings.failureWalkForwardFolds} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureWalkForwardFolds: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Minimum training lots</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumTrainingLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumTrainingLots: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Minimum test lots</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumTestLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumTestLots: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Minimum lots per state</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumStateLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumStateLots: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Candidate minimum exits</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumCandidateExits} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumCandidateExits: Math.floor(Number(event.target.value)) })} /></label>
-                <label><span>Candidate exits per fold</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumCandidateExitsPerFold} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumCandidateExitsPerFold: Math.floor(Number(event.target.value)) })} /></label>
-              </details>
-              <div className="fixed-strategy-rules"><span>Completed candles only</span><span>Chronological walk-forward</span><span>Next-open simulated exit</span><span>Never live</span></div>
-            </fieldset>
-          </div> : strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY ? <Top5OpeningRangeBreakoutSettingsPanel
-            settings={top5OpeningRangeBreakoutSettings}
-            onChange={(key, value) => setTop5OpeningRangeBreakoutSettings((current) => ({ ...current, [key]: key === "quantityPerTrade" ? 50 : value }))}
-            onValidityChange={setNumericValidity}
-            cachePolicy={cachePolicy}
-            onCachePolicyChange={setCachePolicy}
-          /> : <>
+          </div> : <>
             <div className="recovery-config recovery-simple-config">
               <fieldset className="recovery-config-card target-card">
                 <legend>Execution &amp; target</legend>
@@ -1996,9 +1735,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             }}
           />
           {loading ? (
-            <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? (runProgress.stage === "SUPPORTING_MARKET_FEATURES" && runProgress.supportTotal ? `support ${runProgress.supportCompleted ?? 0}/${runProgress.supportTotal}` : `${runProgress.completed}/${runProgress.total}`) : "run"}</button>
+            <button className="run-backtest stop-backtest" type="button" onClick={cancelCurrentRun}><Square size={15} />Stop {runProgress ? `${runProgress.completed}/${runProgress.total}` : "run"}</button>
           ) : (
-            <button className="run-backtest" type="submit" disabled={strategyMode === TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY && top5OpeningRangeBreakoutFormInvalid}><TrendingUp size={17} />Run backtest</button>
+            <button className="run-backtest" type="submit"><TrendingUp size={17} />Run backtest</button>
           )}
         </form>
 
@@ -2024,15 +1763,13 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         </section>
 
         {error && <div className="backtest-message error"><AlertTriangle size={17} /><span>{error}</span></div>}
-        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>{runProgress?.stage ? runProgress.stage.replaceAll("_", " ") : "Fetching and testing historical candles"}</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} trading symbols${runProgress.supportTotal ? ` · ${runProgress.supportCompleted ?? 0} of ${runProgress.supportTotal} supporting symbols` : ""} · ${number(runProgress.candles ?? 0, 0)} candles · ${number(runProgress.candidates ?? 0, 0)} candidates · ${number(runProgress.accepted ?? 0, 0)} accepted · ${number(runProgress.workers ?? 0, 0)} workers · ${number(runProgress.elapsedSeconds ?? 0, 0)}s elapsed${runProgress.estimatedRemainingSeconds == null ? "" : ` · about ${number(runProgress.estimatedRemainingSeconds, 0)}s remaining`}.` : "Intraday universe runs can take longer on a cold cache; identical completed runs can be reused safely."}</span></div></div>}
+        {loading && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Fetching and testing historical candles</strong><span>{runProgress ? `${runProgress.completed} of ${runProgress.total} symbols completed. Intraday universe runs can take longer on a cold cache.` : "Intraday universe runs can take longer on a cold cache."}</span></div></div>}
         {optimizing && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Running chronological ATR walk-forward analysis</strong><span>The configurable grid is evaluated with one common setting across all selected symbols. This optional research run can take time.</span></div></div>}
         {optimization && <AtrOptimizationResults response={optimization} />}
         {comparingRsiExits && <div className="backtest-loading"><LoaderCircle className="spin" size={22} /><div><strong>Comparing RSI exit settings chronologically</strong><span>Training and validation stay separate, costs are included, and one common configuration is applied to all selected symbols.</span></div></div>}
         {rsiComparison && <RsiExitComparisonResults response={rsiComparison} />}
         {response && (
           isRetiredMarketAlignedResponse(response) ? <RetiredStrategyBanner name="Market-Aligned RSI Scalper" />
-            : isTop5OpeningRangeBreakoutResponse(response) ? <><RetiredStrategyBanner name="Top-5 Opening Range Breakout" /><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "top-5")}><Top5OpeningRangeBreakoutResults response={response} /></SavedResultBoundary></>
-            : isVwapPullbackResponse(response) ? <><RetiredStrategyBanner name="Market-Aligned VWAP Pullback Scalper" /><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "vwap")}><VwapPullbackResults response={response} /></SavedResultBoundary></>
             : isStrongBuyResponse(response) ? <SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "strong-buy")}><StrongBuyResults response={response} /></SavedResultBoundary>
             : isRecoveryResponse(response) ? <><RetiredStrategyBanner name="RSI Recovery Scalping" /><SavedResultBoundary resetKey={String(response.metadata.runId ?? activeHistoryId ?? "recovery")}><RecoveryResults response={response} /></SavedResultBoundary></> : <>
             <RetiredStrategyBanner name="RSI Range Strategy" />

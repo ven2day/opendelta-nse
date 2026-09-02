@@ -5,29 +5,12 @@ const overview = {
   environment: "test",
   dataFreshness: { status: "HEALTHY" },
   jobStatus: { status: "HEALTHY" },
-  researchEngine: {
-    enabled: false,
-    status: "DISABLED_FAIL_CLOSED",
-    message: "New Research experiments are disabled while Research V2 correctness is validated.",
-  },
 };
 
 async function mockPlatform(page: Page) {
   await page.route("**/api/platform?**", async (route) => {
     const action = new URL(route.request().url()).searchParams.get("action");
     if (action === "overview") return route.fulfill({ json: overview });
-    if (action === "factors") return route.fulfill({ json: { rows: [], count: 0 } });
-    if (action === "jobs") return route.fulfill({ json: { rows: [], count: 0, worker: { status: "HEALTHY" } } });
-    if (action === "data-health") return route.fulfill({ json: {
-      marketData: { status: "HEALTHY", ageSeconds: 60 },
-      featureCache: { status: "HEALTHY", entries: 2 },
-      providers: [
-        { provider: "DHAN", markets: ["NSE"], timeframes: ["1m", "5m", "15m", "30m", "1h", "6h", "1d"], data_types: ["historical_candles", "live_quotes"], timezone: "Asia/Kolkata", public_only: false, status: "HEALTHY", privateTradingEndpoints: false },
-        { provider: "OKX", markets: ["CRYPTO"], timeframes: ["5m"], data_types: ["candles"], timezone: "UTC", public_only: true, status: "DEGRADED", privateTradingEndpoints: false },
-        { provider: "VALR", markets: ["CRYPTO"], timeframes: ["5m"], data_types: ["candles"], timezone: "UTC", public_only: true, status: "UNAVAILABLE", privateTradingEndpoints: false },
-      ],
-      warnings: ["Fixture status"],
-    } });
     return route.fulfill({ status: 404, json: { detail: "Not part of this browser smoke" } });
   });
   await page.route("**/api/live-signals?**", async (route) => {
@@ -77,11 +60,10 @@ test.beforeEach(async ({ page }) => {
 
 test("route-aware shell has no duplicate navigation or viewport overflow", async ({ page }) => {
   const authenticatedRoutes = [
-    "/", "/markets", "/scanner", "/signals", "/signals/funnel", "/signals/crypto",
-    "/strategies", "/backtest", "/backtest/crypto", "/research", "/research/experiments",
-    "/research/results", "/risk", "/data-health", "/jobs", "/settings", "/admin",
+    "/", "/markets", "/signals", "/signals/crypto",
+    "/backtest", "/backtest/crypto", "/settings", "/admin",
   ];
-  const routesWithEmbeddedHeader = new Set(["/", "/scanner", "/signals/funnel", "/signals/crypto", "/backtest", "/backtest/crypto", "/admin"]);
+  const routesWithEmbeddedHeader = new Set(["/", "/signals/crypto", "/backtest", "/backtest/crypto", "/admin"]);
   const viewports = [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -121,18 +103,18 @@ test("NSE Signals presents an expected market-close state without false degradat
 test("sidebar links perform full document navigation in production", async ({ page }) => {
   await page.goto("/");
 
-  const scannerLink = page.getByRole("link", { name: "Scanner", exact: true });
-  await expect(scannerLink).toHaveAttribute("href", "/scanner");
+  const signalsLink = page.getByRole("link", { name: "Signals", exact: true });
+  await expect(signalsLink).toHaveAttribute("href", "/signals");
   await page.evaluate(() => {
     (window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe = true;
   });
   await Promise.all([
-    page.waitForURL("**/scanner"),
-    scannerLink.click(),
+    page.waitForURL("**/signals"),
+    signalsLink.click(),
   ]);
-  await expect(page).toHaveURL(/\/scanner$/);
+  await expect(page).toHaveURL(/\/signals$/);
   expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
-  await expect(page.locator(".platform-route-context strong")).toHaveText("Scanner");
+  await expect(page.locator(".platform-route-context strong")).toHaveText("Signals");
 
   const backtestsLink = page.getByRole("link", { name: "Backtests", exact: true });
   await expect(backtestsLink).toHaveAttribute("href", "/backtest");
@@ -148,12 +130,15 @@ test("sidebar links perform full document navigation in production", async ({ pa
   await expect(page.locator(".platform-route-context strong")).toHaveText("Backtests");
 });
 
-test("an incompatible saved Top-5 result cannot crash the Backtests page", async ({ page }) => {
+test("a saved result from a removed strategy is ignored and cannot crash the Backtests page", async ({ page }) => {
+  // Strategies removed from the platform (for example the old opening-range watchlist) may
+  // still be returned by the history API; their records are filtered out client-side and
+  // never rendered.
   const summary = {
-    id: "legacy-top-5",
+    id: "legacy-removed-strategy",
     completedAt: "2026-08-29T15:30:00+05:30",
-    strategyMode: "top_5_opening_range_breakout",
-    strategyName: "Top-5 Opening Range Breakout",
+    strategyMode: "removed_legacy_strategy",
+    strategyName: "Removed legacy strategy",
     timeframe: "5m",
     durationYears: 1,
     symbolCount: 649,
@@ -182,8 +167,9 @@ test("an incompatible saved Top-5 result cannot crash the Backtests page", async
 
   await expect(page.locator(".platform-topbar")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recent backtests" })).toBeVisible();
-  await expect(page.getByText("Saved result could not be displayed.")).toBeVisible();
-  await expect(page.getByText("Your saved history has not been deleted")).toBeVisible();
+  await expect(page.getByText("Completed backtests will appear here automatically")).toBeVisible();
+  await expect(page.getByText("Removed legacy strategy")).toHaveCount(0);
+  await expect(page.getByText("Saved result could not be displayed.")).toHaveCount(0);
   await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 });
 
@@ -241,30 +227,6 @@ test("theme preference persists while navigating between product areas", async (
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
 });
 
-test("research remains disabled and provider badges reflect status", async ({ page }) => {
-  await page.goto("/research/experiments");
-  await expect(page.getByText("Research execution disabled")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Estimate search" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Run experiment" })).toBeDisabled();
-
-  await page.goto("/data-health");
-  await expect(page.getByRole("cell", { name: "HEALTHY" }).locator(".quant-badge")).toHaveClass(/good/);
-  await expect(page.getByRole("cell", { name: "DEGRADED" }).locator(".quant-badge")).toHaveClass(/warn/);
-  await expect(page.getByRole("cell", { name: "UNAVAILABLE" }).locator(".quant-badge")).toHaveClass(/bad/);
-});
-
-test("data-health provider values wrap inside their columns", async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/data-health");
-  await expect(page.locator(".data-health-table")).toBeVisible();
-
-  const overflow = await page.locator(".data-health-values").evaluateAll((elements) =>
-    elements.map((element) => element.scrollWidth - element.clientWidth),
-  );
-  expect(overflow.length).toBeGreaterThan(0);
-  for (const pixels of overflow) expect(pixels).toBeLessThanOrEqual(1);
-});
-
 test("mobile navigation, logout, and authentication redirects work", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/markets");
@@ -274,6 +236,6 @@ test("mobile navigation, logout, and authentication redirects work", async ({ pa
   await expect(page.locator(".platform-sidebar")).toBeVisible();
   await page.locator(".platform-signout").click();
   await expect(page).toHaveURL(/\/login$/);
-  await page.goto("/research", { waitUntil: "domcontentloaded" });
+  await page.goto("/backtest", { waitUntil: "domcontentloaded" });
   await expect(page).toHaveURL(/\/login$/);
 });

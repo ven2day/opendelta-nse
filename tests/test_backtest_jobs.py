@@ -108,11 +108,11 @@ def test_market_batch_size_can_be_bounded_explicitly(monkeypatch) -> None:
     assert [len(batch) for batch in _market_task_batches(tasks, 4)] == [2, 2, 1]
 
 
-def test_job_history_record_uses_completed_top_5_metadata() -> None:
+def test_job_history_record_uses_completed_run_metadata() -> None:
     request = BacktestRequest(
         symbols=["AAA", "BBB"],
-        strategyMode="top_5_opening_range_breakout",
-        strategyKey="top_5_opening_range_breakout",
+        strategyMode="rsi_recovery",
+        strategyKey="rsi_recovery",
         durationYears=1,
         timeframe="5m",
     )
@@ -120,9 +120,9 @@ def test_job_history_record_uses_completed_top_5_metadata() -> None:
         "metadata": {
             "runId": "full-universe-run",
             "completedAt": "2026-08-29T04:37:39+05:30",
-            "strategyMode": "top_5_opening_range_breakout",
-            "strategyKey": "top_5_opening_range_breakout",
-            "strategyName": "Top-5 Opening Range Breakout",
+            "strategyMode": "rsi_recovery",
+            "strategyKey": "rsi_recovery",
+            "strategyName": "RSI Recovery Scalping",
             "timeframe": "5m",
             "durationYears": 1,
             "symbolsProcessed": 2,
@@ -133,6 +133,6 @@ def test_job_history_record_uses_completed_top_5_metadata() -> None:
     record = _job_history_record(result, request)
 
     assert record["id"] == "full-universe-run"
-    assert record["strategyMode"] == "top_5_opening_range_breakout"
+    assert record["strategyMode"] == "rsi_recovery"
     assert record["symbolCount"] == 2
     assert record["response"] == result

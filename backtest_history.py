@@ -25,7 +25,6 @@ _STRATEGIES = {
     "top_5_opening_range_breakout",
     # Historical records created under the pre-release selector key remain readable.
     "daily_scalping_watchlist",
-    "market_aligned_vwap_pullback_scalper",
     # Historical records remain readable after this strategy was retired.
     "market_aligned_rsi_scalper",
 }

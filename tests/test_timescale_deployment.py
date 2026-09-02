@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 from pathlib import Path
-
-from opendelta.research_v2 import ResearchExperimentRequestV2
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,16 +56,3 @@ def test_all_timescale_shell_assets_parse() -> None:
 def test_runtime_image_contains_calendar_builder() -> None:
     dockerfile = read("backtest.Dockerfile")
     assert "market_data_calendar.py" in dockerfile
-
-
-def test_quant_smoke_uses_the_research_v2_request_and_response_contract() -> None:
-    smoke = read("smoke-quant-platform.sh")
-    match = re.search(r"research_payload='([^']+)'", smoke)
-    assert match is not None
-    request = ResearchExperimentRequestV2.model_validate(json.loads(match.group(1)))
-    assert request.researchVersion == "2"
-    assert request.symbols == ["LUPIN"]
-    assert request.baseStrategyId == "neutral_research_trigger"
-    assert "plannedBacktests == 1" in smoke
-    assert "plannedEvaluations" not in smoke
-    assert "durationYears" not in smoke

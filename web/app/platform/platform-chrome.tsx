@@ -4,19 +4,14 @@
 import {
   Activity,
   BarChart3,
-  BriefcaseBusiness,
-  Database,
-  FlaskConical,
   Gauge,
   LayoutDashboard,
   LogOut,
   Menu,
   Moon,
   Radio,
-  ScanSearch,
   Settings2,
   ShieldCheck,
-  SlidersHorizontal,
   Sun,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -47,19 +42,13 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
   {
     label: "Research",
     items: [
-      { href: "/scanner", label: "Scanner", icon: ScanSearch, match: (path) => path.startsWith("/scanner") },
       { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
-      { href: "/strategies", label: "Strategies", icon: SlidersHorizontal, match: (path) => path.startsWith("/strategies") },
       { href: "/backtest", label: "Backtests", icon: Gauge, match: (path) => path.startsWith("/backtest") },
-      { href: "/research", label: "Research Lab", icon: FlaskConical, match: (path) => path.startsWith("/research") },
     ],
   },
   {
     label: "Operations",
     items: [
-      { href: "/risk", label: "Risk", icon: ShieldCheck, match: (path) => path.startsWith("/risk") },
-      { href: "/data-health", label: "Data Health", icon: Database, match: (path) => path.startsWith("/data-health") },
-      { href: "/jobs", label: "Jobs", icon: BriefcaseBusiness, match: (path) => path.startsWith("/jobs") },
       { href: "/settings", label: "Settings", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
     ],
   },

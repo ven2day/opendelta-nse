@@ -12,7 +12,6 @@ import {
   Plus,
   Radio,
   RefreshCw,
-  ScanSearch,
   Search,
   Settings2,
   Sun,
@@ -595,10 +594,6 @@ export function Dashboard({
             <a className="nav-item active" href="/" aria-current="page">
               <LayoutDashboard size={16} />
               Dashboard
-            </a>
-            <a className="nav-item" href="/scanner">
-              <ScanSearch size={16} />
-              Stock Scanner
             </a>
             <a className="nav-item" href="/backtest">
               <TrendingUp size={16} />

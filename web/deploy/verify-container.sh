@@ -131,16 +131,6 @@ jq -e '
 ' "${dashboard_html}" >/dev/null
 echo "verified paper-only NSE live-signal runtime contract"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/scanner" > "${dashboard_html}"
-grep -q 'Stock Scanner' "${dashboard_html}"
-grep -q 'paper research' "${dashboard_html}"
-echo "verified stock scanner HTML"
-
-scanner_status="$(curl -sS -o "${dashboard_html}" -w '%{http_code}' \
-  "${base_url}/api/stock-scanner")"
-[[ "${scanner_status}" == "401" ]]
-echo "verified stock scanner API authentication"
-
 universe_status="$(curl -sS -o "${dashboard_html}" -w '%{http_code}' \
   "${base_url}/api/live-universe?action=config")"
 [[ "${universe_status}" == "401" ]]

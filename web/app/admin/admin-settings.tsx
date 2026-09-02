@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-html-link-for-pages -- Matches the production shell navigation. */
 
-import { LayoutDashboard, LogOut, Radio, Save, ScanSearch, Settings2, TrendingUp } from "lucide-react";
+import { LayoutDashboard, LogOut, Radio, Save, Settings2, TrendingUp } from "lucide-react";
 import { FormEvent, useState } from "react";
 import {
   DEFAULT_GLOBAL_PRICE_RANGE,
@@ -68,7 +68,6 @@ export function AdminSettings({ initialSettings, userName, signOutHref }: Props)
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
       <nav className="top-nav" aria-label="Main navigation">
         <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
-        <a className="nav-item" href="/scanner"><ScanSearch size={16} />Stock Scanner</a>
         <a className="nav-item" href="/backtest"><TrendingUp size={16} />Backtest</a>
         <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
         <a className="nav-item active" href="/admin" aria-current="page"><Settings2 size={16} />Admin</a>

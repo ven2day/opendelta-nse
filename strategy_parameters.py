@@ -8,7 +8,6 @@ from typing import Any, Literal
 StrategyKey = Literal[
     "rsi_range",
     "rsi_recovery",
-    "market_aligned_vwap_pullback_scalper",
 ]
 PARAMETER_FILE = Path(__file__).with_name("strategy-parameters.json")
 

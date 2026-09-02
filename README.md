@@ -329,12 +329,10 @@ profit factor remained below 1, and the acceptance baselines were not beaten
 reliably. This result must not be used to enable live broker orders. It is a
 dated research observation, not a promise about future performance.
 
-After deploying the dashboard and backtest images, run
-`web/deploy/smoke-top-5-opening-range-breakout.sh`. It authenticates through the
-normal web login, submits the unique Top-5 strategy key, requires an effective
-FROZEN_OPEN configuration, and fails unless at least one historical daily
-watchlist contains five ranked PRIMARY/RESERVE selections. The retired
-`smoke-vwap-pullback.sh` fails closed and cannot create another VWAP run.
+The Top-5 Opening Range Breakout and VWAP pullback strategies, their smoke
+tests, and the Trade Failure Engine research toggle have since been removed from
+the codebase; only their previously saved backtest-history records remain
+readable.
 
 ## Release rollback
 

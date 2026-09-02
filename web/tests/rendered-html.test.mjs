@@ -138,7 +138,6 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(backtestHtml, /EMA\/VWAP Strong Buy/);
   assert.doesNotMatch(backtestHtml, />RSI Range Strategy</);
   assert.doesNotMatch(backtestHtml, />RSI Recovery Scalping</);
-  assert.doesNotMatch(backtestHtml, />Top-5 Opening Range Breakout</);
   assert.doesNotMatch(backtestHtml, /Buy RSI range/);
   assert.doesNotMatch(backtestHtml, /Sell RSI range/);
   assert.match(backtestHtml, /Strong Buy entry/);
@@ -303,15 +302,10 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   // but EMA/VWAP Strong Buy is the only one that can be switched to and launched.
   assert.match(backtestText, /RSI Range Strategy/);
   assert.match(backtestText, /RSI Recovery Scalping/);
-  assert.match(backtestText, /Top-5 Opening Range Breakout/);
   assert.match(backtestText, /const LAUNCHABLE_STRATEGY_MODE = "ema_vwap_strong_buy"/);
   assert.match(backtestText, /switchStrategy\(LAUNCHABLE_STRATEGY_MODE\)/);
   assert.doesNotMatch(backtestText, /switchStrategy\("rsi_range"\)/);
   assert.doesNotMatch(backtestText, /switchStrategy\("rsi_recovery"\)/);
-  assert.doesNotMatch(backtestText, /switchStrategy\(TOP_5_OPENING_RANGE_BREAKOUT_STRATEGY_KEY\)/);
-  assert.match(backtestText, /top5OpeningRangeBreakoutConfiguration/);
-  assert.doesNotMatch(backtestText, />Market-Aligned VWAP Pullback Scalper<\/button>/);
-  assert.doesNotMatch(backtestText, /vwapPullbackConfiguration:/);
   assert.match(backtestText, /Retired strategy — cannot run again/);
   assert.match(backtestText, /strategyMode === "rsi_range"/);
   assert.match(backtestText, /Minimum confirmations must be between 0 and/);

@@ -25,7 +25,30 @@ login_status="$(curl -sS -o /dev/null -w '%{http_code}' \
 [[ "${login_status}" == "303" ]]
 echo "verified login"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/" > "${dashboard_html}"
+for page in / /screener /backtest /signals /paper-trading /settings; do
+  curl -fsS -b "${cookie_jar}" "${base_url}${page}" > "${dashboard_html}"
+  for label in Dashboard Screener Backtest Signals 'Paper Trading' Settings; do
+    grep -q "${label}" "${dashboard_html}"
+  done
+  grep -q 'OpenDelta' "${dashboard_html}"
+  ! grep -q 'Vento NSE' "${dashboard_html}"
+  if [[ "${page}" != "/settings" ]]; then
+    grep -q 'Market' "${dashboard_html}"
+  fi
+done
+curl -fsS -b "${cookie_jar}" "${base_url}/paper-trading" > "${dashboard_html}"
+grep -q 'Paper only' "${dashboard_html}"
+echo "verified unified pages HTML"
+
+v2_anonymous="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/v2/dashboard?market=NSE")"
+[[ "${v2_anonymous}" == "401" ]]
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/dashboard?market=NSE" > "${dashboard_html}"
+jq -e '.market == "NSE" and .paperOnly == true and .liveOrdersEnabled == false and (.marketData | type == "object")' "${dashboard_html}" >/dev/null
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/strategies" > "${dashboard_html}"
+jq -e '(.strategies | length) > 0 and (.strategies[0].configSchema | type == "object")' "${dashboard_html}" >/dev/null
+echo "verified unified platform API proxy"
+
+curl -fsS -b "${cookie_jar}" "${base_url}/legacy/screener" > "${dashboard_html}"
 grep -q 'Yesterday RSI' "${dashboard_html}"
 grep -q 'Current RSI' "${dashboard_html}"
 grep -q 'Yesterday price' "${dashboard_html}"
@@ -85,18 +108,15 @@ session_count="$(awk -F, 'NR > 1 && $4 != "" { sessions[$4] = 1 } END { print le
 [[ "${session_count}" -eq 1 ]]
 echo "verified live market CSV"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/backtest" > "${dashboard_html}"
+curl -fsS -b "${cookie_jar}" "${base_url}/legacy/backtest" > "${dashboard_html}"
 grep -q 'Historical backtest' "${dashboard_html}"
 grep -q 'Run backtest' "${dashboard_html}"
 grep -q 'Investment rules' "${dashboard_html}"
 grep -Eq 'All .*[1-9][0-9]*.* symbols' "${dashboard_html}"
-grep -q 'RSI Range Strategy' "${dashboard_html}"
-grep -q 'RSI Recovery Scalping' "${dashboard_html}"
-grep -q 'Top-5 Opening Range Breakout' "${dashboard_html}"
+! grep -q 'Top-5 Opening Range Breakout' "${dashboard_html}"
 ! grep -q '>Market-Aligned VWAP Pullback Scalper</button>' "${dashboard_html}"
 ! grep -q '>Market-Aligned RSI Scalper</button>' "${dashboard_html}"
-grep -q 'at least 1% net profit after fees' "${dashboard_html}"
-grep -q 'wait for a later high-RSI opportunity' "${dashboard_html}"
+! grep -q 'Failure Engine' "${dashboard_html}"
 grep -q '5m' "${dashboard_html}"
 grep -q '4h' "${dashboard_html}"
 grep -q '1d' "${dashboard_html}"
@@ -105,12 +125,10 @@ grep -q '₹' "${dashboard_html}"
 ! grep -q 'Vento NSE' "${dashboard_html}"
 echo "verified backtest HTML"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/signals" > "${dashboard_html}"
-grep -q 'Completed-candle research monitor' "${dashboard_html}"
-grep -q 'Paper positions' "${dashboard_html}"
-grep -q 'Auto-refresh every 10 seconds' "${dashboard_html}"
+curl -fsS -b "${cookie_jar}" "${base_url}/legacy/signals" > "${dashboard_html}"
+grep -q 'OpenDelta' "${dashboard_html}"
 ! grep -q 'class="global-header"' "${dashboard_html}"
-echo "verified signals HTML"
+echo "verified legacy signals HTML"
 
 curl -fsS -b "${cookie_jar}" "${base_url}/api/live-signals?action=status" > "${dashboard_html}"
 jq -e '

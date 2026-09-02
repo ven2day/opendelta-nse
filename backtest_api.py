@@ -3555,8 +3555,15 @@ def run_strong_buy_backtest(request: BacktestRequest, store: HistoricalDataStore
                 extracted = list(executor.map(extract_symbol, eligible))
         failure_lots: list[dict[str, Any]] = [lot for lots, _ in extracted for lot in lots]
         failure_research_errors = [error for _, error in extracted if error is not None]
+        # `processed`/`eligible` hold every symbol's full candle DataFrame; extraction is
+        # the last thing that needs them. Drop them before the walk-forward analysis below,
+        # which is the run's peak-memory step, instead of leaving hundreds of DataFrames
+        # alive as dead weight for the rest of the function.
+        del processed, eligible, extracted
         failure_research = run_trade_failure_research(failure_lots, failure_config)
         failure_research["errors"] = failure_research_errors
+    else:
+        del processed
     completed = datetime.now(IST)
     response = {
         "metadata": {"runId": run_id, "strategyMode": STRONG_BUY_STRATEGY_KEY, "strategyKey": STRONG_BUY_STRATEGY_KEY, "strategyName": STRONG_BUY_STRATEGY_NAME, "strategyDescription": STRONG_BUY_DESCRIPTION, "strategyVersion": STRONG_BUY_STRATEGY_VERSION, "generatedAt": completed.isoformat(), "completedAt": completed.isoformat(), "analysisStart": analysis_start.isoformat(), "durationYears": request.durationYears, "timeframe": request.timeframe, "symbolsRequested": len(request.symbols), "symbolsProcessed": len(results), "symbolsFailed": len(errors), "workerCount": workers, "configuration": {**config.public(), "failureEngine": failure_config.public()}, "backtestSemantics": "INDEPENDENT_LOTS"},

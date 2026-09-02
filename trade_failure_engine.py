@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Iterable, Mapping
 
 import numpy as np
@@ -114,6 +115,28 @@ def _feature_groups(features: Mapping[str, bool]) -> list[str]:
     return groups
 
 
+def _features_bitmask(features: Mapping[str, bool]) -> int:
+    mask = 0
+    for index, name in enumerate(FAILURE_FEATURES):
+        if features[name]:
+            mask |= 1 << index
+    return mask
+
+
+@lru_cache(maxsize=1 << len(FAILURE_FEATURES))
+def _state_metadata(bitmask: int) -> tuple[str, tuple[str, ...], dict[str, bool]]:
+    """Every per-bar observation shares one of only 128 possible feature
+    combinations. Deriving the state key / failed groups / features dict once
+    per bitmask and caching them means the millions of observations a
+    full-universe run produces (a no-stop-loss lot can stay open for up to
+    ``maximum_holding_bars`` bars, one observation each) reference the same
+    handful of small objects instead of each allocating its own dict/string/
+    list, which is what was driving the walk-forward step's memory footprint.
+    """
+    features = {name: bool(bitmask & (1 << index)) for index, name in enumerate(FAILURE_FEATURES)}
+    return _state_key(features), tuple(_feature_groups(features)), features
+
+
 def _research_frame(
     candles: pd.DataFrame,
     entry_config: StrongBuyConfig,
@@ -199,18 +222,22 @@ def extract_failure_research_lots(
                 float(vwap[decision_index]), float(ema_fast[decision_index]),
                 float(ema_slow[decision_index]), float(ema_fast_past[decision_index]),
             )
-            features = {
-                "below_vwap": bool(np.isfinite(row_vwap) and row_close < row_vwap),
-                "ema_bearish": bool(np.isfinite(row_ema_fast) and np.isfinite(row_ema_slow) and row_ema_fast <= row_ema_slow),
-                "ema_slope_down": bool(np.isfinite(row_ema_fast) and np.isfinite(row_ema_fast_past) and row_ema_fast < row_ema_fast_past),
-                "support_break": bool(np.isfinite(previous_support[decision_index]) and row_close < float(previous_support[decision_index])),
-                "bearish_direction": bool(np.isfinite(minus_di[decision_index]) and np.isfinite(plus_di[decision_index]) and float(minus_di[decision_index]) > float(plus_di[decision_index])),
-                "bearish_volume": bool(row_close < float(open_[decision_index]) and np.isfinite(relative_volume[decision_index]) and float(relative_volume[decision_index]) >= entry_config.minimum_rvol),
-                "stalled_progress": bool(
-                    bars_held >= cfg.progress_lookback_bars
-                    and mfe_pct < entry_config.target_pct * cfg.minimum_progress_fraction
-                ),
-            }
+            bitmask = 0
+            if np.isfinite(row_vwap) and row_close < row_vwap:
+                bitmask |= 1
+            if np.isfinite(row_ema_fast) and np.isfinite(row_ema_slow) and row_ema_fast <= row_ema_slow:
+                bitmask |= 2
+            if np.isfinite(row_ema_fast) and np.isfinite(row_ema_fast_past) and row_ema_fast < row_ema_fast_past:
+                bitmask |= 4
+            if np.isfinite(previous_support[decision_index]) and row_close < float(previous_support[decision_index]):
+                bitmask |= 8
+            if np.isfinite(minus_di[decision_index]) and np.isfinite(plus_di[decision_index]) and float(minus_di[decision_index]) > float(plus_di[decision_index]):
+                bitmask |= 16
+            if row_close < float(open_[decision_index]) and np.isfinite(relative_volume[decision_index]) and float(relative_volume[decision_index]) >= entry_config.minimum_rvol:
+                bitmask |= 32
+            if bars_held >= cfg.progress_lookback_bars and mfe_pct < entry_config.target_pct * cfg.minimum_progress_fraction:
+                bitmask |= 64
+            state_key, failed_groups, features = _state_metadata(bitmask)
             future_minimum = float(suffix_min_low[decision_index + 1 - (entry_index + 1)])
             observations.append(
                 {
@@ -222,8 +249,8 @@ def extract_failure_research_lots(
                     "remainingTargetPct": max(0.0, (target_price / row_close - 1.0) * 100.0),
                     "mfePct": mfe_pct,
                     "features": features,
-                    "stateKey": _state_key(features),
-                    "failedGroups": _feature_groups(features),
+                    "stateKey": state_key,
+                    "failedGroups": failed_groups,
                     "success": success,
                     "futureAdverseLossPct": max(0.0, (row_close - future_minimum) / row_close * 100.0),
                 }

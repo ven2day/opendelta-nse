@@ -15,7 +15,7 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-backtest \
   --network vento-nse-internal \
   --env-file /etc/vento-nse-dhan.env \
   --env BACKTEST_CACHE_DIR=/var/lib/vento-nse/backtest \
-  --env BACKTEST_WORKERS=8 \
+  --env BACKTEST_WORKERS=5 \
   --env LIVE_SIGNAL_ENGINE_ENABLED=true \
   --env CRYPTO_SIGNAL_ENGINE_ENABLED=true \
   --env CRYPTO_MARKET_DIR=/var/lib/vento-nse/backtest/crypto-market \
@@ -35,7 +35,7 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-backtest \
   --security-opt no-new-privileges:true \
   --cap-drop ALL \
   --pids-limit 256 \
-  --memory 3g \
+  --memory 4g \
   vento-nse-backtest:current
 ExecStop=/usr/bin/docker stop -t 20 vento-nse-backtest
 Restart=always

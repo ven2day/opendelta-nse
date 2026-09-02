@@ -20,7 +20,9 @@ from datetime import datetime, timezone as _timezone
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.settings_routes import create_settings_router
 from backend.api.paper_trading_routes import create_paper_trading_router
+from backend.api.screener_routes import ScreenerServices, create_screener_router
 from backend.api.signal_routes import create_signal_router
+from backend.screener.engine import ScreenerEngine
 from backend.paper_trading.broker import PaperBroker, PaperRepositories
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.backtest.engine import BacktestEngine, BacktestRequest
@@ -37,6 +39,8 @@ from backend.data.repositories import (
     PaperOrderRepository,
     PaperTradeRepository,
     SavedUniverseRepository,
+    ScreenerResultRepository,
+    ScreenerRunRepository,
     StrategyConfigRepository,
 )
 from backend.markets.base import CandleSource, market_spec
@@ -57,11 +61,14 @@ class PlatformRuntime:
         database: Database | None,
         candle_sources: dict[str, Callable[[], CandleSource]],
         fallback_universes: dict[str, Callable[[], list[str]]] | None = None,
+        symbol_catalogues: dict[str, Callable[[], list[str]]] | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.database = database
         self.candle_sources = candle_sources
         self.fallback_universes = fallback_universes or {}
+        self.symbol_catalogues = symbol_catalogues or {}
+        self._screener: ScreenerServices | None = None
         self.clock = clock or (lambda: datetime.now(_timezone.utc))
         self._runner: BacktestJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
@@ -113,6 +120,8 @@ class PlatformRuntime:
             worker.stop()
         if runner is not None:
             runner.shutdown()
+        if self._screener is not None:
+            self._screener.shutdown()
         if self.database is not None:
             self.database.close()
 
@@ -207,6 +216,28 @@ class PlatformRuntime:
     def universes(self) -> SavedUniverseRepository:
         return SavedUniverseRepository(self.require_database())
 
+    # ---- screener ----------------------------------------------------------------
+
+    def screener_engine(self, market: str) -> ScreenerEngine:
+        spec = market_spec(market)
+        return ScreenerEngine(market=spec, source=self.candle_sources[spec.market](), timeframe=LIVE_TIMEFRAME, clock=self.clock)
+
+    def symbol_catalogue(self, market: str) -> list[str]:
+        provider = self.symbol_catalogues.get(market.strip().upper())
+        return list(provider()) if provider else []
+
+    def screener(self) -> ScreenerServices:
+        with self._lock:
+            if self._screener is None:
+                self._screener = ScreenerServices(
+                    runs=lambda: ScreenerRunRepository(self.require_database()),
+                    results=lambda: ScreenerResultRepository(self.require_database()),
+                    universes=self.universes,
+                    engine_for=self.screener_engine,
+                    catalogue_for=self.symbol_catalogue,
+                )
+            return self._screener
+
     def require_database(self) -> Database:
         if self.database is None:
             raise DatabaseUnavailable(self.disabled_reason or "The platform database is not configured")
@@ -258,3 +289,4 @@ def install_platform(app: FastAPI, runtime: PlatformRuntime) -> None:
     app.router.routes.extend(create_settings_router(STRATEGIES).routes)
     app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_status=runtime.worker_status).routes)
     app.router.routes.extend(create_paper_trading_router(runtime.paper_broker).routes)
+    app.router.routes.extend(create_screener_router(runtime.screener()).routes)

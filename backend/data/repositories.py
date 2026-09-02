@@ -484,6 +484,92 @@ class SavedUniverseRepository:
         return _public_universe(updated)
 
 
+# ---------------------------------------------------------------- screener
+
+
+def _public_screener_run(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "runId": str(row["run_id"]),
+        "market": row["market"],
+        "status": row["status"],
+        "filters": row["filters"],
+        "symbolsTotal": int(row["symbols_total"]),
+        "symbolsPassed": int(row["symbols_passed"]),
+        "error": row["error"],
+        "requestedAt": _iso(row["requested_at"]),
+        "completedAt": _iso(row["completed_at"]),
+    }
+
+
+class ScreenerRunRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def create(self, *, market: str, filters: Mapping[str, Any], symbols_total: int) -> dict[str, Any]:
+        run_id = uuid.uuid4()
+        self.database.execute(
+            "INSERT INTO screener_runs (run_id, market, status, filters, symbols_total) VALUES (%s, %s, 'RUNNING', %s, %s)",
+            (run_id, market, jsonb(dict(filters)), symbols_total),
+        )
+        return self.get(run_id)
+
+    def get(self, run_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one("SELECT * FROM screener_runs WHERE run_id = %s", (uuid.UUID(str(run_id)),))
+        if row is None:
+            raise KeyError(f"Screener run {run_id} was not found")
+        return _public_screener_run(row)
+
+    def list(self, market: str | None = None, *, limit: int = 50) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all("SELECT * FROM screener_runs WHERE market = %s ORDER BY requested_at DESC LIMIT %s", (market, limit))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM screener_runs ORDER BY requested_at DESC LIMIT %s", (limit,))
+        return [_public_screener_run(row) for row in rows]
+
+    def finish(self, run_id: uuid.UUID | str, *, status: str, symbols_passed: int, error: str | None = None) -> dict[str, Any]:
+        if status not in ("COMPLETE", "FAILED"):
+            raise ValueError(f"{status} is not a terminal screener status")
+        self.database.execute(
+            "UPDATE screener_runs SET status = %s, symbols_passed = %s, error = %s, completed_at = %s WHERE run_id = %s",
+            (status, symbols_passed, error, _now(), uuid.UUID(str(run_id))),
+        )
+        return self.get(run_id)
+
+
+def _public_screener_result(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "runId": str(row["run_id"]),
+        "symbol": row["symbol"],
+        "passed": bool(row["passed"]),
+        "rank": row["rank"],
+        "score": row["score"],
+        "rejectionReason": row["rejection_reason"],
+        "metrics": row["metrics"],
+    }
+
+
+class ScreenerResultRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def insert_many(self, run_id: uuid.UUID | str, rows: Sequence[Mapping[str, Any]]) -> int:
+        if not rows:
+            return 0
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.executemany(
+                "INSERT INTO screener_results (run_id, symbol, passed, rank, score, rejection_reason, metrics) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (run_id, symbol) DO UPDATE SET passed = EXCLUDED.passed, rank = EXCLUDED.rank, score = EXCLUDED.score, rejection_reason = EXCLUDED.rejection_reason, metrics = EXCLUDED.metrics",
+                [(uuid.UUID(str(run_id)), row["symbol"], bool(row["passed"]), row.get("rank"), row.get("score"), row.get("rejection_reason"), jsonb(dict(row.get("metrics") or {}))) for row in rows],
+            )
+        return len(rows)
+
+    def list(self, run_id: uuid.UUID | str, *, passed: bool | None = None, limit: int = 5_000) -> list[dict[str, Any]]:
+        if passed is None:
+            rows = self.database.fetch_all("SELECT * FROM screener_results WHERE run_id = %s ORDER BY passed DESC, rank NULLS LAST, symbol LIMIT %s", (uuid.UUID(str(run_id)), limit))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM screener_results WHERE run_id = %s AND passed = %s ORDER BY rank NULLS LAST, symbol LIMIT %s", (uuid.UUID(str(run_id)), passed, limit))
+        return [_public_screener_result(row) for row in rows]
+
+
 # ---------------------------------------------------------------- paper trading
 
 PAPER_LOT_OPEN = "OPEN"

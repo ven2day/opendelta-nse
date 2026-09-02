@@ -2455,6 +2455,11 @@ def get_platform_runtime() -> PlatformRuntime:
                     "NSE": lambda: get_universe_service().get_active_live_universe()[0],
                     "CRYPTO": lambda: [item.display_symbol for item in get_crypto_market_service().list_instruments() if item.signals_enabled],
                 },
+                symbol_catalogues={
+                    # The full configured universe the screener starts from.
+                    "NSE": lambda: get_store().universe(),
+                    "CRYPTO": lambda: [item.display_symbol for item in get_crypto_market_service().list_instruments()],
+                },
             )
         return _platform_runtime_instance
 

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import data from "../data/nse-data.json";
-import { requireSessionUser } from "../server-auth";
-import { isPriceInGlobalRange } from "../global-settings-shared";
-import { readGlobalSettings } from "../global-settings-server";
+import data from "../../data/nse-data.json";
+import { requireSessionUser } from "../../server-auth";
+import { isPriceInGlobalRange } from "../../global-settings-shared";
+import { readGlobalSettings } from "../../global-settings-server";
 import { BacktestDashboard } from "./backtest-dashboard";
 
 export const dynamic = "force-dynamic";

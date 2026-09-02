@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Database, RefreshCw } from "lucide-react";
-import { platformGet, type PlatformMarket } from "../platform/platform-client";
-import { EmptyState, ErrorState, LoadingState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { platformGet, type PlatformMarket } from "../../platform/platform-client";
+import { EmptyState, ErrorState, LoadingState, StatusBadge, WorkspaceHeader } from "../../platform/workspace-ui";
 
 type Instrument = { instrument_id: string; symbol: string; provider: string; provider_symbol: string; market_type: string; trading_status: string; company_name?: string | null; sector?: string | null };
 type InstrumentResponse = { rows: Instrument[]; count: number; offset: number; limit: number };
@@ -39,6 +39,6 @@ export function MarketWorkspace({ initialMarket }: { initialMarket: PlatformMark
     <section className="quant-panel"><div className="quant-panel-heading"><div><Database size={17} /><div><h2>Instrument master</h2><p>Exact provider identifiers and activation state. Unavailable instruments are not offered.</p></div></div><StatusBadge>{payload ? `${payload.count} total` : "Loading"}</StatusBadge></div>
       {loading ? <LoadingState label="Loading instrument master" /> : error ? <ErrorState message={error} retry={() => void load()} /> : !payload?.rows.length ? <EmptyState title="No configured instruments" description={market === "CRYPTO" ? "Add an exact OKX or VALR catalog instrument in the Crypto workspace." : "The managed NSE symbol file is empty."} /> : <div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Symbol</th><th>Provider symbol</th><th>Provider</th><th>Type</th><th>Sector</th><th>Status</th></tr></thead><tbody>{payload.rows.map((row) => <tr key={row.instrument_id}><td><strong>{row.symbol}</strong><small>{row.company_name || row.instrument_id}</small></td><td className="mono">{row.provider_symbol}</td><td>{row.provider}</td><td>{row.market_type}</td><td>{row.sector || "Not mapped"}</td><td><StatusBadge tone={row.trading_status === "ACTIVE" ? "good" : "warn"}>{row.trading_status}</StatusBadge></td></tr>)}</tbody></table></div>}
     </section>
-    <div className="quant-link-grid"><a href={market === "NSE" ? "/signals" : "/signals/crypto"}><strong>{market === "NSE" ? "Open signals" : "Crypto signals"}</strong><span>Review current candidates and market context.</span></a><a href={market === "NSE" ? "/backtest" : "/backtest/crypto"}><strong>Open backtests</strong><span>Use market-specific assumptions and costs.</span></a></div>
+    <div className="quant-link-grid"><a href={market === "NSE" ? "/legacy/signals" : "/legacy/signals/crypto"}><strong>{market === "NSE" ? "Open signals" : "Crypto signals"}</strong><span>Review current candidates and market context.</span></a><a href={market === "NSE" ? "/legacy/backtest" : "/legacy/backtest/crypto"}><strong>Open backtests</strong><span>Use market-specific assumptions and costs.</span></a></div>
   </main>;
 }

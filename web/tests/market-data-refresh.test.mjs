@@ -5,7 +5,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("manual refresh exposes progress and distinguishes market close from disconnect", async () => {
-  const dashboard = await readFile(new URL("app/dashboard.tsx", root), "utf8");
+  const dashboard = await readFile(new URL("app/legacy/screener/dashboard.tsx", root), "utf8");
 
   assert.match(dashboard, /processedSymbols: number \| null/);
   assert.match(dashboard, /totalSymbols: number \| null/);
@@ -19,7 +19,7 @@ test("manual refresh exposes progress and distinguishes market close from discon
 
 test("closed sessions do not mark a settled snapshot as stale", async () => {
   const [dashboard, styles] = await Promise.all([
-    readFile(new URL("app/dashboard.tsx", root), "utf8"),
+    readFile(new URL("app/legacy/screener/dashboard.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
   ]);
 
@@ -31,7 +31,7 @@ test("closed sessions do not mark a settled snapshot as stale", async () => {
 
 test("dashboard can add Dhan-validated symbols and exposes company names on hover", async () => {
   const [dashboard, parser, route, styles] = await Promise.all([
-    readFile(new URL("app/dashboard.tsx", root), "utf8"),
+    readFile(new URL("app/legacy/screener/dashboard.tsx", root), "utf8"),
     readFile(new URL("app/market-data.ts", root), "utf8"),
     readFile(new URL("app/api/market-symbols/route.ts", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),

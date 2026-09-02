@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requireSessionUser } from "../server-auth";
+import { requireSessionUser } from "../../server-auth";
 import { MarketWorkspace } from "./market-workspace";
 
 export const dynamic = "force-dynamic";

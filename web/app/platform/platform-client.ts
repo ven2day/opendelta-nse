@@ -2,6 +2,11 @@ export type PlatformMarket = "NSE" | "CRYPTO";
 
 export type ApiError = { detail?: string };
 
+/** Reads the `?market=` query value; anything other than CRYPTO falls back to NSE. */
+export function parseMarket(value: string | null | undefined): PlatformMarket {
+  return value?.toUpperCase() === "CRYPTO" ? "CRYPTO" : "NSE";
+}
+
 export async function platformGet<T>(action: string, parameters?: Record<string, string>): Promise<T> {
   const query = new URLSearchParams({ action, ...parameters });
   const response = await fetch(`/api/platform?${query.toString()}`, { cache: "no-store" });

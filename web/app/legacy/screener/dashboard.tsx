@@ -1,5 +1,4 @@
 "use client";
-/* eslint-disable @next/next/no-html-link-for-pages -- Native navigation avoids stalled vinext client transitions in production. */
 
 import {
   ArrowDown,
@@ -20,10 +19,10 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { parseMarketCsv, type StockRow } from "./market-data";
-import { formatGlobalPriceRange, isPriceInGlobalRange, type GlobalPriceRange } from "./global-settings-shared";
+import { parseMarketCsv, type StockRow } from "../../market-data";
+import { formatGlobalPriceRange, isPriceInGlobalRange, type GlobalPriceRange } from "../../global-settings-shared";
 
-export type { StockRow } from "./market-data";
+export type { StockRow } from "../../market-data";
 
 type DashboardProps = {
   stocks: StockRow[];
@@ -591,15 +590,15 @@ export function Dashboard({
           </a>
 
           <nav className="top-nav" aria-label="Main navigation">
-            <a className="nav-item active" href="/" aria-current="page">
+            <a className="nav-item active" href="/legacy/screener" aria-current="page">
               <LayoutDashboard size={16} />
               Dashboard
             </a>
-            <a className="nav-item" href="/backtest">
+            <a className="nav-item" href="/legacy/backtest">
               <TrendingUp size={16} />
               Backtest
             </a>
-            <a className="nav-item" href="/signals">
+            <a className="nav-item" href="/legacy/signals">
               <Radio size={16} />
               Signals
             </a>

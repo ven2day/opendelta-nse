@@ -6,7 +6,7 @@ const root = new URL("../", import.meta.url);
 
 test("backtest selector refreshes from the managed runtime symbol registry", async () => {
   const [dashboard, route] = await Promise.all([
-    readFile(new URL("app/backtest/backtest-dashboard.tsx", root), "utf8"),
+    readFile(new URL("app/legacy/backtest/backtest-dashboard.tsx", root), "utf8"),
     readFile(new URL("app/api/market-symbols/route.ts", root), "utf8"),
   ]);
 
@@ -20,8 +20,8 @@ test("backtest selector refreshes from the managed runtime symbol registry", asy
 
 test("the last ten completed results sync to the signed-in account with browser migration and cache fallback", async () => {
   const [dashboard, history, route, owner] = await Promise.all([
-    readFile(new URL("app/backtest/backtest-dashboard.tsx", root), "utf8"),
-    readFile(new URL("app/backtest/backtest-history.ts", root), "utf8"),
+    readFile(new URL("app/legacy/backtest/backtest-dashboard.tsx", root), "utf8"),
+    readFile(new URL("app/legacy/backtest/backtest-history.ts", root), "utf8"),
     readFile(new URL("app/api/backtest-history/route.ts", root), "utf8"),
     readFile(new URL("app/api/history-owner.ts", root), "utf8"),
   ]);
@@ -50,7 +50,7 @@ test("the last ten completed results sync to the signed-in account with browser 
 
 test("long backtests report batch progress and retry the symbol registry", async () => {
   const [dashboard, route] = await Promise.all([
-    readFile(new URL("app/backtest/backtest-dashboard.tsx", root), "utf8"),
+    readFile(new URL("app/legacy/backtest/backtest-dashboard.tsx", root), "utf8"),
     readFile(new URL("app/api/backtest/route.ts", root), "utf8"),
   ]);
 

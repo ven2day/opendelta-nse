@@ -3,20 +3,22 @@
 
 import {
   Activity,
-  BarChart3,
   Gauge,
   LayoutDashboard,
   LogOut,
   Menu,
   Moon,
   Radio,
+  ScanSearch,
   Settings2,
   ShieldCheck,
   Sun,
+  Wallet,
 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { platformGet, type PlatformMarket } from "./platform-client";
+import { marketLabel, MARKETS } from "./format";
+import { parseMarket, platformGet, type PlatformMarket } from "./platform-client";
 
 type Overview = {
   dataFreshness?: { status?: string; ageSeconds?: number; reason?: string };
@@ -31,45 +33,42 @@ type NavigationItem = {
   match: (path: string) => boolean;
 };
 
-const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
-  {
-    label: "Workspace",
-    items: [
-      { href: "/", label: "Overview", icon: LayoutDashboard, match: (path) => path === "/" },
-      { href: "/markets", label: "Markets", icon: BarChart3, match: (path) => path.startsWith("/markets") },
-    ],
-  },
-  {
-    label: "Research",
-    items: [
-      { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
-      { href: "/backtest", label: "Backtests", icon: Gauge, match: (path) => path.startsWith("/backtest") },
-    ],
-  },
-  {
-    label: "Operations",
-    items: [
-      { href: "/settings", label: "Settings", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
-    ],
-  },
+/** The complete main navigation, in display order. Legacy tools map onto their modern counterpart. */
+export const navigation: NavigationItem[] = [
+  { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (path) => path === "/" || path.startsWith("/legacy/markets") },
+  { href: "/screener", label: "Screener", icon: ScanSearch, match: (path) => path.startsWith("/screener") || path.startsWith("/legacy/screener") },
+  { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") || path.startsWith("/legacy/backtest") },
+  { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") || path.startsWith("/legacy/signals") },
+  { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },
+  { href: "/settings", label: "Settings", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
 ];
 
-const navigation = navigationGroups.flatMap((group) => group.items);
 const OVERVIEW_REFRESH_INTERVAL_MS = 15_000;
 
 export function usesPlatformShell(pathname: string): boolean {
   return pathname !== "/login" && !pathname.startsWith("/api/");
 }
 
-function marketFor(path: string, selected?: string | null): PlatformMarket {
-  if (path.startsWith("/markets") && selected === "CRYPTO") return "CRYPTO";
-  return path.includes("crypto") ? "CRYPTO" : "NSE";
+function isLegacyMarketPath(path: string): boolean {
+  return path.startsWith("/legacy/backtest") || path.startsWith("/legacy/signals");
 }
 
-function marketHref(path: string, market: PlatformMarket): string {
-  if (path.startsWith("/backtest")) return market === "CRYPTO" ? "/backtest/crypto" : "/backtest";
-  if (path.startsWith("/signals")) return market === "CRYPTO" ? "/signals/crypto" : "/signals";
-  return market === "CRYPTO" ? "/markets?market=CRYPTO" : "/markets?market=NSE";
+/** Legacy backtest/signals pages encode the market in the path; every modern page reads `?market=`. */
+function marketFor(path: string, selected?: string | null): PlatformMarket {
+  if (isLegacyMarketPath(path)) return path.includes("/crypto") ? "CRYPTO" : "NSE";
+  return parseMarket(selected);
+}
+
+function marketHref(path: string, search: string, market: PlatformMarket): string {
+  if (path.startsWith("/legacy/backtest")) return market === "CRYPTO" ? "/legacy/backtest/crypto" : "/legacy/backtest";
+  if (path.startsWith("/legacy/signals")) return market === "CRYPTO" ? "/legacy/signals/crypto" : "/legacy/signals";
+  const params = new URLSearchParams(search);
+  params.set("market", market);
+  return `${path}?${params.toString()}`;
+}
+
+function navigationHref(item: NavigationItem, market: PlatformMarket): string {
+  return market === "CRYPTO" ? `${item.href}?market=CRYPTO` : item.href;
 }
 
 function statusTone(status: string): "good" | "warn" | "bad" | "neutral" {
@@ -97,7 +96,9 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
     return saved === "light" ? "light" : "dark";
   });
   const shellEnabled = usesPlatformShell(pathname);
+  const search = searchParams.toString();
   const market = marketFor(pathname, searchParams.get("market"));
+  const legacy = pathname.startsWith("/legacy/") || pathname.startsWith("/admin");
   const activeItem = navigation.find((item) => item.match(pathname)) ?? navigation[0];
 
   useEffect(() => {
@@ -179,17 +180,17 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           <button className="platform-menu" type="button" onClick={toggleNavigation} aria-label="Toggle navigation" title={open ? "Hide navigation" : "Show navigation"} aria-expanded={open}>
             <Menu size={20} />
           </button>
-          <a className="platform-identity" href="/" aria-label="OpenDelta overview" onClick={closeNavigationOnMobile}>
+          <a className="platform-identity" href="/" aria-label="OpenDelta dashboard" onClick={closeNavigationOnMobile}>
             <span aria-hidden="true">Δ</span>
             <div><strong>OpenDelta</strong><small>Quant research</small></div>
           </a>
           <div className="platform-route-context" aria-label="Current workspace">
-            <span>Workspace</span>
+            <span>{legacy ? "Legacy tool" : "Workspace"}</span>
             <strong>{activeItem.label}</strong>
           </div>
           <div className="platform-market-switch" role="group" aria-label="Active market">
-            {(["NSE", "CRYPTO"] as PlatformMarket[]).map((item) => (
-              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, item)} aria-current={market === item ? "true" : undefined} onClick={closeNavigationOnMobile}>{item === "CRYPTO" ? "Crypto" : "NSE"}</a>
+            {MARKETS.map((item) => (
+              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, search, item)} aria-current={market === item ? "true" : undefined} onClick={closeNavigationOnMobile}>{marketLabel(item)}</a>
             ))}
           </div>
           <div className="platform-live-strip">
@@ -204,17 +205,17 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
         </header>
         <aside className="platform-sidebar" aria-label="Platform navigation">
-          <nav>
-            {navigationGroups.map((group) => (
-              <section key={group.label} className="platform-nav-group" aria-label={group.label}>
-                <span>{group.label}</span>
-                {group.items.map(({ href, label, icon: Icon, match }) => (
-                  <a key={href} href={href} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={closeNavigationOnMobile}>
+          <nav aria-label="Main navigation">
+            <section className="platform-nav-group">
+              {navigation.map((item) => {
+                const { href, label, icon: Icon, match } = item;
+                return (
+                  <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={closeNavigationOnMobile}>
                     <Icon size={17} /><span>{label}</span>
                   </a>
-                ))}
-              </section>
-            ))}
+                );
+              })}
+            </section>
           </nav>
           <div className="platform-safety"><ShieldCheck size={16} /><div><strong>Paper research only</strong><span>Broker execution disabled</span></div></div>
         </aside>

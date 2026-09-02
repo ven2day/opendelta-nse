@@ -46,7 +46,7 @@ import {
 import { JsonConfigurationEditor } from "./json-configuration-editor";
 import { createJsonConfiguration } from "./json-configuration.mjs";
 import { StrongBuyResults, type StrongBuyBacktestResponse } from "./strong-buy-results";
-import { formatGlobalPriceRange, type GlobalPriceRange } from "../global-settings-shared";
+import { formatGlobalPriceRange, type GlobalPriceRange } from "../../global-settings-shared";
 import {
   backtestHistorySummary,
   migrateBrowserBacktestHistory,
@@ -1506,9 +1506,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
             <div><strong>OpenDelta</strong><span>Market intelligence</span></div>
           </a>
           <nav className="top-nav" aria-label="Main navigation">
-            <a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a>
-            <a className="nav-item active" href="/backtest" aria-current="page"><TrendingUp size={16} />Backtest</a>
-            <a className="nav-item" href="/signals"><Radio size={16} />Signals</a>
+            <a className="nav-item" href="/legacy/screener"><LayoutDashboard size={16} />Dashboard</a>
+            <a className="nav-item active" href="/legacy/backtest" aria-current="page"><TrendingUp size={16} />Backtest</a>
+            <a className="nav-item" href="/legacy/signals"><Radio size={16} />Signals</a>
             <a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a>
           </nav>
           <div className="header-actions">
@@ -1523,7 +1523,7 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
       </header>
 
       <main className="backtest-main">
-        <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/backtest">NSE</a><a href="/backtest/crypto">Crypto &amp; metals</a></nav>
+        <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/legacy/backtest">NSE</a><a href="/legacy/backtest/crypto">Crypto &amp; metals</a></nav>
         <div className="strategy-mode-switch segmented" role="group" aria-label="Backtest mode">
           <button type="button" className={strategyMode === LAUNCHABLE_STRATEGY_MODE ? "active" : ""} onClick={() => switchStrategy(LAUNCHABLE_STRATEGY_MODE)}>EMA/VWAP Strong Buy</button>
         </div>

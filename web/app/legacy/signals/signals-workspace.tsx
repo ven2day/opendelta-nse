@@ -2,7 +2,7 @@
 
 import { Activity, LoaderCircle, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isPriceInGlobalRange, parseGlobalSettings, type GlobalPriceRange } from "../global-settings-shared";
+import { isPriceInGlobalRange, parseGlobalSettings, type GlobalPriceRange } from "../../global-settings-shared";
 
 type EngineStatus = {
   connectionStatus: string;
@@ -126,7 +126,7 @@ export function SignalsWorkspace({ initialGlobalPriceRange }: { userName: string
 
   return <div className="site-shell backtest-shell signals-shell">
     <main className="main-content signals-main">
-      <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/signals">NSE</a><a href="/signals/crypto">Crypto &amp; metals</a></nav>
+      <nav className="market-workspace-tabs" aria-label="Market workspace"><a className="active" href="/legacy/signals">NSE</a><a href="/legacy/signals/crypto">Crypto &amp; metals</a></nav>
       <section className="signals-healthbar">
         <div className="signals-health-title"><h1>Signals</h1></div>
         <div className={`health-item ${connected ? "healthy" : "warning"}`}>{connected ? <Wifi size={16} /> : <WifiOff size={16} />}<div><span>Dhan market data</span><strong>{status.connectionStatus}</strong></div></div>

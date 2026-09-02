@@ -6,7 +6,7 @@ import {
   createJsonConfiguration,
   formatJsonConfiguration,
   parseAndValidateJsonConfiguration,
-} from "../app/backtest/json-configuration.mjs";
+} from "../app/legacy/backtest/json-configuration.mjs";
 
 const definitions = JSON.parse(await readFile(new URL("../../strategy-parameters.json", import.meta.url), "utf8"));
 const strategyNames = {
@@ -163,8 +163,8 @@ test("a future registered strategy automatically uses the same serializer and va
 });
 
 test("the inline editor is one collapsed generic component with every required action", async () => {
-  const editor = await readFile(new URL("../app/backtest/json-configuration-editor.tsx", import.meta.url), "utf8");
-  const dashboard = await readFile(new URL("../app/backtest/backtest-dashboard.tsx", import.meta.url), "utf8");
+  const editor = await readFile(new URL("../app/legacy/backtest/json-configuration-editor.tsx", import.meta.url), "utf8");
+  const dashboard = await readFile(new URL("../app/legacy/backtest/backtest-dashboard.tsx", import.meta.url), "utf8");
   assert.match(editor, /<details className="json-configuration advanced-settings">/);
   assert.doesNotMatch(editor, /<details className="json-configuration advanced-settings" open/);
   for (const action of ["Copy JSON", "Paste from clipboard", "Format", "Validate", "Apply", "Reset"]) {

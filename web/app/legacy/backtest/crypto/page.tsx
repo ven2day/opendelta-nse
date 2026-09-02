@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { requireSessionUser } from "../../server-auth";
+import { requireSessionUser } from "../../../server-auth";
 import { CryptoWorkspace } from "../../crypto/crypto-workspace";
 
 export const dynamic = "force-dynamic";

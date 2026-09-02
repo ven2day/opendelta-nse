@@ -1,6 +1,18 @@
 import type { Metadata } from "next";
+import { readGlobalSettings } from "../global-settings-server";
+import { parseMarket } from "../platform/platform-client";
 import { requireSessionUser } from "../server-auth";
-import { StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { SettingsWorkspace } from "./settings-workspace";
+
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Settings", description: "OpenDelta configuration boundaries." };
-export default async function SettingsPage() { await requireSessionUser(); return <main className="quant-workspace"><WorkspaceHeader eyebrow="Configuration" title="Platform settings" description="Operational and research configuration is separated from credentials, provider secrets and executable code." actions={<StatusBadge tone="good">Environment managed</StatusBadge>} /><section className="quant-panel"><div className="quant-card-list"><article><div className="quant-card-title"><div><h2>Application price range</h2><p>Manage the existing NSE universe price filter without changing stored backtest history.</p></div><a className="quant-action-link" href="/admin">Open existing settings</a></div></article><article><div className="quant-card-title"><div><h2>Research defaults</h2><p>Experiment requests store a reproducible configuration snapshot, factor versions and data-version reference.</p></div><StatusBadge>Per experiment</StatusBadge></div></article><article><div className="quant-card-title"><div><h2>Credentials and broker execution</h2><p>Secrets remain server-side environment values. The platform accepts no user-supplied executable strategies and installs no live order adapter.</p></div><StatusBadge tone="good">Orders disabled</StatusBadge></div></article></div></section></main>; }
+
+export const metadata: Metadata = {
+  title: "Settings",
+  description: "Strategy configuration, risk defaults, the global price range and links to legacy tools.",
+};
+
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ market?: string }> }) {
+  await requireSessionUser();
+  const [globalSettings, query] = await Promise.all([readGlobalSettings(), searchParams]);
+  return <SettingsWorkspace initialMarket={parseMarket(query.market)} globalSettings={globalSettings} />;
+}

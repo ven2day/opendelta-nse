@@ -13,6 +13,10 @@ async function mockPlatform(page: Page) {
     if (action === "overview") return route.fulfill({ json: overview });
     return route.fulfill({ status: 404, json: { detail: "Not part of this browser smoke" } });
   });
+  await page.route("**/api/v2/**", async (route) => {
+    // The unified pages must render a clear "not configured" state, never crash, when the platform database is absent.
+    return route.fulfill({ status: 503, json: { detail: "Platform database is not configured" } });
+  });
   await page.route("**/api/live-signals?**", async (route) => {
     const action = new URL(route.request().url()).searchParams.get("action");
     const status = {
@@ -59,11 +63,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("route-aware shell has no duplicate navigation or viewport overflow", async ({ page }) => {
+  test.setTimeout(240_000);
   const authenticatedRoutes = [
-    "/", "/markets", "/signals", "/signals/crypto",
-    "/backtest", "/backtest/crypto", "/settings", "/admin",
+    "/", "/screener", "/backtest", "/signals", "/paper-trading", "/settings",
+    "/?market=CRYPTO", "/screener?market=CRYPTO", "/backtest?market=CRYPTO", "/signals?market=CRYPTO", "/paper-trading?market=CRYPTO",
+    "/admin", "/legacy/screener", "/legacy/markets", "/legacy/signals", "/legacy/signals/crypto",
+    "/legacy/backtest", "/legacy/backtest/crypto",
   ];
-  const routesWithEmbeddedHeader = new Set(["/", "/signals/crypto", "/backtest", "/backtest/crypto", "/admin"]);
+  const routesWithEmbeddedHeader = new Set(["/legacy/screener", "/legacy/signals/crypto", "/legacy/backtest", "/legacy/backtest/crypto", "/admin"]);
   const viewports = [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -83,21 +90,26 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
         await expect(page.locator(".global-header .brand")).not.toBeVisible();
         await expect(page.locator(".global-header .top-nav")).not.toBeVisible();
       }
-      if (route === "/signals") await expect(page.locator(".global-header")).toHaveCount(0);
+      if (route === "/legacy/signals") await expect(page.locator(".global-header")).toHaveCount(0);
+      await expect(page.locator(".platform-sidebar nav a span")).toHaveText(["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"]);
+      if (viewport.width === 1440 && !route.startsWith("/legacy") && route !== "/admin") {
+        await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
+      }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);
     }
   }
 });
 
-test("NSE Signals presents an expected market-close state without false degradation", async ({ page }) => {
-  await page.goto("/signals");
+test("legacy NSE Signals presents an expected market-close state without false degradation", async ({ page }) => {
+  await page.goto("/legacy/signals");
 
-  await expect(page.getByText("Market closed · automatic resume armed")).toBeVisible();
-  await expect(page.getByText("RESUMES AT OPEN")).toBeVisible();
-  await expect(page.getByText("Auto-refresh every 10 seconds")).toBeVisible();
-  await expect(page.locator(".signals-runtime-banner")).toHaveClass(/ready/);
-  await expect(page.getByText(/NSE is closed\. The engine will reconnect automatically/)).toBeVisible();
+  await expect(page.locator(".platform-route-context span")).toHaveText("Legacy tool");
+  await expect(page.getByText("Dhan market data")).toBeVisible();
+  await expect(page.getByText("DISCONNECTED", { exact: true })).toBeVisible();
+  await expect(page.getByText("MARKET CLOSED", { exact: true })).toBeVisible();
+  await expect(page.getByText("No signals yet.")).toBeVisible();
+  await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 });
 
 test("sidebar links perform full document navigation in production", async ({ page }) => {
@@ -116,7 +128,7 @@ test("sidebar links perform full document navigation in production", async ({ pa
   expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
   await expect(page.locator(".platform-route-context strong")).toHaveText("Signals");
 
-  const backtestsLink = page.getByRole("link", { name: "Backtests", exact: true });
+  const backtestsLink = page.getByRole("link", { name: "Backtest", exact: true });
   await expect(backtestsLink).toHaveAttribute("href", "/backtest");
   await page.evaluate(() => {
     (window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe = true;
@@ -127,7 +139,17 @@ test("sidebar links perform full document navigation in production", async ({ pa
   ]);
   await expect(page).toHaveURL(/\/backtest$/);
   expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
-  await expect(page.locator(".platform-route-context strong")).toHaveText("Backtests");
+  await expect(page.locator(".platform-route-context strong")).toHaveText("Backtest");
+});
+
+test("the market switcher keeps the current page and carries the market into navigation", async ({ page }) => {
+  await page.goto("/screener");
+  const cryptoSwitch = page.locator(".platform-market-switch a", { hasText: "Crypto" });
+  await expect(cryptoSwitch).toHaveAttribute("href", "/screener?market=CRYPTO");
+  await cryptoSwitch.click();
+  await expect(page).toHaveURL(/\/screener\?market=CRYPTO$/);
+  await expect(page.locator('.quant-market-tabs a[aria-current="page"]')).toHaveText("Crypto");
+  await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("href", "/signals?market=CRYPTO");
 });
 
 test("a saved result from a removed strategy is ignored and cannot crash the Backtests page", async ({ page }) => {
@@ -163,7 +185,7 @@ test("a saved result from a removed strategy is ignored and cannot crash the Bac
     return route.fulfill({ json: { runs: [summary], limit: 10 } });
   });
 
-  await page.goto("/backtest");
+  await page.goto("/legacy/backtest");
 
   await expect(page.locator(".platform-topbar")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Recent backtests" })).toBeVisible();
@@ -195,9 +217,9 @@ test("desktop hamburger fully hides, restores, and remembers the sidebar", async
   await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeGreaterThanOrEqual(247);
 });
 
-test("overview session values remain inside the table", async ({ page }) => {
+test("legacy screener session values remain inside the table", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
+  await page.goto("/legacy/screener");
   await expect(page.getByRole("columnheader", { name: "Session (IST)" })).toBeVisible();
 
   const sessions = page.locator(".session-cell");
@@ -221,7 +243,7 @@ test("theme preference persists while navigating between product areas", async (
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("button", { name: "Switch to dark theme" })).toBeVisible();
 
-  await page.goto("/markets");
+  await page.goto("/legacy/markets");
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
   await page.reload();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
@@ -229,7 +251,7 @@ test("theme preference persists while navigating between product areas", async (
 
 test("mobile navigation, logout, and authentication redirects work", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/markets");
+  await page.goto("/paper-trading");
   const menu = page.getByRole("button", { name: "Toggle navigation" });
   await menu.click();
   await expect(menu).toHaveAttribute("aria-expanded", "true");

@@ -26,9 +26,9 @@ test("admin exposes one persisted inclusive global price range", async () => {
 
 test("dashboard, signals and backtest share the same server-defined range", async () => {
   const [dashboard, home, signals, signalsPage, backtest, backtestPage, shared] = await Promise.all([
-    source("app/dashboard.tsx"), source("app/page.tsx"),
-    source("app/signals/signals-workspace.tsx"), source("app/signals/page.tsx"),
-    source("app/backtest/backtest-dashboard.tsx"), source("app/backtest/page.tsx"),
+    source("app/legacy/screener/dashboard.tsx"), source("app/legacy/screener/page.tsx"),
+    source("app/legacy/signals/signals-workspace.tsx"), source("app/legacy/signals/page.tsx"),
+    source("app/legacy/backtest/backtest-dashboard.tsx"), source("app/legacy/backtest/page.tsx"),
     source("app/global-settings-shared.ts"),
   ]);
   assert.match(home, /readGlobalSettings/);
@@ -45,10 +45,10 @@ test("dashboard, signals and backtest share the same server-defined range", asyn
 
 test("default all-price setting preserves existing visibility and every shell links Admin", async () => {
   const files = await Promise.all([
-    source("app/dashboard.tsx"),
-    source("app/backtest/backtest-dashboard.tsx"),
-    source("app/signals/signals-workspace.tsx"),
-    source("app/signals/live-universe.tsx"),
+    source("app/legacy/screener/dashboard.tsx"),
+    source("app/legacy/backtest/backtest-dashboard.tsx"),
+    source("app/legacy/signals/signals-workspace.tsx"),
+    source("app/legacy/signals/live-universe.tsx"),
   ]);
   files.forEach((file) => assert.match(file, /href="\/admin"/));
   const shared = await source("app/global-settings-shared.ts");

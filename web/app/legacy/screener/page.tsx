@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import data from "./data/nse-data.json";
+import data from "../../data/nse-data.json";
 import { Dashboard, type StockRow } from "./dashboard";
-import { readGlobalSettings } from "./global-settings-server";
-import { requireSessionUser } from "./server-auth";
+import { readGlobalSettings } from "../../global-settings-server";
+import { requireSessionUser } from "../../server-auth";
 
 export const dynamic = "force-dynamic";
 

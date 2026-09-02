@@ -71,7 +71,13 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(loginResponse.headers.get("set-cookie") ?? "", /Secure/);
 
   const sessionCookie = (loginResponse.headers.get("set-cookie") ?? "").split(";", 1)[0];
-  const response = await fetchFromWorker(worker, "/", {
+  // The legacy RSI screener now lives under /legacy/screener; "/" is the unified dashboard.
+  const anonymousLegacyScreener = await fetchFromWorker(worker, "/legacy/screener", {
+    headers: { accept: "text/html" },
+    redirect: "manual",
+  });
+  assert.ok([302, 303, 307, 308].includes(anonymousLegacyScreener.status));
+  const response = await fetchFromWorker(worker, "/legacy/screener", {
     headers: { accept: "text/html", cookie: sessionCookie },
   });
   assert.equal(response.status, 200);
@@ -118,13 +124,13 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(html, /Backtest/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 
-  const anonymousBacktest = await fetchFromWorker(worker, "/backtest", {
+  const anonymousBacktest = await fetchFromWorker(worker, "/legacy/backtest", {
     headers: { accept: "text/html" },
     redirect: "manual",
   });
   assert.ok([302, 303, 307, 308].includes(anonymousBacktest.status));
 
-  const backtestResponse = await fetchFromWorker(worker, "/backtest", {
+  const backtestResponse = await fetchFromWorker(worker, "/legacy/backtest", {
     headers: { accept: "text/html", cookie: sessionCookie },
   });
   assert.equal(backtestResponse.status, 200);
@@ -146,13 +152,13 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(backtestHtml, /1d/);
   assert.match(backtestHtml, /LUPIN/);
 
-  const anonymousSignals = await fetchFromWorker(worker, "/signals", {
+  const anonymousSignals = await fetchFromWorker(worker, "/legacy/signals", {
     headers: { accept: "text/html" },
     redirect: "manual",
   });
   assert.ok([302, 303, 307, 308].includes(anonymousSignals.status));
 
-  const signalsResponse = await fetchFromWorker(worker, "/signals", {
+  const signalsResponse = await fetchFromWorker(worker, "/legacy/signals", {
     headers: { accept: "text/html", cookie: sessionCookie },
   });
   assert.equal(signalsResponse.status, 200);
@@ -163,13 +169,13 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(signalsHtml, /Crypto &amp; metals/);
   assert.doesNotMatch(signalsHtml, /class="global-header"/);
 
-  const anonymousCryptoBacktest = await fetchFromWorker(worker, "/backtest/crypto", {
+  const anonymousCryptoBacktest = await fetchFromWorker(worker, "/legacy/backtest/crypto", {
     headers: { accept: "text/html" },
     redirect: "manual",
   });
   assert.ok([302, 303, 307, 308].includes(anonymousCryptoBacktest.status));
 
-  const cryptoBacktestResponse = await fetchFromWorker(worker, "/backtest/crypto", {
+  const cryptoBacktestResponse = await fetchFromWorker(worker, "/legacy/backtest/crypto", {
     headers: { accept: "text/html", cookie: sessionCookie },
   });
   assert.equal(cryptoBacktestResponse.status, 200);
@@ -179,7 +185,7 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(cryptoBacktestHtml, /Search catalog/);
   assert.match(cryptoBacktestHtml, /Trend Pullback Recovery/);
 
-  const cryptoSignalsResponse = await fetchFromWorker(worker, "/signals/crypto", {
+  const cryptoSignalsResponse = await fetchFromWorker(worker, "/legacy/signals/crypto", {
     headers: { accept: "text/html", cookie: sessionCookie },
   });
   assert.equal(cryptoSignalsResponse.status, 200);
@@ -187,7 +193,7 @@ test("requires login and server-renders the authenticated NSE dashboard", async 
   assert.match(cryptoSignalsHtml, /Crypto &amp; metals signals/);
   assert.match(cryptoSignalsHtml, /Completed-candle paper signals/);
 
-  const universeResponse = await fetchFromWorker(worker, "/signals?view=universe", {
+  const universeResponse = await fetchFromWorker(worker, "/legacy/signals?view=universe", {
     headers: { accept: "text/html", cookie: sessionCookie },
   });
   assert.equal(universeResponse.status, 200);
@@ -208,12 +214,12 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   const [dataText, packageText, dashboardText, backtestText, recoveryResultsText, featureAnalysisText, liveUniverseText, liveSignalsText, platformChromeText, backtestApiText, recoveryAnalysisApiText, liveUniverseApiText, liveSignalsApiText, marketRefreshApiText, marketDataText, stylesText, layoutText, liveCsv, syncDataText] = await Promise.all([
     readFile(new URL("../app/data/nse-data.json", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readFile(new URL("../app/dashboard.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/backtest/backtest-dashboard.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/backtest/recovery-results.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/backtest/feature-analysis.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/signals/live-universe.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/legacy/screener/dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/legacy/backtest/backtest-dashboard.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/legacy/backtest/recovery-results.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/legacy/backtest/feature-analysis.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/legacy/signals/live-universe.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/legacy/signals/signals-workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/platform/platform-chrome.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/backtest/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/recovery-analysis/route.ts", import.meta.url), "utf8"),
@@ -281,14 +287,14 @@ test("ships all synchronized NSE symbols without starter dependencies", async ()
   assert.match(marketRefreshApiText, /\/market-data\/refresh/);
   assert.match(dashboardText, /support_1_price/);
   assert.match(dashboardText, /resistance_2_time/);
-  assert.match(dashboardText, /href="\/backtest"/);
+  assert.match(dashboardText, /href="\/legacy\/backtest"/);
   assert.doesNotMatch(dashboardText, /from "next\/link"/);
-  assert.match(dashboardText, /<a className="nav-item" href="\/backtest">/);
-  assert.match(dashboardText, /href="\/signals"/);
+  assert.match(dashboardText, /<a className="nav-item" href="\/legacy\/backtest">/);
+  assert.match(dashboardText, /href="\/legacy\/signals"/);
   assert.match(backtestText, /selectedSymbols\.length >= 10/);
   assert.doesNotMatch(backtestText, /from "next\/link"/);
-  assert.match(backtestText, /<a className="nav-item" href="\/">/);
-  assert.match(backtestText, /href="\/signals"/);
+  assert.match(backtestText, /<a className="nav-item" href="\/legacy\/screener">/);
+  assert.match(backtestText, /href="\/legacy\/signals"/);
   assert.match(backtestText, /Signals execute at the next candle open/);
   assert.match(backtestText, /Performance summary/);
   assert.match(backtestText, /NIFTY 50/);

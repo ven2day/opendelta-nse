@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { requireSessionUser } from "../server-auth";
-import { readGlobalSettings } from "../global-settings-server";
+import { requireSessionUser } from "../../server-auth";
+import { readGlobalSettings } from "../../global-settings-server";
 import { LiveUniverse } from "./live-universe";
 import { SignalsWorkspace } from "./signals-workspace";
 

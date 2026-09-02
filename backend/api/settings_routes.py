@@ -14,6 +14,20 @@ from backend.paper_trading.execution import ExecutionPolicy
 from backend.strategies.registry import StrategyRegistry
 
 
+RISK_SCHEMA: dict[str, dict[str, Any]] = {
+    "sizingMode": {"type": "string", "default": "FIXED_QUANTITY", "enum": ["FIXED_QUANTITY", "FIXED_CAPITAL"], "label": "Position sizing"},
+    "initialQuantity": {"type": "number", "default": 100, "minimum": 0.00000001, "label": "First lot quantity"},
+    "capitalPerLot": {"type": "number", "default": 50_000.0, "minimum": 0.01, "label": "Capital per lot (fixed-capital sizing)"},
+    "allowAdditionalBuys": {"type": "boolean", "default": True, "label": "Allow additional lots while holding"},
+    "additionalQuantityPct": {"type": "number", "default": 50.0, "minimum": 0.01, "maximum": 100.0, "label": "Additional lot size %"},
+    "additionalSizingMode": {"type": "string", "default": "REDUCE_EVERY_NEW_LOT", "enum": ["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"], "label": "Additional lot sizing"},
+    "maximumEntriesPerCycle": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100, "label": "Maximum lots per cycle"},
+    "priceModel": {"type": "string", "default": "SIGNAL_CLOSE", "enum": ["SIGNAL_CLOSE", "NEXT_OPEN"], "label": "Paper entry price"},
+    "stopLossPct": {"type": "number", "default": None, "minimum": 0.01, "maximum": 99.99, "label": "Stop loss % (optional)"},
+    "maximumHoldingBars": {"type": "integer", "default": None, "minimum": 1, "label": "Maximum holding bars (optional)"},
+}
+
+
 class StrategyConfigRequest(BaseModel):
     market: str = Field(pattern="^(NSE|CRYPTO)$")
     name: str = Field(default="default", min_length=1, max_length=120)
@@ -48,7 +62,7 @@ def create_settings_router(registry: StrategyRegistry, *, configs: Callable[[], 
     @router.get("/strategies")
     def list_strategies(market: str | None = Query(default=None)) -> dict[str, Any]:
         market_key = _market(market)
-        return {"strategies": registry.describe(market_key), "markets": list(MARKETS), "riskDefaults": ExecutionPolicy().public()}
+        return {"strategies": registry.describe(market_key), "markets": list(MARKETS), "riskDefaults": ExecutionPolicy().public(), "riskSchema": RISK_SCHEMA}
 
     @router.get("/strategies/{strategy_id}/config")
     def get_config(strategy_id: str, market: str = Query(...)) -> dict[str, Any]:

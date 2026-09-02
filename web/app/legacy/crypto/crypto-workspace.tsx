@@ -262,12 +262,12 @@ export function CryptoWorkspace({ mode, userName, signOutHref }: { mode: Workspa
   return <div className="site-shell backtest-shell crypto-shell">
     <header className="global-header"><div className="header-inner backtest-header-inner">
       <a className="brand" href="/"><div className="brand-mark" aria-hidden="true">₹</div><div><strong>OpenDelta</strong><span>Market intelligence</span></div></a>
-      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/"><LayoutDashboard size={16} />Dashboard</a><a className={`nav-item ${mode === "backtest" ? "active" : ""}`} href="/backtest"><TrendingUp size={16} />Backtest</a><a className={`nav-item ${mode === "signals" ? "active" : ""}`} href="/signals"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
+      <nav className="top-nav" aria-label="Main navigation"><a className="nav-item" href="/legacy/screener"><LayoutDashboard size={16} />Dashboard</a><a className={`nav-item ${mode === "backtest" ? "active" : ""}`} href="/legacy/backtest"><TrendingUp size={16} />Backtest</a><a className={`nav-item ${mode === "signals" ? "active" : ""}`} href="/legacy/signals"><Radio size={16} />Signals</a><a className="nav-item" href="/admin"><Settings2 size={16} />Admin</a></nav>
       <div className="header-actions"><div className="user-chip"><div className="avatar">{initials}</div><span>{userName}</span></div><a href={signOutHref} className="icon-button" aria-label="Sign out"><LogOut size={17} /></a></div>
     </div></header>
 
     <main className="backtest-main crypto-main">
-      <nav className="market-workspace-tabs" aria-label="Market workspace"><a href={mode === "backtest" ? "/backtest" : "/signals"}>NSE</a><a className="active" href={mode === "backtest" ? "/backtest/crypto" : "/signals/crypto"}>Crypto & metals</a></nav>
+      <nav className="market-workspace-tabs" aria-label="Market workspace"><a href={mode === "backtest" ? "/legacy/backtest" : "/legacy/signals"}>NSE</a><a className="active" href={mode === "backtest" ? "/legacy/backtest/crypto" : "/legacy/signals/crypto"}>Crypto & metals</a></nav>
       <section className="crypto-heading"><div><span className="section-kicker">24/7 public market data · paper only</span><h1>{mode === "backtest" ? "Crypto & metals backtest" : "Crypto & metals signals"}</h1><p>One provider-neutral strategy engine for OKX and VALR. Instruments are accepted only after live catalog validation.</p></div><span className="crypto-paper-badge"><ShieldCheck size={16} />LIVE ORDERS DISABLED</span></section>
 
       {error && <div className="backtest-error" role="alert">{error}</div>}

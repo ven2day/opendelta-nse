@@ -4,7 +4,7 @@ import { FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, 
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
-import { compactValues, schemaDefaults, SchemaForm, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
+import { compactValues, pickValues, schemaDefaults, schemaFromValues, SchemaForm, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
 import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversesResponse } from "../platform/v2-types";
@@ -19,8 +19,11 @@ const DEFAULT_LOOKBACK_DAYS = 90;
 const DEFAULT_TIMEFRAME = "5m";
 type Notice = { kind: "success" | "error"; text: string } | null;
 
-/** Execution settings accepted by POST /v2/backtests; defaults are filled from the platform risk defaults. */
-const EXECUTION_SCHEMA: ConfigSchema = {
+/** The only keys the POST /v2/backtests `execution` body accepts, in display order. */
+const EXECUTION_KEYS = ["targetPct", "stopLossPct", "maximumHoldingBars", "initialQuantity", "allowAdditionalBuys", "additionalQuantityPct", "additionalSizingMode", "minimumQuantity", "maximumEntriesPerCycle", "batchSize"] as const;
+
+/** Fallback definitions for execution keys the platform `riskSchema` does not describe (or when it is absent). */
+const EXECUTION_FALLBACK: ConfigSchema = {
   targetPct: { type: "number", label: "Target %", minimum: 0, description: "Optional; strategy target when empty" },
   stopLossPct: { type: "number", label: "Stop loss %", minimum: 0 },
   maximumHoldingBars: { type: "integer", label: "Maximum holding bars", minimum: 1 },
@@ -32,6 +35,12 @@ const EXECUTION_SCHEMA: ConfigSchema = {
   maximumEntriesPerCycle: { type: "integer", label: "Maximum entries per cycle", minimum: 1 },
   batchSize: { type: "integer", label: "Batch size", minimum: 1, maximum: 200, default: 10, description: "Symbols processed per batch" },
 };
+
+/** Execution form schema: the published `riskSchema` (falling back to `riskDefaults`) filtered to the backtest contract. */
+function executionSchemaFrom(response: StrategiesResponse | null): ConfigSchema {
+  const published = response?.riskSchema ?? schemaFromValues(response?.riskDefaults ?? {});
+  return Object.fromEntries(EXECUTION_KEYS.map((key) => [key, published[key] ?? EXECUTION_FALLBACK[key]]));
+}
 
 function parseSymbols(text: string): string[] {
   return Array.from(new Set(text.split(/[\s,;]+/).map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)));
@@ -84,7 +93,8 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
 
   const configKey = `${market}:${strategyId ?? ""}`;
   const configuration = strategy ? (configEdits[configKey] ?? schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults)) : {};
-  const execution = executionEdits[configKey] ?? schemaDefaults(EXECUTION_SCHEMA, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
+  const executionSchema = useMemo(() => executionSchemaFrom(strategies.data), [strategies.data]);
+  const execution = executionEdits[configKey] ?? schemaDefaults(executionSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
   const timeframes = strategy?.supportedTimeframes?.length ? strategy.supportedTimeframes : [DEFAULT_TIMEFRAME];
   const timeframe = timeframeChoice && timeframes.includes(timeframeChoice) ? timeframeChoice : timeframes.includes(DEFAULT_TIMEFRAME) ? DEFAULT_TIMEFRAME : timeframes[0];
   const activeUniverse = universes.data?.active?.[market] ?? universes.data?.universes.find((universe) => universe.active) ?? null;
@@ -126,7 +136,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
         startDate,
         endDate,
         configuration: compactValues(configuration),
-        execution: compactValues(execution),
+        execution: pickValues(compactValues(execution), EXECUTION_KEYS),
       });
       setNotice({ kind: "success", text: `Backtest ${shortId(created.runId)} queued for ${symbols.length} symbols.` });
       selectRun(created.runId);
@@ -180,12 +190,12 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
           <h3 className="quant-subheading"><SlidersHorizontal size={14} />Strategy configuration{config.data?.active ? ` · active config "${config.data.active.name}"` : ""}</h3>
           {config.loading ? <LoadingState label="Loading active configuration" /> : <SchemaForm schema={strategy.configSchema} values={configuration} disabled={submitting} onChange={(next) => setConfigEdits((current) => ({ ...current, [configKey]: next }))} />}
           <h3 className="quant-subheading"><Gauge size={14} />Execution settings</h3>
-          <SchemaForm schema={EXECUTION_SCHEMA} values={execution} disabled={submitting} onChange={(next) => setExecutionEdits((current) => ({ ...current, [configKey]: next }))} />
+          <SchemaForm schema={executionSchema} values={execution} disabled={submitting} onChange={(next) => setExecutionEdits((current) => ({ ...current, [configKey]: next }))} />
           {notice && <Message kind={notice.kind}>{notice.text}</Message>}
         </div>
         <div className="quant-form-actions">
           <button type="submit" className="primary" disabled={submitting}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button>
-          <button type="button" onClick={() => { setConfigEdits((current) => ({ ...current, [configKey]: schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults) })); setExecutionEdits((current) => ({ ...current, [configKey]: schemaDefaults(EXECUTION_SCHEMA, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults) })); }}>Reset to defaults</button>
+          <button type="button" onClick={() => { setConfigEdits((current) => ({ ...current, [configKey]: schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults) })); setExecutionEdits((current) => ({ ...current, [configKey]: schemaDefaults(executionSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults) })); }}>Reset to defaults</button>
           <span>{strategy.name} v{strategy.version} · {timeframe} · {startDate} → {endDate}</span>
         </div>
       </form>}

@@ -56,7 +56,13 @@ export type Strategy = {
   configSchema: ConfigSchema;
   defaults: ConfigValues;
 };
-export type StrategiesResponse = { strategies: Strategy[]; markets: string[]; riskDefaults: ConfigValues };
+export type StrategiesResponse = {
+  strategies: Strategy[];
+  markets: string[];
+  riskDefaults: ConfigValues;
+  /** Schema for the risk/execution settings (same shape as `configSchema`); older services omit it. */
+  riskSchema?: ConfigSchema | null;
+};
 export type StrategyConfig = {
   configId: string;
   name: string;

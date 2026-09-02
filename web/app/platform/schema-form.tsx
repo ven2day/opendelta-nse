@@ -40,7 +40,8 @@ export function SchemaFieldInput({ name, field, value, onChange, disabled }: { n
   }
   if (field.type === "string") {
     if (field.enum?.length) {
-      return <label><span>{label}</span><select value={String(value ?? "")} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{field.enum.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}</select>{field.description && <small>{field.description}</small>}</label>;
+      const current = String(value ?? "");
+      return <label><span>{label}</span><select value={current} disabled={disabled} onChange={(event) => onChange(event.target.value)}>{!field.enum.some((option) => String(option) === current) && <option value="">—</option>}{field.enum.map((option) => <option key={String(option)} value={String(option)}>{String(option)}</option>)}</select>{field.description && <small>{field.description}</small>}</label>;
     }
     return <label><span>{label}</span><input type="text" value={String(value ?? "")} disabled={disabled} onChange={(event) => onChange(event.target.value)} />{field.description && <small>{field.description}</small>}</label>;
   }
@@ -70,7 +71,12 @@ export function schemaFromValues(values: ConfigValues, labels?: Record<string, s
   return schema;
 }
 
-/** Drops empty numeric inputs so optional fields are omitted rather than sent as empty strings. */
+/** Drops empty inputs so optional fields (null defaults) are omitted rather than sent as empty strings or null. */
 export function compactValues(values: ConfigValues): ConfigValues {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== "" && value !== undefined && value !== null));
+}
+
+/** Keeps only allow-listed keys, in allow-list order, so a request body matches its contract exactly. */
+export function pickValues(values: ConfigValues, keys: readonly string[]): ConfigValues {
+  return Object.fromEntries(keys.filter((key) => key in values).map((key) => [key, values[key]]));
 }

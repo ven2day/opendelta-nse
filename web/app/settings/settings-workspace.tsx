@@ -45,7 +45,8 @@ export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMa
   const { refresh: refreshConfig } = config;
 
   const key = `${market}:${strategyId ?? ""}`;
-  const riskSchema = schemaFromValues({ ...(strategies.data?.riskDefaults ?? {}), ...(config.data?.effectiveRiskSettings ?? {}) });
+  // Prefer the published risk schema (enum fields become selects); infer from defaults only when an older service omits it.
+  const riskSchema = useMemo(() => strategies.data?.riskSchema ?? schemaFromValues({ ...(strategies.data?.riskDefaults ?? {}), ...(config.data?.effectiveRiskSettings ?? {}) }), [strategies.data, config.data]);
   const configuration = strategy ? (configEdits[key] ?? schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults)) : {};
   const riskSettings = riskEdits[key] ?? schemaDefaults(riskSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
   const name = nameEdits[key] ?? (config.data?.active?.name ?? (strategy ? `${strategy.name} · ${marketLabel(market)}` : ""));

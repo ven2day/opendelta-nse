@@ -69,6 +69,8 @@ test("every unified route requires login, renders the six-item navigation and it
     assert.match(html, new RegExp(`<title>${route.title.replace(/ /g, "\\s")}`), `${route.path} title`);
     assert.deepEqual(navigationLabels(html), NAVIGATION, `${route.path} navigation`);
     assert.match(html, /data-ui-version="unified-v2"/);
+    // The topbar clock is seeded after mount so server and client markup match (no hydration error #418).
+    assert.match(html, /--:--:--/);
     assert.match(html, /Paper research only/);
     assert.doesNotMatch(html, /class="global-header"/, `${route.path} must not embed the legacy header`);
     assert.doesNotMatch(html, /Vento NSE/);

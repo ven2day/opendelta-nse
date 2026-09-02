@@ -86,7 +86,8 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
     if (window.matchMedia("(max-width: 820px)").matches) return false;
     return window.localStorage.getItem("opendelta-sidebar-open") !== "false";
   });
-  const [clock, setClock] = useState(() => new Date());
+  // Seeded after mount only: a server-rendered time can never match the client and would break hydration.
+  const [clock, setClock] = useState<Date | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewUnavailable, setOverviewUnavailable] = useState(false);
   const [overviewUpdatedAt, setOverviewUpdatedAt] = useState<Date | null>(null);
@@ -103,8 +104,13 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!shellEnabled) return;
-    const timer = window.setInterval(() => setClock(new Date()), 1_000);
-    return () => window.clearInterval(timer);
+    const tick = () => setClock(new Date());
+    const initial = window.setTimeout(tick, 0);
+    const timer = window.setInterval(tick, 1_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, [shellEnabled]);
 
   useEffect(() => {
@@ -138,13 +144,13 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
     };
   }, [pathname, shellEnabled]);
 
-  const marketClock = useMemo(() => new Intl.DateTimeFormat("en-GB", {
+  const marketClock = useMemo(() => (clock ? new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
     timeZone: market === "NSE" ? "Asia/Kolkata" : "UTC",
-  }).format(clock), [clock, market]);
+  }).format(clock) : "--:--:--"), [clock, market]);
 
   if (!shellEnabled) return <>{children}</>;
   const freshness = overviewUnavailable ? "UNAVAILABLE" : (overview?.dataFreshness?.status ?? "CHECKING");

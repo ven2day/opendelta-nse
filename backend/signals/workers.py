@@ -55,6 +55,11 @@ class MarketSignalWorker:
         self._lock = threading.Lock()
         self._symbols: list[str] = []
         self._state: dict[str, Any] = {"status": "STOPPED", "connectionStatus": "DISCONNECTED", "message": "Not started", "consecutiveFailures": 0, "polls": 0}
+        self.candle_listeners: list[Callable[[str, Any, datetime], None]] = []
+
+    def add_candle_listener(self, listener: Callable[[str, Any, datetime], None]) -> None:
+        """Called with ``(symbol, candle_row, timestamp)`` for every completed candle the engine accepts."""
+        self.candle_listeners.append(listener)
 
     # ---- lifecycle ---------------------------------------------------------------
 
@@ -116,8 +121,17 @@ class MarketSignalWorker:
             try:
                 frame = self.source.candles(symbol, self.engine.timeframe, now - timedelta(days=self.lookback_days), now, warmup_bars=self.engine.history.maximum_bars)
                 completed = self.processor.completed(frame, now)
+                before = self.engine.history.latest_timestamp(symbol)
                 if self.engine.process_completed_candle(symbol, completed) is not None:
                     created += 1
+                if self.candle_listeners:
+                    fresh = completed[completed.index > before] if before is not None else completed
+                    for stamp, row in fresh.iterrows():
+                        for listener in self.candle_listeners:
+                            try:
+                                listener(symbol, row, stamp.to_pydatetime())
+                            except Exception:  # noqa: BLE001 - a listener must never break the feed
+                                logger.exception("Candle listener failed for %s", symbol)
             except Exception as error:  # noqa: BLE001 - one symbol's provider error must not skip the rest
                 failures.append(f"{symbol}: {error}"[:120])
         with self._lock:

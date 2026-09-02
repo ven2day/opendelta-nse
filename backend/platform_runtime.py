@@ -19,7 +19,10 @@ from datetime import datetime, timezone as _timezone
 
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.settings_routes import create_settings_router
+from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.signal_routes import create_signal_router
+from backend.paper_trading.broker import PaperBroker, PaperRepositories
+from backend.paper_trading.execution import ExecutionPolicy
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
@@ -29,6 +32,10 @@ from backend.data.repositories import (
     BacktestTradeRepository,
     EngineStatusRepository,
     LiveSignalRepository,
+    PaperAccountRepository,
+    PaperLotRepository,
+    PaperOrderRepository,
+    PaperTradeRepository,
     SavedUniverseRepository,
     StrategyConfigRepository,
 )
@@ -58,6 +65,7 @@ class PlatformRuntime:
         self.clock = clock or (lambda: datetime.now(_timezone.utc))
         self._runner: BacktestJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
+        self._brokers: dict[str, PaperBroker] = {}
         self._lock = threading.Lock()
         self.migrated_versions: list[str] = []
         self.disabled_reason: str | None = None
@@ -115,10 +123,37 @@ class PlatformRuntime:
             if not _truthy(os.environ.get(f"{market}_SIGNAL_ENGINE_V2_ENABLED")):
                 continue
             worker = self.build_signal_worker(market)
+            if not _truthy(os.environ.get(f"{market}_PAPER_TRADING_V2_ENABLED", "true")):
+                logger.info("%s paper trading v2 is disabled", market)
+            else:
+                broker = self.paper_broker(market)
+                worker.engine.publish = broker.on_signal
+                worker.add_candle_listener(lambda symbol, row, stamp, _broker=broker: _broker.on_completed_candle(symbol, row, stamp))
             with self._lock:
                 self._workers[market] = worker
             worker.start()
             logger.info("Started %s live-signal worker", market)
+
+    # ---- paper trading -----------------------------------------------------------
+
+    def paper_repositories(self) -> PaperRepositories:
+        database = self.require_database()
+        return PaperRepositories(PaperAccountRepository(database), PaperOrderRepository(database), PaperLotRepository(database), PaperTradeRepository(database))
+
+    def paper_broker(self, market: str) -> PaperBroker:
+        key = market.strip().upper()
+        with self._lock:
+            broker = self._brokers.get(key)
+        if broker is not None:
+            return broker
+        spec = market_spec(key)
+        strategy = STRATEGIES.get(os.environ.get(f"{key}_LIVE_STRATEGY", DEFAULT_LIVE_STRATEGY))
+        active = self.strategy_configs().active(spec.market, strategy.strategy_id)
+        policy = ExecutionPolicy.from_mapping((active or {}).get("riskSettings"), whole_units=(key == "NSE"))
+        broker = PaperBroker(market=spec, repositories=self.paper_repositories(), policy=policy, timeframe=LIVE_TIMEFRAME, clock=self.clock)
+        with self._lock:
+            self._brokers.setdefault(key, broker)
+            return self._brokers[key]
 
     def build_signal_worker(self, market: str, *, strategy_id: str | None = None) -> MarketSignalWorker:
         spec = market_spec(market)
@@ -222,3 +257,4 @@ def install_platform(app: FastAPI, runtime: PlatformRuntime) -> None:
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES).routes)
     app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_status=runtime.worker_status).routes)
+    app.router.routes.extend(create_paper_trading_router(runtime.paper_broker).routes)

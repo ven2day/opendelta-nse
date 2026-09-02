@@ -484,6 +484,275 @@ class SavedUniverseRepository:
         return _public_universe(updated)
 
 
+# ---------------------------------------------------------------- paper trading
+
+PAPER_LOT_OPEN = "OPEN"
+PAPER_LOT_CLOSED_STATUSES = ("TARGET_HIT", "STOPPED", "EXPIRED", "CLOSED")
+
+
+def _public_account(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "accountId": str(row["account_id"]),
+        "market": row["market"],
+        "currency": row["currency"],
+        "startingBalance": row["starting_balance"],
+        "cashBalance": row["cash_balance"],
+        "riskSettings": row["risk_settings"],
+        "createdAt": _iso(row["created_at"]),
+        "updatedAt": _iso(row["updated_at"]),
+        "resetAt": _iso(row["reset_at"]),
+    }
+
+
+class PaperAccountRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def get(self, market: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one("SELECT * FROM paper_accounts WHERE market = %s", (market,))
+        return _public_account(row) if row else None
+
+    def get_or_create(self, market: str, *, currency: str, starting_balance: float, risk_settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        existing = self.get(market)
+        if existing is not None:
+            return existing
+        self.database.execute(
+            "INSERT INTO paper_accounts (account_id, market, currency, starting_balance, cash_balance, risk_settings) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (market) DO NOTHING",
+            (uuid.uuid4(), market, currency, starting_balance, starting_balance, jsonb(dict(risk_settings or {}))),
+        )
+        created = self.get(market)
+        assert created is not None
+        return created
+
+    def reset(self, market: str, *, starting_balance: float | None = None, risk_settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Wipe orders/lots/trades for the market's account and restore the balance."""
+        account = self.get(market)
+        if account is None:
+            raise KeyError(f"No paper account for {market}")
+        balance = float(starting_balance if starting_balance is not None else account["startingBalance"])
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM paper_trades WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
+            cursor.execute("DELETE FROM paper_lots WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
+            cursor.execute("DELETE FROM paper_orders WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
+            cursor.execute(
+                "UPDATE paper_accounts SET starting_balance = %s, cash_balance = %s, risk_settings = %s, reset_at = %s, updated_at = %s WHERE account_id = %s",
+                (balance, balance, jsonb(dict(risk_settings if risk_settings is not None else account["riskSettings"])), _now(), _now(), uuid.UUID(account["accountId"])),
+            )
+        refreshed = self.get(market)
+        assert refreshed is not None
+        return refreshed
+
+    def adjust_cash(self, account_id: uuid.UUID | str, delta: float) -> float:
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT cash_balance FROM paper_accounts WHERE account_id = %s FOR UPDATE", (uuid.UUID(str(account_id)),))
+            row = cursor.fetchone()
+            if row is None:
+                raise KeyError(f"Paper account {account_id} was not found")
+            balance = float(row["cash_balance"]) + float(delta)
+            cursor.execute("UPDATE paper_accounts SET cash_balance = %s, updated_at = %s WHERE account_id = %s", (balance, _now(), uuid.UUID(str(account_id))))
+        return balance
+
+    def list(self) -> list[dict[str, Any]]:
+        return [_public_account(row) for row in self.database.fetch_all("SELECT * FROM paper_accounts ORDER BY market")]
+
+
+def _public_order(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "orderId": str(row["order_id"]),
+        "accountId": str(row["account_id"]),
+        "market": row["market"],
+        "signalId": str(row["signal_id"]) if row["signal_id"] else None,
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "symbol": row["symbol"],
+        "side": row["side"],
+        "quantity": row["quantity"],
+        "requestedPrice": row["requested_price"],
+        "executedPrice": row["executed_price"],
+        "fees": row["fees"],
+        "slippage": row["slippage"],
+        "status": row["status"],
+        "reason": row["reason"],
+        "createdAt": _iso(row["created_at"]),
+    }
+
+
+class PaperOrderRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def insert(
+        self,
+        *,
+        account_id: uuid.UUID | str,
+        market: str,
+        signal_id: str | None,
+        strategy_id: str,
+        strategy_version: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        requested_price: float,
+        executed_price: float | None,
+        fees: float,
+        slippage: float,
+        status: str,
+        reason: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Insert an order; a second filled BUY for the same signal on the same account returns ``None``."""
+        order_id = uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO paper_orders (order_id, account_id, market, signal_id, strategy_id, strategy_version, symbol, side, quantity, requested_price, executed_price, fees, slippage, status, reason)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING RETURNING *
+                """,
+                (order_id, uuid.UUID(str(account_id)), market, uuid.UUID(str(signal_id)) if signal_id else None, strategy_id, strategy_version, symbol, side, quantity, requested_price, executed_price, fees, slippage, status, reason),
+            )
+            row = cursor.fetchone()
+        return _public_order(row) if row else None
+
+    def list(self, account_id: uuid.UUID | str, *, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM paper_orders WHERE account_id = %s ORDER BY created_at DESC LIMIT %s", (uuid.UUID(str(account_id)), limit))
+        return [_public_order(row) for row in rows]
+
+    def for_signal(self, account_id: uuid.UUID | str, signal_id: str) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM paper_orders WHERE account_id = %s AND signal_id = %s", (uuid.UUID(str(account_id)), uuid.UUID(str(signal_id))))
+        return [_public_order(row) for row in rows]
+
+
+def _public_lot(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "lotId": str(row["lot_id"]),
+        "accountId": str(row["account_id"]),
+        "orderId": str(row["order_id"]),
+        "signalId": str(row["signal_id"]) if row["signal_id"] else None,
+        "market": row["market"],
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "symbol": row["symbol"],
+        "timeframe": row["timeframe"],
+        "cycleId": row["cycle_id"],
+        "lotNumber": int(row["lot_number"]),
+        "entryTimestamp": _iso(row["entry_timestamp"]),
+        "entryPrice": row["entry_price"],
+        "quantity": row["quantity"],
+        "targetPrice": row["target_price"],
+        "stopPrice": row["stop_price"],
+        "expiresAt": _iso(row["expires_at"]),
+        "status": row["status"],
+        "exitTimestamp": _iso(row["exit_timestamp"]),
+        "exitPrice": row["exit_price"],
+        "realizedPnl": row["realized_pnl"],
+        "unrealizedPnl": row["unrealized_pnl"],
+        "fees": row["fees"],
+        "lastPrice": row["last_price"],
+        "maePct": row["mae_pct"],
+        "mfePct": row["mfe_pct"],
+        "configurationSnapshot": row["configuration_snapshot"],
+        "createdAt": _iso(row["created_at"]),
+        "updatedAt": _iso(row["updated_at"]),
+    }
+
+
+class PaperLotRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def insert(self, **values: Any) -> dict[str, Any]:
+        lot_id = uuid.uuid4()
+        self.database.execute(
+            """
+            INSERT INTO paper_lots (lot_id, account_id, order_id, signal_id, market, strategy_id, strategy_version, symbol, timeframe, cycle_id, lot_number,
+                entry_timestamp, entry_price, quantity, target_price, stop_price, expires_at, status, fees, last_price, unrealized_pnl, mae_pct, mfe_pct, configuration_snapshot)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                lot_id, uuid.UUID(str(values["account_id"])), uuid.UUID(str(values["order_id"])), uuid.UUID(str(values["signal_id"])) if values.get("signal_id") else None,
+                values["market"], values["strategy_id"], values["strategy_version"], values["symbol"], values["timeframe"], values["cycle_id"], values["lot_number"],
+                values["entry_timestamp"], values["entry_price"], values["quantity"], values["target_price"], values.get("stop_price"), values.get("expires_at"),
+                values.get("fees", 0.0), values["entry_price"], values.get("unrealized_pnl", 0.0), 0.0, 0.0, jsonb(dict(values.get("configuration_snapshot") or {})),
+            ),
+        )
+        return self.get(lot_id)
+
+    def get(self, lot_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one("SELECT * FROM paper_lots WHERE lot_id = %s", (uuid.UUID(str(lot_id)),))
+        if row is None:
+            raise KeyError(f"Paper lot {lot_id} was not found")
+        return _public_lot(row)
+
+    def open(self, account_id: uuid.UUID | str, symbol: str | None = None) -> list[dict[str, Any]]:
+        if symbol:
+            rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND symbol = %s AND status = 'OPEN' ORDER BY entry_timestamp, lot_number", (uuid.UUID(str(account_id)), symbol))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND status = 'OPEN' ORDER BY symbol, entry_timestamp, lot_number", (uuid.UUID(str(account_id)),))
+        return [_public_lot(row) for row in rows]
+
+    def list(self, account_id: uuid.UUID | str, *, status: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        if status:
+            rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND status = %s ORDER BY entry_timestamp DESC LIMIT %s", (uuid.UUID(str(account_id)), status, limit))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s ORDER BY entry_timestamp DESC LIMIT %s", (uuid.UUID(str(account_id)), limit))
+        return [_public_lot(row) for row in rows]
+
+    def cycle_state(self, account_id: uuid.UUID | str, symbol: str) -> tuple[int, int]:
+        """``(highest cycle number ever, open lot count)`` for a symbol."""
+        row = self.database.fetch_one(
+            "SELECT coalesce(max(cast(split_part(cycle_id, '-Cycle', 2) as integer)), 0) AS cycles, count(*) FILTER (WHERE status = 'OPEN') AS open_lots FROM paper_lots WHERE account_id = %s AND symbol = %s",
+            (uuid.UUID(str(account_id)), symbol),
+        )
+        return (int(row["cycles"]), int(row["open_lots"])) if row else (0, 0)
+
+    def mark(self, lot_id: uuid.UUID | str, *, last_price: float, unrealized_pnl: float, mae_pct: float, mfe_pct: float) -> None:
+        self.database.execute(
+            "UPDATE paper_lots SET last_price = %s, unrealized_pnl = %s, mae_pct = %s, mfe_pct = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
+            (last_price, unrealized_pnl, mae_pct, mfe_pct, _now(), uuid.UUID(str(lot_id))),
+        )
+
+    def close(self, lot_id: uuid.UUID | str, *, status: str, exit_timestamp: datetime, exit_price: float, realized_pnl: float, fees: float) -> dict[str, Any]:
+        if status not in PAPER_LOT_CLOSED_STATUSES:
+            raise ValueError(f"{status} is not a closing lot status")
+        self.database.execute(
+            "UPDATE paper_lots SET status = %s, exit_timestamp = %s, exit_price = %s, realized_pnl = %s, fees = %s, unrealized_pnl = 0, last_price = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
+            (status, exit_timestamp, exit_price, realized_pnl, fees, exit_price, _now(), uuid.UUID(str(lot_id))),
+        )
+        return self.get(lot_id)
+
+
+def _public_paper_trade(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "tradeId": int(row["trade_id"]),
+        "accountId": str(row["account_id"]),
+        "lotId": str(row["lot_id"]),
+        "market": row["market"],
+        "symbol": row["symbol"],
+        "side": row["side"],
+        "quantity": row["quantity"],
+        "price": row["price"],
+        "fees": row["fees"],
+        "slippage": row["slippage"],
+        "reason": row["reason"],
+        "executedAt": _iso(row["executed_at"]),
+    }
+
+
+class PaperTradeRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def insert(self, *, account_id: uuid.UUID | str, lot_id: uuid.UUID | str, market: str, symbol: str, side: str, quantity: float, price: float, fees: float, slippage: float, reason: str, executed_at: datetime) -> None:
+        self.database.execute(
+            "INSERT INTO paper_trades (account_id, lot_id, market, symbol, side, quantity, price, fees, slippage, reason, executed_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (uuid.UUID(str(account_id)), uuid.UUID(str(lot_id)), market, symbol, side, quantity, price, fees, slippage, reason, executed_at),
+        )
+
+    def list(self, account_id: uuid.UUID | str, *, limit: int = 500) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM paper_trades WHERE account_id = %s ORDER BY executed_at DESC, trade_id DESC LIMIT %s", (uuid.UUID(str(account_id)), limit))
+        return [_public_paper_trade(row) for row in rows]
+
+
 def _public_universe(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "universeId": str(row["universe_id"]),

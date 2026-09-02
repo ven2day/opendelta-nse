@@ -2464,7 +2464,7 @@ def get_platform_runtime() -> PlatformRuntime:
         return _platform_runtime_instance
 
 
-install_platform(app, get_platform_runtime())
+install_platform(app, get_platform_runtime(), overview=lambda: platform_overview())  # defined later in this module
 
 
 def get_recovery_baseline_metadata() -> dict[str, Any]:

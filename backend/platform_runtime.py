@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from datetime import datetime, timezone as _timezone
 
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
+from backend.api.dashboard_routes import create_dashboard_router
 from backend.api.settings_routes import create_settings_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
@@ -283,10 +284,21 @@ def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def install_platform(app: FastAPI, runtime: PlatformRuntime) -> None:
+def install_platform(app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[], dict[str, Any]] | None = None) -> None:
     services = BacktestServices(registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner)
     app.router.routes.extend(create_backtest_router(services).routes)
-    app.router.routes.extend(create_settings_router(STRATEGIES).routes)
+    app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs).routes)
+    app.router.routes.extend(
+        create_dashboard_router(
+            overview=overview or (lambda: {}),
+            screener_runs=lambda market: ScreenerRunRepository(runtime.require_database()).list(market, limit=1),
+            backtest_runs=lambda market: runtime.runs().list(market, limit=5),
+            engine_health=lambda market: {"stored": runtime.engine_status().get("live-signals-v2", market), "worker": runtime.worker_status(market)},
+            paper_summary=lambda market: runtime.paper_broker(market).summary(),
+            paper_positions=lambda market: runtime.paper_broker(market).positions(),
+            active_universe=lambda market: runtime.universes().active(market),
+        ).routes
+    )
     app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_status=runtime.worker_status).routes)
     app.router.routes.extend(create_paper_trading_router(runtime.paper_broker).routes)
     app.router.routes.extend(create_screener_router(runtime.screener()).routes)

@@ -36,6 +36,9 @@ class TradeFailureResearchConfig:
     walk_forward_folds: int = 2
     minimum_training_lots: int = 30
     minimum_test_lots: int = 10
+    minimum_state_lots: int = 10
+    minimum_candidate_exits: int = 20
+    minimum_candidate_exits_per_fold: int = 5
     maximum_audit_rows: int = 5_000
 
     def validate(self) -> "TradeFailureResearchConfig":
@@ -51,6 +54,9 @@ class TradeFailureResearchConfig:
             self.walk_forward_folds,
             self.minimum_training_lots,
             self.minimum_test_lots,
+            self.minimum_state_lots,
+            self.minimum_candidate_exits,
+            self.minimum_candidate_exits_per_fold,
             self.maximum_audit_rows,
         )
         if any(value < 1 for value in positive_ints):
@@ -82,6 +88,9 @@ class TradeFailureResearchConfig:
             "walkForwardFolds": self.walk_forward_folds,
             "minimumTrainingLots": self.minimum_training_lots,
             "minimumTestLots": self.minimum_test_lots,
+            "minimumStateLots": self.minimum_state_lots,
+            "minimumCandidateExits": self.minimum_candidate_exits,
+            "minimumCandidateExitsPerFold": self.minimum_candidate_exits_per_fold,
             "maximumAuditRows": self.maximum_audit_rows,
         }
 
@@ -170,17 +179,40 @@ def extract_failure_research_lots(
     for baseline_lot in baseline_result.get("lots", []):
         entry_stamp = _as_ist(baseline_lot["entryTimestamp"])
         entry_index = positions.get(entry_stamp)
-        if entry_index is None or entry_index >= len(data) - 1:
+        if entry_index is None:
             continue
         entry_price = float(baseline_lot["entryPrice"])
         target_price = float(baseline_lot["targetPrice"])
         horizon_index = min(len(data) - 1, entry_index + cfg.maximum_holding_bars)
+        complete_horizon_available = entry_index + cfg.maximum_holding_bars <= len(data) - 1
         resolution_index = horizon_index
         success = False
         target_hits = np.flatnonzero(high[entry_index + 1 : horizon_index + 1] >= target_price)
         if target_hits.size:
             resolution_index = entry_index + 1 + int(target_hits[0])
             success = True
+        common_lot = {
+            "lotId": str(baseline_lot["lotId"]),
+            "symbol": symbol,
+            "quantity": int(baseline_lot["quantity"]),
+            "entryTimestamp": entry_stamp.isoformat(),
+            "entryPrice": entry_price,
+            "targetPrice": target_price,
+            "targetPct": float(baseline_lot["targetPct"]),
+        }
+        if not success and not complete_horizon_available:
+            research_lots.append(
+                {
+                    **common_lot,
+                    "resolutionTimestamp": timestamps[horizon_index].isoformat(),
+                    "resolutionPrice": float(close[horizon_index]),
+                    "resolutionStatus": "RIGHT_CENSORED",
+                    "success": None,
+                    "barsToResolution": horizon_index - entry_index,
+                    "observations": [],
+                }
+            )
+            continue
         resolution_price = target_price if success else float(close[resolution_index])
         resolution_status = "TAKE_PROFIT" if success else "TIME_HORIZON_FAILURE"
         # Suffix-min of Low over (entry_index+1 .. resolution_index], so
@@ -230,13 +262,7 @@ def extract_failure_research_lots(
             )
         research_lots.append(
             {
-                "lotId": str(baseline_lot["lotId"]),
-                "symbol": symbol,
-                "quantity": int(baseline_lot["quantity"]),
-                "entryTimestamp": entry_stamp.isoformat(),
-                "entryPrice": entry_price,
-                "targetPrice": target_price,
-                "targetPct": float(baseline_lot["targetPct"]),
+                **common_lot,
                 "resolutionTimestamp": data.index[resolution_index].isoformat(),
                 "resolutionPrice": resolution_price,
                 "resolutionStatus": resolution_status,
@@ -259,7 +285,8 @@ class EmpiricalFailureModel:
         self.observation_count = 0
 
     def fit(self, lots: Iterable[Mapping[str, Any]]) -> "EmpiricalFailureModel":
-        observations = [observation for lot in lots for observation in lot["observations"]]
+        lot_rows = list(lots)
+        observations = [observation for lot in lot_rows for observation in lot["observations"]]
         self.observation_count = len(observations)
         if not observations:
             return self
@@ -268,8 +295,13 @@ class EmpiricalFailureModel:
         if failure_losses:
             self.global_failure_loss_pct = max(0.000001, float(np.mean(failure_losses)))
         buckets: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
-        for observation in observations:
-            buckets[str(observation["stateKey"])].append(observation)
+        state_lot_ids: dict[str, set[str]] = defaultdict(set)
+        for lot in lot_rows:
+            lot_id = str(lot["lotId"])
+            for observation in lot["observations"]:
+                key = str(observation["stateKey"])
+                buckets[key].append(observation)
+                state_lot_ids[key].add(lot_id)
         for key, rows in buckets.items():
             successes = sum(bool(row["success"]) for row in rows)
             failures = len(rows) - successes
@@ -282,6 +314,7 @@ class EmpiricalFailureModel:
             ) / (failures + self.prior_observations)
             self.states[key] = {
                 "observations": float(len(rows)),
+                "lots": float(len(state_lot_ids[key])),
                 "successes": float(successes),
                 "failures": float(failures),
                 "successProbability": success_probability,
@@ -294,11 +327,13 @@ class EmpiricalFailureModel:
         if state is None:
             return {
                 "stateObservations": 0.0,
+                "stateLots": 0.0,
                 "successProbability": self.global_success_rate,
                 "expectedFailureLossPct": self.global_failure_loss_pct,
             }
         return {
             "stateObservations": state["observations"],
+            "stateLots": state["lots"],
             "successProbability": state["successProbability"],
             "expectedFailureLossPct": state["expectedFailureLossPct"],
         }
@@ -358,7 +393,11 @@ def _failure_engine_trade(
             - config.cost_pct
         )
         failed_groups = list(observation["failedGroups"])
-        thesis_failed = expected_value_pct < 0 and len(failed_groups) >= config.minimum_failed_groups
+        thesis_failed = (
+            expected_value_pct < 0
+            and len(failed_groups) >= config.minimum_failed_groups
+            and prediction["stateLots"] >= config.minimum_state_lots
+        )
         consecutive_failures = consecutive_failures + 1 if thesis_failed else 0
         if consecutive_failures < config.decision_persistence_bars:
             continue
@@ -382,6 +421,7 @@ def _failure_engine_trade(
             "remainingTargetPct": _finite(observation["remainingTargetPct"]),
             "expectedValuePct": _finite(expected_value_pct),
             "stateObservations": int(prediction["stateObservations"]),
+            "stateLots": int(prediction["stateLots"]),
             "persistenceBars": consecutive_failures,
         }
         return _resolved_trade(
@@ -431,7 +471,12 @@ def run_trade_failure_research(
     config: TradeFailureResearchConfig,
 ) -> dict[str, Any]:
     cfg = config.validate()
-    ordered = sorted(lots, key=lambda lot: (str(lot["entryTimestamp"]), str(lot["lotId"])))
+    received = sorted(lots, key=lambda lot: (str(lot["entryTimestamp"]), str(lot["lotId"])))
+    right_censored = [lot for lot in received if lot.get("resolutionStatus") == "RIGHT_CENSORED"]
+    ordered = [
+        lot for lot in received
+        if lot.get("resolutionStatus") in {"TAKE_PROFIT", "TIME_HORIZON_FAILURE"}
+    ]
     folds: list[dict[str, Any]] = []
     baseline_all: list[dict[str, Any]] = []
     failure_all: list[dict[str, Any]] = []
@@ -476,11 +521,13 @@ def run_trade_failure_research(
     baseline_metrics = _metrics(baseline_all)
     failure_metrics = _metrics(failure_all)
     fully_evaluated = len(folds) == cfg.walk_forward_folds and not skipped
+    total_candidate_exits = int(failure_metrics["thesisFailedExits"])
     stable = fully_evaluated and all(
-        float(fold["failureEngine"]["netPnl"] or 0) >= float(fold["baseline"]["netPnl"] or 0)
-        and float(fold["failureEngine"]["worstTradePct"] or 0) >= float(fold["baseline"]["worstTradePct"] or 0)
+        float(fold["netPnlDifference"] or 0) > 0
+        and float(fold["worstTradeImprovementPct"] or 0) > 0
+        and int(fold["failureEngine"]["thesisFailedExits"]) >= cfg.minimum_candidate_exits_per_fold
         for fold in folds
-    )
+    ) and total_candidate_exits >= cfg.minimum_candidate_exits
     return {
         "mode": cfg.mode,
         "status": "RESEARCH_CANDIDATE" if stable else "REJECTED" if fully_evaluated else "INSUFFICIENT_DATA",
@@ -491,12 +538,15 @@ def run_trade_failure_research(
             "features": list(FAILURE_FEATURES),
             "evidenceGroups": ["STRUCTURE", "MOMENTUM_PARTICIPATION", "PROGRESS"],
             "label": "TARGET_BEFORE_MAXIMUM_HOLDING_HORIZON",
-            "decision": "NEGATIVE_EXPECTED_VALUE_FOR_PERSISTENCE_BARS_AND_MINIMUM_INDEPENDENT_GROUPS",
+            "decision": "NEGATIVE_EXPECTED_VALUE_WITH_MINIMUM_STATE_LOTS_FOR_PERSISTENCE_BARS_AND_MINIMUM_INDEPENDENT_GROUPS",
             "execution": "NEXT_BAR_OPEN",
             "split": "EXPANDING_WINDOW_WALK_FORWARD_BY_LOT_ENTRY_TIME_WITH_RESOLUTION_EMBARGO",
             "lookahead": "FEATURES_CAUSAL; FUTURE_CANDLES_USED_ONLY_FOR_TRAINING_LABELS",
+            "censoring": "LOTS_WITHOUT_TARGET_OR_COMPLETE_HORIZON_ARE_EXCLUDED_AS_RIGHT_CENSORED",
         },
+        "lotsReceived": len(received),
         "lotsAvailable": len(ordered),
+        "rightCensoredLots": len(right_censored),
         "foldsCompleted": len(folds),
         "foldsSkipped": skipped,
         "folds": folds,
@@ -507,11 +557,26 @@ def run_trade_failure_research(
             "worstTradeImprovementPct": _finite(float(failure_metrics["worstTradePct"] or 0) - float(baseline_metrics["worstTradePct"] or 0), 4),
             "maximumDrawdownImprovementCurrency": _finite(float(baseline_metrics["maximumDrawdownCurrency"] or 0) - float(failure_metrics["maximumDrawdownCurrency"] or 0), 2),
         },
+        "candidateRequirements": {
+            "allConfiguredFoldsCompleted": fully_evaluated,
+            "strictNetPnlAndWorstTradeImprovementEveryFold": fully_evaluated and all(
+                float(fold["netPnlDifference"] or 0) > 0
+                and float(fold["worstTradeImprovementPct"] or 0) > 0
+                for fold in folds
+            ),
+            "minimumStateLots": cfg.minimum_state_lots,
+            "minimumThesisExits": cfg.minimum_candidate_exits,
+            "minimumThesisExitsPerFold": cfg.minimum_candidate_exits_per_fold,
+            "actualThesisExits": total_candidate_exits,
+            "met": stable,
+        },
         "decisionAudit": audit,
         "warnings": [
             "Research comparison only. It never closes live or paper positions.",
             "The current model uses stock-only causal features; NIFTY and sector context are not fabricated when unavailable.",
             "No catastrophic stop is activated by this research run; that boundary requires a separately validated risk limit.",
-            "RESEARCH_CANDIDATE requires every configured fold to complete and improve both net P&L and worst trade; it is not live approval.",
+            f"{len(right_censored)} incomplete lot(s) were excluded as RIGHT_CENSORED because neither the target nor the complete holding horizon was observed.",
+            "A thesis-failure exit requires enough independent historical lots in its exact state; unseen and sparse states cannot trigger exits.",
+            "RESEARCH_CANDIDATE requires strict net P&L and worst-trade improvement in every configured fold plus the configured minimum thesis-exit counts; it is not live approval.",
         ],
     }

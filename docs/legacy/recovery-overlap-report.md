@@ -16,7 +16,7 @@ The RSI state machine is unchanged: enter the configured arm zone, remain armed 
 - `benchmarks/recovery_benchmark.py` and `benchmarks/run_live_recovery_universe.py`: overlap throughput and old/new production reporting.
 - `web/app/backtest/backtest-dashboard.tsx`, `web/app/backtest/recovery-results.tsx`, and `web/app/globals.css`: native OpenDelta controls, cards, concurrency columns, independent trade detail, and signal-observation wording.
 - `web/tests/rendered-html.test.mjs`: frontend regression assertions.
-- `web/docs/backtest-architecture.md`, `web/docs/recovery-benchmark.md`, and this report.
+- `docs/legacy/backtest-architecture.md`, `docs/legacy/recovery-benchmark.md`, and this report.
 - `benchmarks/opendelta-rsi-recovery-overlap-baseline.json`: cache-warm production baseline.
 - `benchmarks/opendelta-rsi-recovery-overlap-baseline-cold.json`: matching cache-cold production baseline.
 

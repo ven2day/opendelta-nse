@@ -1,339 +1,208 @@
-# OpenDelta Market Research
+# 📈 OpenDelta — NSE & Crypto Trading Research Platform
 
-Production quant-platform architecture, contracts, data flows, lifecycles, APIs, tests, deployment, and limitations are documented in [web/docs/quant-platform-v1.md](web/docs/quant-platform-v1.md). Provider, factor, and strategy extension guides are in [web/docs/extensions.md](web/docs/extensions.md).
+> One application for screening, backtesting, live signals and paper trading across NSE and Crypto, built on a single shared strategy evaluator. Paper trading only — no broker or exchange order path exists.
 
-## Unified trading platform
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/TimescaleDB%20%2F%20PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-405%20backend%20%2B%2022%20web-2ea44f?style=for-the-badge)
+![Paper only](https://img.shields.io/badge/execution-paper%20only-orange?style=for-the-badge)
 
-The product is one website with six pages — Dashboard, Screener, Backtest,
-Signals, Paper Trading and Settings — each with an NSE / Crypto market switch,
-driven by a single strategy evaluator (`backend/strategies`). The research
-platform, Trade Failure Engine and retired strategies have been removed. See
-[docs/unified-platform.md](docs/unified-platform.md) for the architecture, the
-`/v2` API, runtime flags, the migration command and how to add a strategy.
+---
 
-## Canonical market-data rollout
+## 🎯 Overview
 
-TimescaleDB is the selected source of truth for completed NSE and crypto
-candles. The rollout is additive: existing readers remain active until
-dual-write reconciliation succeeds. Production can install the pinned,
-private TimescaleDB service and apply the schema with:
+**OpenDelta** runs at <https://nse.ventoday.com>. It selects a universe of
+symbols, backtests a strategy over completed candles, watches live markets for
+the same signals, and simulates execution in separate NSE (INR) and Crypto
+(USDT) paper accounts — with exactly one strategy implementation used by all
+four, so backtest and live results can never drift apart.
+
+Every backtest run, live signal and paper lot stores the strategy id, version
+and an immutable configuration snapshot, so historical results remain
+reproducible after a strategy changes.
+
+## ✨ Key Features
+
+- **🔍 Screener** — configurable price, liquidity, volume, volatility and candle-coverage filters; every symbol is recorded as passed or rejected with a reason; rank by the key you choose and keep all passing symbols or a maximum you set; manual include/exclude; saved universes consumed by Backtest and Signals.
+- **🔄 Backtest** — background jobs, one symbol at a time with bounded memory, next-candle-open entries, independent lots with their own target/stop/expiry, fees and slippage on both sides, MAE/MFE, drawdown, cancellation, failed-symbol isolation, trades written to PostgreSQL in batches.
+- **📡 Live Signals** — an independent worker per market (NSE follows the session; Crypto runs 24/7), completed candles only, duplicate-safe storage via a database constraint, `STRONG_BUY → HOLDING → TARGET_HIT / EXITED / EXPIRED` lifecycle, restart recovery, connection/data-age/last-candle health.
+- **💼 Paper Trading** — internal `PaperBroker`, fixed-quantity or fixed-capital sizing with Strong Buy lot multipliers, one order per signal, candle-driven exits, realized/unrealized/daily P&L, portfolio rebuilt from the database after a restart.
+- **🧩 Strategy plug-ins** — one file + one registration; the screener, backtest, signals, paper trading, API and settings forms discover it automatically. No strategy-name `if/elif` anywhere.
+- **🖥️ One website** — Dashboard · Screener · Backtest · Signals · Paper Trading · Settings, each with an NSE / Crypto switch.
+
+## 🏗️ Architecture
+
+```mermaid
+graph TB
+    subgraph Data["📊 Market data"]
+        DH[Dhan REST · NSE 5m candles]
+        CX[OKX / VALR public candles]
+        TS[(TimescaleDB candles)]
+    end
+    subgraph Core["⚙️ Shared core"]
+        IND[backend.core.indicators]
+        REG[STRATEGIES registry]
+        SB[STRONG_BUY_V1]
+        REG --> SB
+        SB --> IND
+    end
+    subgraph Engines["🚦 Engines"]
+        SCR[Screener]
+        BT[Backtest engine]
+        SIG[Signal workers NSE · Crypto]
+        PB[PaperBroker NSE · Crypto]
+    end
+    subgraph Store["🗄️ PostgreSQL"]
+        DB[(screener_runs · saved_universes · backtest_runs/trades · live_signals · paper_* · engine_status)]
+    end
+    DH --> SCR & BT & SIG
+    CX --> SCR & BT & SIG
+    SCR --> DB
+    BT --> REG
+    SIG --> REG
+    BT --> DB
+    SIG --> DB
+    SIG --> PB --> DB
+    DB --> API[/v2 API]
+    API --> UI[Dashboard · Screener · Backtest · Signals · Paper Trading · Settings]
+```
+
+The evaluator contract is `Strategy.evaluate(candles, market_context, config) → SignalDecision`
+(BUY / SELL / NONE with prices, reasons, indicators, version and snapshot),
+called only on completed candles; entries happen at the next candle's open.
+Details: [docs/unified-platform.md](docs/unified-platform.md).
+
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Python 3.12 and [uv](https://github.com/astral-sh/uv)
+- Node.js 22
+- PostgreSQL/TimescaleDB (optional locally; the `/v2` pages report "not configured" without it)
+- Dhan API credentials for NSE data (see `web/deploy/vento-nse-dhan.env.example`)
+
+### Backend
 
 ```bash
-sudo /opt/vento-nse/current/web/deploy/install-timescale-service.sh
+git clone https://github.com/ven2day/opendelta-nse.git
+cd opendelta-nse
+uv sync
+export MARKET_DATA_DATABASE_URL=postgresql://user:pass@localhost:5432/opendelta   # optional
+python -m backend.data.migrate                                                   # optional, explicit
+PYTHONPATH=. uv run uvicorn backtest_api:app --port 8000
 ```
 
-For local or already-provisioned databases, apply the schema directly with:
-
-```bash
-python market_data_admin.py migrate
-```
-
-Build a versioned, holiday-aware calendar from an exact official NSE trading
-day export, then load it:
-
-```bash
-python market_data_calendar.py \
-  --trading-days /secure/path/official-nse-trading-days.csv \
-  --output /secure/path/nse-sessions.csv \
-  --start 2024-09-01 --end 2026-09-01 \
-  --calendar-version NSE-2024-2026-v1 \
-  --source-url https://nsearchives.nseindia.com/path/to/source.csv
-python market_data_admin.py load-sessions --market NSE --file /secure/path/nse-sessions.csv
-```
-
-The CSV columns are `session_date,is_trading_day,open_time,close_time,calendar_version`.
-Fresh Dhan cache fetches and OKX SQLite syncs then dual-write completed candles
-to TimescaleDB. A failed canonical write never replaces or corrupts the legacy
-copy; the failure is exposed by `/platform/data-health` for repair.
-
-Queue resumable historical work with one command or a CSV manifest:
-
-```bash
-python market_data_admin.py enqueue-nse-universe \
-  --timeframe 5m --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z
-python market_data_admin.py enqueue-okx-configured \
-  --timeframe 5m --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z
-python market_data_worker.py --providers DHAN,OKX --maximum-chunks 100
-python market_data_admin.py health
-```
-
-Each chunk is leased to one worker, checkpointed, retried with bounded backoff,
-and reconciled by row count and SHA-256 before the checkpoint advances. The
-completed range is gap-checked and repaired against the explicit NSE calendar
-or continuous crypto UTC timeline. See [market-data operations](web/docs/market-data-operations.md)
-and [TimescaleDB production bootstrap](web/docs/timescaledb-production-bootstrap.md),
-plus [ADR 0004](web/docs/adr/0004-timescaledb-canonical-market-data.md). Redis is
-not required for this phase, and existing readers are still unchanged.
-
-Authenticated NSE market-research dashboard with RSI filters, signals,
-point-in-time backtesting, saved account history and auditable strategy
-diagnostics.
-
-- Website: <https://nse.ventoday.com>
-- Unified pages: `/` (Dashboard), `/screener`, `/backtest`, `/signals`,
-  `/paper-trading`, `/settings` — all with `?market=NSE|CRYPTO`
-- Legacy pages (kept until the v2 workers are switched on): `/legacy/screener`,
-  `/legacy/backtest`, `/legacy/backtest/crypto`, `/legacy/signals`,
-  `/legacy/signals/crypto`, `/legacy/markets`
-
-## Strategy status
-
-| Strategy | Status | Notes |
-| --- | --- | --- |
-| Strong Buy (`ema_vwap_strong_buy`, STRONG_BUY_V1) | Active | The registered strategy plug-in used by the NSE and Crypto backtest, live signals and paper trading; broker orders are disabled. |
-| RSI Range Strategy | Retired | Historical results remain read-only in the legacy backtest; new runs are blocked. |
-| RSI Recovery Scalping | Retired | Historical results remain read-only in the legacy backtest; new runs are blocked. |
-| Market-Aligned RSI Scalper | Retired | Historical results remain read-only; the implementation was removed earlier. |
-| Crypto Trend Pullback Recovery | Legacy research | Still backs the legacy crypto pages; not registered as a v2 plug-in. |
-
-Removed from the codebase: the Trade Failure Engine, the Research V2 platform,
-NSE Signal Engine V2 and the signal funnel/scanner, Top-5 Opening Range
-Breakout, and the Market-Aligned VWAP Pullback Scalper. No strategy in this
-repository is represented as guaranteed profitable.
-
-## Crypto and metals research (legacy pages)
-
-`/legacy/backtest/crypto` and `/legacy/signals/crypto` share one
-provider-neutral strategy implementation so signal and backtest rules cannot
-drift apart.
-
-- `OKX` uses its public instruments and historical-candles APIs.
-- `VALR` uses its public pairs and candle-buckets APIs.
-- No API key is needed for the implemented public market-data endpoints.
-- The Add Instrument button accepts only exact active symbols returned by the
-  selected provider catalog.
-- `XAUUSD.p` and `XAGUSD.p` are broker-specific CFD names. They are not
-  hardcoded or silently mapped. Gold or silver can be added only when the
-  selected provider actually publishes an XAU/XAG instrument.
-- SQLite persists configured instruments, completed candles, deduplicated
-  paper signals, and backtest summaries below `CRYPTO_MARKET_DIR`.
-- Private account, balance, position, order, withdrawal, and live-execution
-  APIs are intentionally absent.
-
-The starter strategy is `crypto_trend_pullback_recovery` v1.0.0. It uses
-EMA20/EMA50 direction, UTC-day VWAP, RSI arm/recovery, relative volume, an ATR
-stop, a 1.5R target, and a six-bar time exit. It reads completed candles and
-enters backtests only on the next candle open. Perpetual results include a
-warning because funding is not yet modeled.
-
-Production variables for the backtest service:
-
-```dotenv
-CRYPTO_SIGNAL_ENGINE_ENABLED=true
-CRYPTO_SIGNAL_POLL_SECONDS=60
-CRYPTO_MARKET_DIR=/var/lib/vento-nse/backtest/crypto-market
-OKX_PUBLIC_API_URL=https://www.okx.com
-VALR_PUBLIC_API_URL=https://api.valr.com
-```
-
-See [`web/docs/crypto-market-engine.md`](web/docs/crypto-market-engine.md) for
-the component boundaries, current limitations, and safe removal candidates.
-
-## Repository security
-
-This is a public repository. Never commit `.env` files, Dhan credentials,
-access tokens, TOTP secrets, private keys, production host details or database
-credentials. Use the checked-in example files only as templates and keep real
-values in the server environment with restrictive file permissions.
-
-The root `.gitignore` excludes local environment files, common private-key
-formats, SSH private-key filenames, runtime data, reports and deployment
-archives. Review staged files and run a secret scan before every public push.
-
-## Local development
-
-1. Copy `.env.example` to `.env.local` and set a unique username, password,
-   and a random `AUTH_SECRET` of at least 32 characters.
-2. Set the Dhan variables documented in
-   `deploy/vento-nse-dhan.env.example`, then generate the source CSV from the
-   project root:
-
-   ```powershell
-   python main.py
-   ```
-
-3. Install and run the web app from the `web` directory:
-
-   ```powershell
-   cd web
-   npm ci
-   npm run dev
-   ```
-
-The dashboard is available at `http://localhost:3000`. The CSV synchronized at
-build time is a fallback; the browser refreshes live market data every hour
-and also supports a manual all-symbol refresh.
-
-## Production build
+### Web
 
 ```bash
 cd web
+cp .env.example .env.local        # APP_USERNAME, APP_PASSWORD, AUTH_SECRET, BACKTEST_SERVICE_URL
 npm ci
-npm test
-npm start
+npm run dev                        # http://localhost:3000
 ```
 
-The production server listens on `0.0.0.0:3000` by default. Keep it behind
-HTTPS so the login cookie is marked `Secure`.
+## 🧪 Testing
 
-## Ubuntu/Debian deployment
+```bash
+PYTHONPATH=. pytest -q                                                       # 405 backend tests
+TEST_DATABASE_URL=postgresql://…/opendelta_test PYTHONPATH=. pytest -q       # + PostgreSQL suites
+cd web && npm run lint && npx tsc --noEmit && npm test                       # web (22 tests, builds first)
+cd web && npm run test:browser                                               # Playwright shell checks
+python scripts/security_scan.py                                              # secret scan
+```
 
-The included files assume releases are installed below `/opt/vento-nse` and
-the dashboard runs in Docker.
+The suites prove, among other things: backtest and live evaluation agree bar
+for bar; an incomplete candle never produces a signal; entries use the next
+candle open; a different future never changes earlier trades; duplicate
+signals and duplicate paper orders are rejected by the database; NSE and
+Crypto balances stay separate; the paper portfolio survives a restart; fees
+and slippage reconcile exactly; a 100-symbol one-year backtest writes
+incrementally and stays under 256 MB; each Strong Buy lot closes
+independently; and no order-placement code exists.
 
-1. Keep `/etc/vento-nse.env` limited to UI login settings:
+## 📁 Project Structure
 
-   ```dotenv
-   APP_USERNAME=admin
-   APP_PASSWORD=replace-with-a-long-unique-password
-   AUTH_SECRET=replace-with-at-least-32-random-characters
-   ```
+```
+opendelta-nse/
+├── backend/                      # unified platform
+│   ├── core/                     # models.py (SignalDecision, MarketContext), indicators.py
+│   ├── strategies/               # base.py (interface), registry.py, strong_buy_v1.py
+│   ├── markets/                  # base.py; nse/ and crypto/ fees, sessions, candle adapters
+│   ├── screener/                 # engine.py, filters.py, ranking.py
+│   ├── backtest/                 # engine.py, metrics.py, result_writer.py, jobs.py
+│   ├── signals/                  # candle_processor.py, engine.py, recovery.py, workers.py
+│   ├── paper_trading/            # broker.py, portfolio.py, execution.py, accounting.py
+│   ├── data/                     # database.py, repositories.py, migrate.py, sql/001_platform.sql
+│   ├── api/                      # screener, backtest, signal, paper_trading, settings, dashboard routes
+│   └── platform_runtime.py       # wires the platform into the FastAPI app
+├── opendelta/                    # TimescaleDB canonical candle store + SQL migration
+├── backtest_api.py               # FastAPI app (legacy routes + /platform/* + mounts /v2)
+├── main.py                       # Dhan client/credentials (the only place they are read) + collector
+├── ema_vwap_strong_buy.py        # legacy Strong Buy module, now delegating to the plug-in
+├── live_signals.py, crypto_*.py, recovery_*.py, market_data_*.py, …   # legacy runtime modules
+├── web/
+│   ├── app/                      # pages: / screener backtest signals paper-trading settings, legacy/*
+│   │   ├── api/                  # authenticated proxies (api/v2/[...path] for the platform)
+│   │   └── platform/             # chrome, market switch, schema-driven forms, v2 client
+│   ├── deploy/                   # Dockerfiles, systemd units, install/promote/verify scripts
+│   └── tests/                    # rendered/proxy tests and Playwright spec
+├── tests/                        # pytest suites
+├── docs/                         # unified-platform.md, API.md, DEPLOYMENT.md, TROUBLESHOOTING.md,
+│   ├── adr/                      #   market-data-operations.md, timescaledb-production-bootstrap.md
+│   └── legacy/                   #   retired-strategy reports
+├── scripts/                      # security_scan.py, regression_existing_strategies.py
+├── benchmarks/                   # legacy engine benchmarks and baselines
+├── symbols.csv, nse_symbols_rsi_volume.csv, strategy-parameters.json   # data files used by deploy
+├── PROJECT_OVERVIEW.md · CONTRIBUTING.md · SECURITY.md
+└── pyproject.toml · uv.lock
+```
 
-2. Create `/etc/vento-nse-dhan.env` from
-   `deploy/vento-nse-dhan.env.example`, set mode `0600`, and never pass it to
-   the frontend container.
-3. Build both images with `deploy/install-release.sh`, install the collector
-   units with `deploy/install-data-service.sh`, and run
-   `systemctl start vento-nse-data.service` once before starting the UI.
-4. Start the UI with `deploy/run-container.sh`. It mounts only
-   `/var/lib/vento-nse/data` into the container as read-only market data.
-5. Install the nginx site, validate with `nginx -t`, and reload nginx.
-6. Install a TLS certificate for `nse.ventoday.com` and use Cloudflare Full
-   (strict) SSL mode.
+## ⚙️ Configuration
 
-The Dhan collector runs after the NSE close at 16:15 IST on weekdays. It uses
-TOTP authentication, validates the Dhan data subscription, retries stale
-symbols, requires one common NSE session, and publishes atomically only when
-the configured coverage threshold is satisfied.
+| Variable | Purpose |
+| --- | --- |
+| `MARKET_DATA_DATABASE_URL` | PostgreSQL/TimescaleDB for candles and the platform tables |
+| `PLATFORM_AUTO_MIGRATE` | `true` to migrate at startup; otherwise `python -m backend.data.migrate` |
+| `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
+| `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |
+| `NSE_LIVE_STRATEGY`, `CRYPTO_LIVE_STRATEGY` | strategy id for live signals |
+| `DHAN_*` | Dhan credentials, read only by `main.py` |
+| `BACKTEST_WORKERS`, `BACKTEST_CACHE_DIR` | legacy backtest service tuning and candle cache |
 
-The login uses a signed, 12-hour, HTTP-only cookie. Credentials and the signing
-secret are read only from server environment variables.
+All v2 features default to off; production behaviour is unchanged until they
+are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-## Historical NIFTY OI import
+## 📚 Documentation
 
-The shared point-in-time OI repository remains available at
-`/var/lib/vento-nse/backtest/nifty-oi`. RSI Recovery Scalping and RSI Range
-Strategy do not consume it. Market-Aligned VWAP Pullback Scalper keeps OI
-`OFF` by default and may display it only as optional advisory context.
-Production collection continues to use the configured Dhan integration; no
-NSE website scraping or embedded contract identifiers are used.
+- [Architecture and how to add a strategy](docs/unified-platform.md)
+- [API reference](docs/API.md)
+- [Deployment](docs/DEPLOYMENT.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Market-data operations](docs/market-data-operations.md) · [TimescaleDB bootstrap](docs/timescaledb-production-bootstrap.md)
+- [Architecture decision records](docs/adr) · [Legacy strategy reports](docs/legacy)
+- [Project overview](PROJECT_OVERVIEW.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-## Backtest strategy separation
+## 🛠️ Tech Stack
 
-`EMA/VWAP Strong Buy` (`ema_vwap_strong_buy`) is the only strategy that can start
-a new backtest. Every other strategy is retired from launching: `/backtest` and
-`/backtest/jobs` reject them with HTTP 422, and the frontend offers no selector
-for them.
+**Backend:** Python 3.12, FastAPI, pandas, NumPy, psycopg 3, PostgreSQL 17 / TimescaleDB, pytest, uv
+**Frontend:** TypeScript, React 19, vinext (Vite + React Server Components), Playwright
+**Ops:** Docker, systemd, nginx, Cloudflare, GitHub Actions
 
-`RSI Range Strategy`, `RSI Recovery Scalping` and `Top-5 Opening Range Breakout`
-retain their existing keys, configuration, evaluators, exits, engines and result
-views. Saved history entries still render read-only and display
-`Retired strategy — cannot run again`.
+## 🔒 Security
 
-`Market-Aligned RSI Scalper` is retired. It is absent from new-backtest
-selection and cannot start a new API job. Existing saved results remain
-read-only and display `Retired strategy — cannot run again`.
+No live order execution exists and tests enforce it. Credentials stay in
+`/etc/vento-nse-dhan.env` on the host and are never committed; see
+[SECURITY.md](SECURITY.md). No strategy in this repository is represented as
+guaranteed profitable.
 
-`Market-Aligned VWAP Pullback Scalper` is retired from new backtests. Historical
-results remain readable under its original `market_aligned_vwap_pullback_scalper`
-key, but the frontend selector and active API dispatcher cannot start it again.
+## 📄 License
 
-NIFTY supplies one safety rule. Sector, breadth, relative strength and optional
-OI contribute to causal quality ranking instead of repeated mandatory gates.
-Historical bid/ask spread is reported unavailable rather than fabricated.
-Operations may provide absolute `MARKET_CONTEXT_SECTOR_MAP_FILE` and
-`MARKET_CONTEXT_BREADTH_UNIVERSE_FILE` paths for supporting context.
+Not yet specified. Add a `LICENSE` file to declare one.
 
-This strategy is labelled `Research candidate — paper trading required` and
-must not be represented as profitable without untouched chronological
-validation.
+## 👤 Author
 
-### Top-5 Opening Range Breakout research modes
-
-`Top-5 Opening Range Breakout` is retired from new backtests. Its
-`top_5_opening_range_breakout` key, engine and saved results are preserved. It
-supported `FROZEN_OPEN` (the default) and `ROLLING` selection. Frozen mode ranks
-at 09:30 and retains five symbols for the session. Rolling mode rescans completed candles every 30 minutes
-through 14:00, applies score-advantage, residence-time, replacement-count and
-sector caps, and makes a promoted symbol eligible only from the next completed
-five-minute candle.
-
-The opening research rule uses the completed 09:15-09:30 range and enters a
-qualifying breakout only at the next candle open. Midday promotions use a
-six-bar Rolling Momentum Breakout; the trigger candle is excluded from the
-breakout level. Frozen top five, rolling top five, opening top two, full
-eligible universe, liquidity-only top five and a causally matched random five
-all share the same chronological portfolio, exactly 50 shares per executed
-trade, stop/target, cost, slippage and square-off rules. Historical spread
-remains advisory when bid/ask data is unavailable. The strategy produces
-research and paper signals only and has no broker-order path. It remains
-rejected unless every untouched validation fold has positive after-cost
-expectancy and net P&L and outperforms the comparison baselines.
-
-The recommended eligibility settings are a completed-candle price range of
-₹100-₹5,000, at least ₹100,000,000 median daily traded value from prior
-completed sessions, at least ₹2,500,000 causal opening traded value, prior-day
-ATR between 0.8% and 4.0%, and a maximum absolute opening gap of 3.0%. These
-values are part of the JSON/API configuration, configuration hash and result
-cache key. The recommended maximum holding period is 12 five-minute bars;
-an explicitly submitted JSON value remains authoritative. Results report
-calendar-session and active-day trade frequencies separately, audit the exact
-next-bar timestamps, and keep Markdown compact. Complete watchlists,
-candidates, signals, trades and benchmark records are downloaded separately as
-CSV or JSON.
-
-#### Latest production research validation
-
-The dated one-year run completed on 2026-08-30 used 649 requested symbols in
-the configured ₹100-₹5,000 range. Frozen mode scored 619 symbols and executed
-3 trades across 247 tested sessions; Rolling mode executed 159 trades. Frozen
-ended at ₹-1,296.04 after costs and Rolling at ₹-19,533.23 after costs. In the
-untouched final three months, Frozen executed 1 trade for ₹-17.29 and Rolling
-executed 43 trades for ₹-5,788.08.
-
-The result is `REJECTED_RESEARCH_ONLY`: after-cost expectancy was negative,
-profit factor remained below 1, and the acceptance baselines were not beaten
-reliably. This result must not be used to enable live broker orders. It is a
-dated research observation, not a promise about future performance.
-
-The Top-5 Opening Range Breakout and VWAP pullback strategies, their smoke
-tests, and the Trade Failure Engine research toggle have since been removed from
-the codebase; only their previously saved backtest-history records remain
-readable.
-
-## Release rollback
-
-Before a cutover, record the active release directory and both container image
-tags. To roll back, stop only the dashboard and backtest units, restore the
-previous release symlink/image tags with the existing deployment scripts, start
-those two units, then run the authenticated Backtest and Signals smoke tests.
-Do not restart the unrelated market-data collector. Production credentials and
-`/etc/vento-nse-dhan.env` must never be copied into a release archive or logs.
-
-## RSI Recovery position exits
-
-The Backtest page keeps the original `Legacy fixed target` research mode and
-adds position-based exit models without changing the underlying RSI Recovery
-signal generator. `RSI profitable exit with risk control` uses a configurable
-low-zone arm, recovery crossover, enabled EMA/VWAP/volume confirmations, and
-the selected `SIGNAL_CLOSE` or `NEXT_BAR_OPEN` entry execution.
-
-For the RSI profit-exit model, the hard stop is fixed from the executed entry
-and begins monitoring on the following candle. A profitable RSI exit is
-eligible only after a completed candle has RSI at or above the configured
-profit-exit level and the executable price meets the configured minimum
-profit. `NEXT_BAR_OPEN` exits recheck that minimum at the actual next open. If
-neither rule closes the lot, the time exit occurs at the next available NSE
-session open after the configured holding sessions; missing sessions and
-weekends are not counted.
-
-Configured buy/sell costs and per-side slippage are reported separately from
-gross P&L. Closed-trade net P&L is gross P&L minus both sides' costs and
-slippage. Open-trade unrealized P&L uses the last close and includes estimated
-entry and exit costs under the same assumptions. The optional comparison tool
-uses chronological development/validation splits and labels every result as a
-research candidate, not live approval.
-
-## Unified trading platform
-
-The NSE + Crypto screener, backtest, live-signal and paper-trading platform built on one shared strategy evaluator is documented in [docs/unified-platform.md](docs/unified-platform.md), including the `/v2` API, runtime flags, the migration command, and how to add a strategy.
+**Ven** — [ven2day](https://github.com/ven2day)

@@ -19,7 +19,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["opendelta*"]
+include = ["opendelta*", "backend*"]
 
 [tool.setuptools.package-data]
 "opendelta.sql" = ["*.sql"]

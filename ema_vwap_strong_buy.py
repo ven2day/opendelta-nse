@@ -5,8 +5,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import numpy as np
 import pandas as pd
+
+from backend.strategies.strong_buy_v1 import StrongBuyV1
 
 STRATEGY_KEY = "ema_vwap_strong_buy"
 STRATEGY_NAME = "EMA 9/21 + VWAP Strong Buy"
@@ -87,56 +88,23 @@ class StrongBuyConfig:
         }
 
 
-def _frame(candles: pd.DataFrame) -> pd.DataFrame:
-    required = ["Open", "High", "Low", "Close", "Volume"]
-    missing = [name for name in required if name not in candles]
-    if missing:
-        raise ValueError("Strong Buy candles are missing: " + ", ".join(missing))
-    data = candles[required].copy()
-    data.index = pd.DatetimeIndex(data.index)
-    data.index = data.index.tz_localize("Asia/Kolkata") if data.index.tz is None else data.index.tz_convert("Asia/Kolkata")
-    return data.apply(pd.to_numeric, errors="coerce").dropna().sort_index()
+_STRATEGY = StrongBuyV1()
+_PLUGIN_FIELDS = (
+    "ema_fast", "ema_slow", "adx_length", "adx_smoothing", "minimum_adx", "rvol_length", "minimum_rvol",
+    "higher_timeframe_minutes", "minimum_confirmations", "target_pct", "initial_quantity", "allow_additional_buys",
+    "additional_quantity_pct", "additional_sizing_mode", "minimum_quantity", "maximum_entries_per_cycle",
+)
 
 
-def _rma(values: pd.Series, length: int) -> pd.Series:
-    return values.ewm(alpha=1.0 / length, adjust=False, min_periods=length).mean()
+def plugin_config(config: StrongBuyConfig) -> dict[str, Any]:
+    """The validated plugin configuration snapshot equivalent to ``config``."""
+    return _STRATEGY.resolve({name: getattr(config, name) for name in _PLUGIN_FIELDS})
 
 
 def calculate_strong_buy_indicators(candles: pd.DataFrame, config: StrongBuyConfig | None = None) -> pd.DataFrame:
+    """Strong Buy indicator table, computed by the single shared STRONG_BUY_V1 evaluator."""
     cfg = (config or StrongBuyConfig()).validate()
-    data = _frame(candles)
-    data["EmaFast"] = data["Close"].ewm(span=cfg.ema_fast, adjust=False, min_periods=cfg.ema_fast).mean()
-    data["EmaSlow"] = data["Close"].ewm(span=cfg.ema_slow, adjust=False, min_periods=cfg.ema_slow).mean()
-    typical = (data["High"] + data["Low"] + data["Close"]) / 3
-    session = pd.Series(data.index.date, index=data.index)
-    data["SessionVwap"] = (typical * data["Volume"]).groupby(session).cumsum() / data["Volume"].groupby(session).cumsum().replace(0, np.nan)
-    previous_close = data["Close"].shift()
-    tr = pd.concat([data["High"] - data["Low"], (data["High"] - previous_close).abs(), (data["Low"] - previous_close).abs()], axis=1).max(axis=1)
-    up, down = data["High"].diff(), -data["Low"].diff()
-    plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=data.index)
-    minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=data.index)
-    atr = _rma(tr, cfg.adx_length)
-    data["PlusDi"] = 100 * _rma(plus_dm, cfg.adx_length) / atr.replace(0, np.nan)
-    data["MinusDi"] = 100 * _rma(minus_dm, cfg.adx_length) / atr.replace(0, np.nan)
-    dx = 100 * (data["PlusDi"] - data["MinusDi"]).abs() / (data["PlusDi"] + data["MinusDi"]).replace(0, np.nan)
-    data["Adx"] = _rma(dx, cfg.adx_smoothing)
-    data["RelativeVolume"] = data["Volume"] / data["Volume"].rolling(cfg.rvol_length, min_periods=cfg.rvol_length).mean().replace(0, np.nan)
-    completed = data["Close"].resample("15min", closed="right", label="right", origin="start_day").last().dropna()
-    higher = pd.DataFrame({"Fast": completed.ewm(span=cfg.ema_fast, adjust=False, min_periods=cfg.ema_fast).mean(), "Slow": completed.ewm(span=cfg.ema_slow, adjust=False, min_periods=cfg.ema_slow).mean()}).dropna()
-    if higher.empty:
-        data["HtfAlignment"] = False
-    else:
-        left = pd.DataFrame({"timestamp": data.index})
-        right = higher.reset_index().rename(columns={higher.index.name or "index": "completedAt"})
-        aligned = pd.merge_asof(left, right, left_on="timestamp", right_on="completedAt", direction="backward", allow_exact_matches=False)
-        data["HtfAlignment"] = (aligned["Fast"] > aligned["Slow"]).fillna(False).to_numpy()
-    data["AdxConfirmation"] = (data["Adx"] >= cfg.minimum_adx) & (data["PlusDi"] > data["MinusDi"])
-    data["RvolConfirmation"] = data["RelativeVolume"] >= cfg.minimum_rvol
-    data["ConfirmationScore"] = data[["AdxConfirmation", "RvolConfirmation", "HtfAlignment"]].astype(int).sum(axis=1)
-    data["BullishCross"] = (data["EmaFast"] > data["EmaSlow"]) & (data["EmaFast"].shift() <= data["EmaSlow"].shift())
-    data["BaseBuy"] = data["BullishCross"] & (data["Close"] > data["SessionVwap"])
-    data["StrongBuy"] = data["BaseBuy"] & (data["ConfirmationScore"] >= 2)
-    return data
+    return _STRATEGY.compute_indicators(candles, plugin_config(cfg), "Asia/Kolkata")
 
 
 def evaluate_latest_strong_buy(candles: pd.DataFrame, config: StrongBuyConfig | None = None) -> dict[str, Any] | None:

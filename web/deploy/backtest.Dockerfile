@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir \
 
 COPY main.py backtest_api.py backtest_history.py backtest_jobs.py application_settings.py recovery_backtest.py recovery_position_backtest.py recovery_dynamic_exit.py recovery_rsi_profit_exit.py atr_exit_optimizer.py rsi_exit_optimizer.py recovery_feature_analysis.py universe_selection.py live_signals.py market_core.py crypto_providers.py crypto_strategy.py crypto_engine.py crypto_api.py market_data_refresh.py market_data_admin.py market_data_calendar.py market_data_worker.py market_symbol_registry.py ema_vwap_strong_buy.py nifty_oi_regime.py dhan_oi.py dhan_oi_history.py import_nifty_oi_history.py strategy_parameters.py strategy-parameters.json symbols.csv ./
 COPY opendelta ./opendelta
+COPY backend ./backend
 
 EXPOSE 8000
 USER 10001:10001

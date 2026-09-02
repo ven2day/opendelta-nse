@@ -15,9 +15,13 @@ test("Strong Buy exposes a research-only Failure Engine comparison", async () =>
   assert.match(dashboard, /RESEARCH_COMPARE/);
   assert.match(dashboard, /Chronological walk-forward/);
   assert.match(dashboard, /Never live/);
+  assert.match(dashboard, /failureMinimumStateLots: 10/);
+  assert.match(dashboard, /failureMinimumCandidateExits: 20/);
   assert.match(dashboard, /strongBuySettings\.failureEngineMode === "RESEARCH_COMPARE"/);
   assert.match(results, /Trade Failure Engine walk-forward comparison/);
   assert.match(results, /Research only · live exits disabled/);
   assert.match(results, /Baseline: hold to target\/horizon/);
+  assert.match(results, /Right-censored excluded/);
+  assert.match(results, /Candidate gate/);
   assert.match(dockerfile, /trade_failure_engine\.py/);
 });

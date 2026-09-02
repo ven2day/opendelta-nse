@@ -45,6 +45,9 @@ class SignalTests(unittest.TestCase):
             failureMaximumHoldingBars=250,
             failureDecisionPersistenceBars=3,
             failureRoundTripCostBps=18,
+            failureMinimumStateLots=12,
+            failureMinimumCandidateExits=25,
+            failureMinimumCandidateExitsPerFold=6,
             failureMaximumAuditRows=250,
         )
         config = request.failure_config()
@@ -52,6 +55,9 @@ class SignalTests(unittest.TestCase):
         self.assertEqual(config.maximum_holding_bars, 250)
         self.assertEqual(config.decision_persistence_bars, 3)
         self.assertEqual(config.round_trip_cost_bps, 18)
+        self.assertEqual(config.minimum_state_lots, 12)
+        self.assertEqual(config.minimum_candidate_exits, 25)
+        self.assertEqual(config.minimum_candidate_exits_per_fold, 6)
         self.assertEqual(config.maximum_audit_rows, 250)
 
     def test_entry_signal_fires_only_when_rsi_enters_range(self) -> None:

@@ -316,6 +316,9 @@ const strongBuyRecommendedDefaults = {
   failureWalkForwardFolds: 2,
   failureMinimumTrainingLots: 30,
   failureMinimumTestLots: 10,
+  failureMinimumStateLots: 10,
+  failureMinimumCandidateExits: 20,
+  failureMinimumCandidateExitsPerFold: 5,
   failureMaximumAuditRows: 5000,
 };
 
@@ -1152,6 +1155,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
         && Number.isInteger(strongBuySettings.failureWalkForwardFolds) && strongBuySettings.failureWalkForwardFolds > 0
         && Number.isInteger(strongBuySettings.failureMinimumTrainingLots) && strongBuySettings.failureMinimumTrainingLots > 0
         && Number.isInteger(strongBuySettings.failureMinimumTestLots) && strongBuySettings.failureMinimumTestLots > 0
+        && Number.isInteger(strongBuySettings.failureMinimumStateLots) && strongBuySettings.failureMinimumStateLots > 0
+        && Number.isInteger(strongBuySettings.failureMinimumCandidateExits) && strongBuySettings.failureMinimumCandidateExits > 0
+        && Number.isInteger(strongBuySettings.failureMinimumCandidateExitsPerFold) && strongBuySettings.failureMinimumCandidateExitsPerFold > 0
       )) {
         setError("Failure Engine research requires valid positive bar/sample settings, progress from 0 to 1, and 1 to 3 evidence groups.");
         return;
@@ -1863,6 +1869,9 @@ export function BacktestDashboard({ symbols, userName, signOutHref, globalPriceR
                 <label><span>Walk-forward folds</span><input type="number" min="1" step="1" value={strongBuySettings.failureWalkForwardFolds} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureWalkForwardFolds: Math.floor(Number(event.target.value)) })} /></label>
                 <label><span>Minimum training lots</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumTrainingLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumTrainingLots: Math.floor(Number(event.target.value)) })} /></label>
                 <label><span>Minimum test lots</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumTestLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumTestLots: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Minimum lots per state</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumStateLots} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumStateLots: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Candidate minimum exits</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumCandidateExits} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumCandidateExits: Math.floor(Number(event.target.value)) })} /></label>
+                <label><span>Candidate exits per fold</span><input type="number" min="1" step="1" value={strongBuySettings.failureMinimumCandidateExitsPerFold} disabled={strongBuySettings.failureEngineMode === "OFF"} onChange={(event) => setStrongBuySettings({ ...strongBuySettings, failureMinimumCandidateExitsPerFold: Math.floor(Number(event.target.value)) })} /></label>
               </details>
               <div className="fixed-strategy-rules"><span>Completed candles only</span><span>Chronological walk-forward</span><span>Next-open simulated exit</span><span>Never live</span></div>
             </fieldset>

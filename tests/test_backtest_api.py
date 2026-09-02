@@ -35,7 +35,7 @@ from backtest_api import (
     start_backtest_job,
 )
 from fastapi import HTTPException
-from main import DhanAPIError
+from main import DhanAPIError, DhanConfig
 
 
 class SignalTests(unittest.TestCase):
@@ -544,6 +544,67 @@ class StrategyLaunchRestrictionTests(unittest.TestCase):
 
         self.assertEqual(result, {"jobId": "research-job"})
         self.assertEqual(start.call_args.kwargs["symbols_total"], 1)
+
+
+class CacheFreshnessTests(unittest.TestCase):
+    """A cached candle file's freshness must depend on whether NSE could have
+    produced newer data since it was written, not just wall-clock minutes -
+    otherwise every full-universe backtest run outside market hours forces a
+    live re-fetch of every symbol even though nothing new could exist."""
+
+    def setUp(self) -> None:
+        self.temp = TemporaryDirectory()
+        config = DhanConfig(
+            client_id="1", pin="000000", totp_secret="A", auth_base_url="https://auth",
+            base_url="https://api.dhan.co/v2", exchange_segment="NSE_EQ", instrument="EQUITY",
+            instrument_master_url="https://master",
+            token_cache_file=Path(self.temp.name) / "token",
+            symbols_file=Path(self.temp.name) / "symbols",
+            output_file=Path(self.temp.name) / "out", history_days=1,
+            requests_per_second=1, request_retries=2, session_retry_passes=1, minimum_coverage=0.9,
+        )
+        self.store = HistoricalDataStore(config, Path(self.temp.name))
+        self.path = Path(self.temp.name) / "cache.csv.gz"
+        self.path.write_text("placeholder")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def _touch(self, when: datetime) -> None:
+        import os
+        os.utime(self.path, (when.timestamp(), when.timestamp()))
+
+    def test_missing_file_is_never_fresh(self) -> None:
+        missing = Path(self.temp.name) / "does-not-exist.csv.gz"
+        self.assertFalse(self.store._cache_is_fresh(missing, now=datetime(2026, 9, 1, 12, 0, tzinfo=IST)))
+
+    def test_during_market_hours_uses_the_short_ttl(self) -> None:
+        now = datetime(2026, 9, 1, 12, 0, tzinfo=IST)  # Tuesday, market open
+        self._touch(now - timedelta(minutes=30))
+        self.assertTrue(self.store._cache_is_fresh(self.path, now=now))
+        self._touch(now - timedelta(minutes=90))
+        self.assertFalse(self.store._cache_is_fresh(self.path, now=now))
+
+    def test_after_close_requires_todays_close_or_later(self) -> None:
+        now = datetime(2026, 9, 1, 20, 0, tzinfo=IST)  # Tuesday evening, hours after close
+        self._touch(datetime(2026, 9, 1, 15, 30, tzinfo=IST))  # written right at today's close
+        self.assertTrue(self.store._cache_is_fresh(self.path, now=now))
+        self._touch(datetime(2026, 8, 31, 12, 0, tzinfo=IST))  # only from yesterday
+        self.assertFalse(self.store._cache_is_fresh(self.path, now=now))
+
+    def test_early_morning_before_open_accepts_yesterdays_close(self) -> None:
+        now = datetime(2026, 9, 2, 5, 30, tzinfo=IST)  # Wednesday, before market open
+        self._touch(datetime(2026, 9, 1, 15, 30, tzinfo=IST))  # Tuesday's close
+        self.assertTrue(self.store._cache_is_fresh(self.path, now=now))
+        self._touch(datetime(2026, 9, 1, 10, 0, tzinfo=IST))  # mid-Tuesday, before its close
+        self.assertFalse(self.store._cache_is_fresh(self.path, now=now))
+
+    def test_weekend_walks_back_to_fridays_close(self) -> None:
+        now = datetime(2026, 9, 6, 10, 0, tzinfo=IST)  # Sunday
+        self._touch(datetime(2026, 9, 4, 15, 30, tzinfo=IST))  # Friday's close
+        self.assertTrue(self.store._cache_is_fresh(self.path, now=now))
+        self._touch(datetime(2026, 9, 4, 10, 0, tzinfo=IST))  # mid-Friday, before its close
+        self.assertFalse(self.store._cache_is_fresh(self.path, now=now))
 
 
 if __name__ == "__main__":

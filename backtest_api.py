@@ -48,6 +48,8 @@ from crypto_engine import CryptoMarketService, service_from_environment as crypt
 from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
 from backtest_jobs import BacktestJobService
 from live_signals import (
+    MARKET_CLOSE,
+    MARKET_OPEN,
     LiveSignalEngine,
     LiveSignalRepository,
     LiveSignalSettings,
@@ -1700,10 +1702,35 @@ class HistoricalDataStore:
         safe_symbol = "".join(character for character in symbol if character.isalnum() or character in "-&")
         return self.cache_directory / f"{safe_symbol}-{source_interval}-{duration_years}y.csv.gz"
 
+    def _cache_is_fresh(self, path: Path, now: datetime | None = None) -> bool:
+        """Whether a cached candle file is fresh enough to skip a live Dhan fetch.
+
+        During market hours this is the short CACHE_TTL_SECONDS wall-clock
+        window, same as before. Outside market hours (evenings, nights,
+        weekends) nothing new can exist from Dhan until the next session
+        opens regardless of how many clock-hours have passed, so a cache
+        written at or after the most recently completed session's close is
+        already maximally fresh. Without this, every backtest run outside
+        market hours forced a full live re-fetch of every symbol - hundreds
+        of avoidable requests serialized behind Dhan's shared rate limit.
+        """
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=IST)
+        except OSError:
+            return False
+        now = now if now is not None else datetime.now(IST)
+        if now.weekday() < 5 and MARKET_OPEN <= now.time() <= MARKET_CLOSE:
+            return (now - mtime).total_seconds() <= CACHE_TTL_SECONDS
+        session_date = now.date()
+        while True:
+            session_close = datetime.combine(session_date, MARKET_CLOSE, tzinfo=IST)
+            if session_date.weekday() < 5 and session_close <= now:
+                return mtime >= session_close
+            session_date -= timedelta(days=1)
+
     def _read_cache(self, path: Path) -> pd.DataFrame | None:
         try:
-            age = datetime.now().timestamp() - path.stat().st_mtime
-            if age > CACHE_TTL_SECONDS:
+            if not self._cache_is_fresh(path):
                 return None
             frame = pd.read_csv(path, index_col="Timestamp", parse_dates=["Timestamp"])
             frame.index = pd.DatetimeIndex(frame.index)

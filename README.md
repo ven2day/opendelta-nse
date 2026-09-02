@@ -366,3 +366,7 @@ slippage. Open-trade unrealized P&L uses the last close and includes estimated
 entry and exit costs under the same assumptions. The optional comparison tool
 uses chronological development/validation splits and labels every result as a
 research candidate, not live approval.
+
+## Unified trading platform
+
+The NSE + Crypto screener, backtest, live-signal and paper-trading platform built on one shared strategy evaluator is documented in [docs/unified-platform.md](docs/unified-platform.md), including the `/v2` API, runtime flags, the migration command, and how to add a strategy.

@@ -584,6 +584,9 @@ class StrongBuyConfigurationRequest(BaseModel):
     failureWalkForwardFolds: int = Field(default=2, ge=1, le=10)
     failureMinimumTrainingLots: int = Field(default=30, ge=1, le=1_000_000)
     failureMinimumTestLots: int = Field(default=10, ge=1, le=1_000_000)
+    failureMinimumStateLots: int = Field(default=10, ge=1, le=1_000_000)
+    failureMinimumCandidateExits: int = Field(default=20, ge=1, le=1_000_000)
+    failureMinimumCandidateExitsPerFold: int = Field(default=5, ge=1, le=1_000_000)
     failureMaximumAuditRows: int = Field(default=5_000, ge=1, le=100_000)
 
     @model_validator(mode="after")
@@ -621,6 +624,9 @@ class StrongBuyConfigurationRequest(BaseModel):
             walk_forward_folds=self.failureWalkForwardFolds,
             minimum_training_lots=self.failureMinimumTrainingLots,
             minimum_test_lots=self.failureMinimumTestLots,
+            minimum_state_lots=self.failureMinimumStateLots,
+            minimum_candidate_exits=self.failureMinimumCandidateExits,
+            minimum_candidate_exits_per_fold=self.failureMinimumCandidateExitsPerFold,
             maximum_audit_rows=self.failureMaximumAuditRows,
         )
 

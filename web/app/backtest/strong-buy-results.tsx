@@ -17,16 +17,21 @@ type FailureMetrics = {
 type FailureDecision = {
   decisionTimestamp: string; expectedValuePct: number; successProbability: number;
   expectedFailureLossPct: number; remainingTargetPct: number; failedGroups: string[];
-  persistenceBars: number; stateObservations: number;
+  persistenceBars: number; stateObservations: number; stateLots?: number;
 };
 
 export type FailureEngineResearch = {
   mode: "RESEARCH_COMPARE"; status: "RESEARCH_CANDIDATE" | "REJECTED" | "INSUFFICIENT_DATA";
-  liveAutoExitEnabled: false; lotsAvailable: number; foldsCompleted: number;
+  liveAutoExitEnabled: false; lotsReceived?: number; lotsAvailable: number; rightCensoredLots?: number; foldsCompleted: number;
   foldsSkipped: Array<{ fold: number; trainingLots: number; testLots: number; reason: string }>;
   matchedTestComparison: {
     baseline: FailureMetrics; failureEngine: FailureMetrics; netPnlDifference: number;
     worstTradeImprovementPct: number; maximumDrawdownImprovementCurrency: number;
+  };
+  candidateRequirements?: {
+    allConfiguredFoldsCompleted: boolean; strictNetPnlAndWorstTradeImprovementEveryFold: boolean;
+    minimumStateLots: number; minimumThesisExits: number; minimumThesisExitsPerFold: number;
+    actualThesisExits: number; met: boolean;
   };
   decisionAudit: Array<{
     lotId: string; symbol: string; exitTimestamp: string; exitPrice: number; pnl: number;
@@ -69,6 +74,7 @@ export function StrongBuyResults({ response }: { response: StrongBuyBacktestResp
       <div className="panel-title"><div><span className="section-kicker">Research only · live exits disabled</span><h2>Trade Failure Engine walk-forward comparison</h2></div><span className={"trade-status " + (research.status === "RESEARCH_CANDIDATE" ? "hit" : "open")}>{research.status.replaceAll("_", " ")}</span></div>
       <section className="backtest-overview">
         <div><span>Available lots</span><strong>{research.lotsAvailable}</strong></div>
+        <div><span>Right-censored excluded</span><strong>{research.rightCensoredLots ?? 0}</strong></div>
         <div><span>Completed folds</span><strong>{research.foldsCompleted}</strong></div>
         <div><span>Matched test lots</span><strong>{comparison.baseline.trades}</strong></div>
         <div><span>Net P&amp;L difference</span><strong className={comparison.netPnlDifference >= 0 ? "positive-value" : "negative-value"}>{money(comparison.netPnlDifference)}</strong></div>
@@ -79,6 +85,7 @@ export function StrongBuyResults({ response }: { response: StrongBuyBacktestResp
         {(["baseline", "failureEngine"] as const).map((key) => { const metrics = comparison[key]; return <tr key={key}><td><strong>{key === "baseline" ? "Baseline: hold to target/horizon" : "Failure Engine"}</strong></td><td>{money(metrics.netPnl)}</td><td>{metrics.winRate.toFixed(2)}%</td><td>{metrics.worstTradePct.toFixed(2)}%</td><td>{money(metrics.maximumDrawdownCurrency)}</td><td>{metrics.takeProfits}</td><td>{metrics.thesisFailedExits}</td><td>{metrics.timeHorizonFailures}</td></tr>; })}
       </tbody></table></div>
       {research.foldsSkipped.length > 0 && <p className="cost-note">{research.foldsSkipped.length} fold(s) were skipped because the configured training or test sample minimum was not reached.</p>}
+      {research.candidateRequirements && <p className="cost-note">Candidate gate: {research.candidateRequirements.actualThesisExits}/{research.candidateRequirements.minimumThesisExits} required thesis exits; at least {research.candidateRequirements.minimumThesisExitsPerFold} per fold and {research.candidateRequirements.minimumStateLots} independent training lots per exact state.</p>}
       <div className="strategy-warning"><AlertText items={research.warnings} /></div>
       {research.decisionAudit.length > 0 && <details><summary>Audited thesis-failure exits ({research.decisionAudit.length})</summary><div className="analysis-table-wrap"><table className="analysis-table"><thead><tr><th>Symbol</th><th>Decision</th><th>Exit</th><th>Expected value</th><th>Success probability</th><th>Evidence groups</th><th>P&amp;L</th></tr></thead><tbody>
         {research.decisionAudit.slice(0, 100).map((trade) => <tr key={`${trade.lotId}-${trade.exitTimestamp}`}><td><strong>{trade.symbol}</strong></td><td>{time(trade.decision.decisionTimestamp)}</td><td>{money(trade.exitPrice)} · {time(trade.exitTimestamp)}</td><td>{trade.decision.expectedValuePct.toFixed(3)}%</td><td>{(trade.decision.successProbability * 100).toFixed(1)}%</td><td>{trade.decision.failedGroups.join(" + ")}</td><td className={trade.pnl >= 0 ? "positive-value" : "negative-value"}>{money(trade.pnl)}</td></tr>)}

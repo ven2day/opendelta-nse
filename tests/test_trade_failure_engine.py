@@ -106,6 +106,18 @@ class EmpiricalFailureModelTests(unittest.TestCase):
         self.assertEqual(trade["exitTimestamp"], test_lot["observations"][1]["nextTimestamp"])
         self.assertEqual(trade["exitPrice"], 98.0)
         self.assertEqual(trade["decision"]["persistenceBars"], 2)
+        self.assertGreaterEqual(trade["decision"]["stateLots"], 10)
+
+    def test_sparse_or_unseen_state_cannot_trigger_an_exit(self) -> None:
+        training = [research_lot(index, success=False) for index in range(5)]
+        model = EmpiricalFailureModel(20).fit(training)
+        test_lot = research_lot(100, success=False, state_observations=2)
+        trade = _failure_engine_trade(
+            test_lot,
+            model,
+            TradeFailureResearchConfig(decision_persistence_bars=2, minimum_state_lots=10),
+        )
+        self.assertEqual(trade["status"], "TIME_HORIZON_FAILURE")
 
 
 class CausalExtractionTests(unittest.TestCase):
@@ -161,6 +173,31 @@ class CausalExtractionTests(unittest.TestCase):
             )
         self.assertEqual(original[0]["observations"][0]["features"], mutated[0]["observations"][0]["features"])
 
+    def test_incomplete_horizon_is_right_censored_instead_of_failed(self) -> None:
+        data = self.indicator_frame()
+        lot = {
+            "lotId": "CENSORED",
+            "entryTimestamp": data.index[-2].isoformat(),
+            "entryPrice": float(data.iloc[-2]["Close"]),
+            "targetPrice": 999.0,
+            "targetPct": 1.0,
+            "quantity": 100,
+        }
+        failure_config = TradeFailureResearchConfig(
+            maximum_holding_bars=8,
+            support_lookback_bars=2,
+            ema_slope_lookback_bars=1,
+            progress_lookback_bars=2,
+        )
+        with patch("trade_failure_engine.calculate_strong_buy_indicators", return_value=data):
+            extracted = extract_failure_research_lots(
+                "TEST", data, {"lots": [lot]},
+                entry_config=StrongBuyConfig(), failure_config=failure_config,
+            )
+        self.assertEqual(extracted[0]["resolutionStatus"], "RIGHT_CENSORED")
+        self.assertIsNone(extracted[0]["success"])
+        self.assertEqual(extracted[0]["observations"], [])
+
 
 class WalkForwardResearchTests(unittest.TestCase):
     def test_matched_comparison_is_walk_forward_and_never_live(self) -> None:
@@ -178,6 +215,8 @@ class WalkForwardResearchTests(unittest.TestCase):
         self.assertFalse(result["liveAutoExitEnabled"])
         self.assertEqual(result["methodology"]["split"], "EXPANDING_WINDOW_WALK_FORWARD_BY_LOT_ENTRY_TIME_WITH_RESOLUTION_EMBARGO")
         self.assertGreater(result["matchedTestComparison"]["failureEngine"]["thesisFailedExits"], 0)
+        self.assertEqual(result["status"], "RESEARCH_CANDIDATE")
+        self.assertTrue(result["candidateRequirements"]["met"])
 
     def test_training_excludes_lots_unresolved_when_test_starts(self) -> None:
         lots = [research_lot(index, success=False) for index in range(80)]
@@ -208,6 +247,38 @@ class WalkForwardResearchTests(unittest.TestCase):
         metrics = result["matchedTestComparison"]
         self.assertAlmostEqual(metrics["baseline"]["averageReturnPct"], 0.86)
         self.assertEqual(metrics["baseline"]["netPnl"], metrics["failureEngine"]["netPnl"])
+        self.assertEqual(result["status"], "REJECTED")
+
+    def test_equal_results_with_no_thesis_exits_are_never_a_candidate(self) -> None:
+        result = run_trade_failure_research(
+            [research_lot(index, success=True) for index in range(80)],
+            TradeFailureResearchConfig(
+                mode="RESEARCH_COMPARE",
+                minimum_training_lots=20,
+                minimum_test_lots=10,
+                walk_forward_folds=2,
+            ),
+        )
+        self.assertEqual(result["matchedTestComparison"]["netPnlDifference"], 0)
+        self.assertEqual(result["matchedTestComparison"]["failureEngine"]["thesisFailedExits"], 0)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertFalse(result["candidateRequirements"]["met"])
+
+    def test_right_censored_lots_are_excluded_from_walk_forward_samples(self) -> None:
+        lots = [research_lot(index, success=False) for index in range(80)]
+        censored = dict(research_lot(100, success=False), resolutionStatus="RIGHT_CENSORED", success=None, observations=[])
+        result = run_trade_failure_research(
+            [*lots, censored],
+            TradeFailureResearchConfig(
+                mode="RESEARCH_COMPARE",
+                minimum_training_lots=20,
+                minimum_test_lots=10,
+                walk_forward_folds=2,
+            ),
+        )
+        self.assertEqual(result["lotsReceived"], 81)
+        self.assertEqual(result["lotsAvailable"], 80)
+        self.assertEqual(result["rightCensoredLots"], 1)
 
     def test_skipped_fold_can_never_be_promoted_as_a_candidate(self) -> None:
         result = run_trade_failure_research(

@@ -495,7 +495,15 @@ class PaperDatabaseTests(unittest.TestCase):
         reborn = make_broker(self.repositories)
         self.assertEqual(sorted(lot["symbol"] for lot in reborn.positions()), ["INFY", "TCS"])
         self.assertAlmostEqual(reborn.account["cashBalance"], broker.account["cashBalance"], places=4)
-        row, stamp = candle(10, open_=202.0, high=203.0, low=201.0, close=202.5)
+        [infy] = [lot for lot in reborn.positions() if lot["symbol"] == "INFY"]
+        fifo_target = infy["targetPrice"]
+        row, stamp = candle(
+            10,
+            open_=fifo_target,
+            high=fifo_target + 0.01,
+            low=fifo_target - 1.0,
+            close=fifo_target,
+        )
         [closed] = reborn.on_completed_candle("INFY", row, stamp)
         self.assertEqual(closed["status"], "TARGET_HIT")
         self.assertEqual(self.repositories.lots.get(closed["lotId"])["status"], "TARGET_HIT")

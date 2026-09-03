@@ -44,8 +44,7 @@ async function login(worker) {
 }
 
 function navigationLabels(html) {
-  const sidebar = html.match(/<aside class="platform-sidebar"[\s\S]*?<\/aside>/)?.[0] ?? "";
-  const nav = sidebar.match(/<nav[\s\S]*?<\/nav>/)?.[0] ?? "";
+  const nav = html.match(/<nav class="platform-topnav"[\s\S]*?<\/nav>/)?.[0] ?? "";
   return Array.from(nav.matchAll(/<span>([^<]+)<\/span>/g), (match) => match[1]);
 }
 
@@ -68,6 +67,7 @@ test("every unified route requires login and renders one topbar market selector"
     const html = await response.text();
     assert.match(html, new RegExp(`<title>${route.title.replace(/ /g, "\\s")}`), `${route.path} title`);
     assert.deepEqual(navigationLabels(html), NAVIGATION, `${route.path} navigation`);
+    assert.doesNotMatch(html, /platform-sidebar|platform-menu|platform-backdrop|data-navigation-open/, `${route.path} has no sidebar drawer`);
     assert.match(html, /data-ui-version="unified-v2"/);
     // The topbar clock is seeded after mount so server and client markup match (no hydration error #418).
     assert.match(html, /--:--:--/);

@@ -63,12 +63,14 @@ class PlatformRuntime:
         candle_sources: dict[str, Callable[[], CandleSource]],
         fallback_universes: dict[str, Callable[[], list[str]]] | None = None,
         symbol_catalogues: dict[str, Callable[[], list[str]]] | None = None,
+        candle_read_mode: str = "custom",
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.database = database
         self.candle_sources = candle_sources
         self.fallback_universes = fallback_universes or {}
         self.symbol_catalogues = symbol_catalogues or {}
+        self.candle_read_mode = candle_read_mode
         self._screener: ScreenerServices | None = None
         self.clock = clock or (lambda: datetime.now(_timezone.utc))
         self._runner: BacktestJobRunner | None = None
@@ -272,6 +274,7 @@ class PlatformRuntime:
             workers = list(self._workers)
         return {
             "databaseConfigured": self.database is not None,
+            "candleReadMode": self.candle_read_mode,
             "disabledReason": self.disabled_reason,
             "migratedVersions": self.migrated_versions,
             "activeBacktests": self._runner.active_run_ids() if self._runner else [],

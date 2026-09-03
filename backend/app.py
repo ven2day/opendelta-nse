@@ -45,9 +45,11 @@ from backend.config.application_settings import (
 )
 from backend.markets.crypto.api import create_crypto_router
 from backend.markets.crypto.engine import CryptoMarketService, service_from_environment as crypto_service_from_environment
+from backend.data.candle_repository import CanonicalCandleRepository
 from backend.data.database import Database
 from backend.markets.crypto.exchange_adapter import CryptoCandleSource
 from backend.markets.nse.dhan_adapter import DhanCandleSource
+from backend.markets.timescale_source import READ_MODES, TimescaleCandleSource, select_candle_source
 from backend.platform_runtime import PlatformRuntime, install_platform
 from backend.backtest.history import BacktestHistoryRepository, HISTORY_LIMIT
 from backend.compat.backtest_jobs import BacktestJobService
@@ -2444,12 +2446,36 @@ def get_platform_runtime() -> PlatformRuntime:
     global _platform_runtime_instance
     with _platform_runtime_lock:
         if _platform_runtime_instance is None:
+            database = Database.from_environment()
+            read_mode = os.environ.get("PLATFORM_CANDLE_READ_MODE", "legacy").strip().lower()
+            if read_mode not in READ_MODES:
+                raise RuntimeError(
+                    "PLATFORM_CANDLE_READ_MODE must be legacy, timescale, or timescale-fallback"
+                )
+            canonical_repository = CanonicalCandleRepository(database) if database is not None else None
+
+            def candle_source(market: str):
+                if read_mode == "legacy":
+                    return DhanCandleSource(get_store()) if market == "NSE" else CryptoCandleSource(get_crypto_market_service())
+                if canonical_repository is None:
+                    raise RuntimeError("Timescale candle reads require MARKET_DATA_DATABASE_URL")
+                timescale = TimescaleCandleSource(
+                    canonical_repository,
+                    market=market,
+                    provider="DHAN" if market == "NSE" else None,
+                )
+                if read_mode == "timescale":
+                    return timescale
+                legacy = DhanCandleSource(get_store()) if market == "NSE" else CryptoCandleSource(get_crypto_market_service())
+                return select_candle_source(read_mode, timescale=timescale, legacy=legacy)
+
             _platform_runtime_instance = PlatformRuntime(
-                database=Database.from_environment(),
+                database=database,
                 candle_sources={
-                    "NSE": lambda: DhanCandleSource(get_store()),
-                    "CRYPTO": lambda: CryptoCandleSource(get_crypto_market_service()),
+                    "NSE": lambda: candle_source("NSE"),
+                    "CRYPTO": lambda: candle_source("CRYPTO"),
                 },
+                candle_read_mode=read_mode,
                 fallback_universes={
                     # Until a screener universe is saved, fall back to what production already uses.
                     "NSE": lambda: get_universe_service().get_active_live_universe()[0],

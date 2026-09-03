@@ -39,11 +39,16 @@ reproducible after a strategy changes.
 
 ```mermaid
 graph TB
-    subgraph Data["📊 Market data"]
-        DH[Dhan REST · NSE 5m candles]
-        CX[OKX / VALR public candles]
-        TS[(TimescaleDB candles)]
+    subgraph Providers["📊 Market providers"]
+        DH[Dhan · NSE]
+        CX[OKX / VALR · Crypto]
     end
+    ING[Ingestion · validation · repair]
+    subgraph Store["🗄️ PostgreSQL + TimescaleDB"]
+        TS[(Candles hypertable)]
+        DB[(Runs · trades · signals · paper · settings)]
+    end
+    SRC[Shared Timescale CandleSource]
     subgraph Core["⚙️ Shared core"]
         IND[backend.core.indicators]
         REG[STRATEGIES registry]
@@ -57,11 +62,13 @@ graph TB
         SIG[Signal workers NSE · Crypto]
         PB[PaperBroker NSE · Crypto]
     end
-    subgraph Store["🗄️ PostgreSQL"]
-        DB[(screener_runs · saved_universes · backtest_runs/trades · live_signals · paper_* · engine_status)]
-    end
-    DH --> SCR & BT & SIG
-    CX --> SCR & BT & SIG
+    DH --> ING
+    CX --> ING
+    ING --> TS
+    TS --> SRC
+    SRC --> SCR
+    SRC --> BT
+    SRC --> SIG
     SCR --> DB
     BT --> REG
     SIG --> REG
@@ -71,6 +78,11 @@ graph TB
     DB --> API["v2 API"]
     API --> UI["Dashboard · Screener · Backtest · Signals · Paper Trading · Settings"]
 ```
+
+`PLATFORM_CANDLE_READ_MODE` controls the migration: `legacy` is the safe
+default, `timescale-fallback` reads TimescaleDB first and logs every fallback,
+and strict `timescale` makes the diagram above the active production path.
+Ambiguous provider streams fail closed instead of mixing OKX and VALR candles.
 
 The evaluator contract is `Strategy.evaluate(candles, market_context, config) → SignalDecision`
 (BUY / SELL / NONE with prices, reasons, indicators, version and snapshot),
@@ -167,6 +179,7 @@ opendelta-nse/
 | Variable | Purpose |
 | --- | --- |
 | `MARKET_DATA_DATABASE_URL` | PostgreSQL/TimescaleDB for candles and the platform tables |
+| `PLATFORM_CANDLE_READ_MODE` | Shared engine reader: `legacy`, `timescale-fallback`, or strict `timescale` |
 | `PLATFORM_AUTO_MIGRATE` | `true` to migrate at startup; otherwise `python -m backend.data.migrate` |
 | `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
 | `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |

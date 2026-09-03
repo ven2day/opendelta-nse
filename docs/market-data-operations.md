@@ -2,9 +2,22 @@
 
 ## Rollout boundary
 
-TimescaleDB receives completed candles from Dhan and OKX, but the existing Dhan
-file/cache and crypto SQLite readers remain authoritative during reconciliation.
-Do not switch research or signal reads as part of this rollout.
+TimescaleDB receives completed candles from Dhan and OKX. The shared v2
+Screener, Backtest and Signal engines can read those candles through
+`TimescaleCandleSource`; the existing Dhan file/cache and crypto SQLite readers
+remain the default during reconciliation.
+
+Reader selection is explicit:
+
+- `PLATFORM_CANDLE_READ_MODE=legacy` — current safe default;
+- `PLATFORM_CANDLE_READ_MODE=timescale-fallback` — TimescaleDB first, with a
+  warning and legacy fallback when the canonical range is unavailable;
+- `PLATFORM_CANDLE_READ_MODE=timescale` — strict final state; no provider/cache
+  candle fallback.
+
+Use the same mode for Screener, Backtest and Signals so every engine evaluates
+the same candle history. Never use fallback mode to certify backtest
+reproducibility because a run could contain mixed storage sources.
 
 ## Bootstrap
 
@@ -94,6 +107,8 @@ python -m backend.data.admin health
 - canonical count and checksum reconciliation passes;
 - `/platform/data-health` remains healthy through a complete market cycle.
 
-Only a later pull request may move research readers to TimescaleDB and create
-versioned Parquet snapshots. Redis remains deferred until measured latency or
-worker fan-out requires it.
+After the checks above pass, deploy `timescale-fallback` for a full market cycle
+and monitor fallback warnings. Then switch to strict `timescale`; missing or
+ambiguous streams fail visibly rather than calling a provider. Versioned
+Parquet snapshots and Redis remain deferred until reproducibility or measured
+latency requires them.

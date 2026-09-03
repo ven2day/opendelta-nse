@@ -3,13 +3,15 @@
 import { humanize } from "./format";
 
 export type SchemaField = {
-  type: "integer" | "number" | "boolean" | "string";
+  type: "integer" | "integer_array" | "number" | "boolean" | "string";
   default?: unknown;
   minimum?: number;
   maximum?: number;
   enum?: Array<string | number>;
   label?: string;
   description?: string;
+  minItems?: number;
+  maxItems?: number;
 };
 
 export type ConfigSchema = Record<string, SchemaField>;
@@ -21,13 +23,21 @@ export function validateConfigValues(values: ConfigValues, schema: ConfigSchema,
   if (unknownKeys.length) throw new Error(`${label} contains unknown setting${unknownKeys.length === 1 ? "" : "s"}: ${unknownKeys.join(", ")}.`);
   for (const [key, value] of Object.entries(values)) {
     const field = schema[key];
-    const validType = field.type === "integer"
+    const validType = field.type === "integer_array"
+      ? Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isInteger(item))
+      : field.type === "integer"
       ? typeof value === "number" && Number.isInteger(value)
       : field.type === "number"
         ? typeof value === "number" && Number.isFinite(value)
         : typeof value === field.type;
     if (!validType) throw new Error(`${label}.${key} must be ${field.type === "integer" ? "an integer" : `a ${field.type}`}.`);
     if (field.enum && !field.enum.some((option) => option === value)) throw new Error(`${label}.${key} must be one of: ${field.enum.join(", ")}.`);
+    if (field.type === "integer_array" && Array.isArray(value)) {
+      if (field.minItems !== undefined && value.length < field.minItems) throw new Error(`${label}.${key} needs at least ${field.minItems} values.`);
+      if (field.maxItems !== undefined && value.length > field.maxItems) throw new Error(`${label}.${key} allows at most ${field.maxItems} values.`);
+      if (field.minimum !== undefined && value.some((item) => Number(item) < field.minimum!)) throw new Error(`${label}.${key} values must be at least ${field.minimum}.`);
+      if (field.maximum !== undefined && value.some((item) => Number(item) > field.maximum!)) throw new Error(`${label}.${key} values must be at most ${field.maximum}.`);
+    }
     if (typeof value === "number" && field.minimum !== undefined && value < field.minimum) throw new Error(`${label}.${key} must be at least ${field.minimum}.`);
     if (typeof value === "number" && field.maximum !== undefined && value > field.maximum) throw new Error(`${label}.${key} must be at most ${field.maximum}.`);
   }
@@ -53,6 +63,10 @@ function parseNumber(raw: string, integer: boolean): number | "" {
 /** Renders one form control for a schema field; never hard-codes strategy-specific inputs. */
 export function SchemaFieldInput({ name, field, value, onChange, disabled }: { name: string; field: SchemaField; value: unknown; onChange: (next: unknown) => void; disabled?: boolean }) {
   const label = field.label ?? humanize(name);
+  if (field.type === "integer_array") {
+    const current = Array.isArray(value) ? value.join(", ") : "";
+    return <label><span>{label}</span><input type="text" inputMode="numeric" value={current} disabled={disabled} onChange={(event) => onChange(event.target.value.split(",").map((item) => Number(item.trim())).filter(Number.isInteger))} />{field.description && <small>{field.description}</small>}</label>;
+  }
   if (field.type === "boolean") {
     return <label className="checkbox"><input type="checkbox" checked={Boolean(value)} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><span>{label}</span>{field.description && <small>{field.description}</small>}</label>;
   }

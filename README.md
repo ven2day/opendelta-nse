@@ -33,6 +33,7 @@ reproducible after a strategy changes.
 - **📡 Live Signals** — an independent worker per market (NSE follows the session; Crypto runs 24/7), completed candles only, duplicate-safe storage via a database constraint, `STRONG_BUY → HOLDING → TARGET_HIT / EXITED / EXPIRED` lifecycle, restart recovery, connection/data-age/last-candle health.
 - **💼 Paper Trading** — internal `PaperBroker`, fixed-quantity or fixed-capital sizing with Strong Buy lot multipliers, one order per signal, candle-driven exits, realized/unrealized/daily P&L, portfolio rebuilt from the database after a restart.
 - **🧩 Strategy plug-ins** — one file + one registration; the screener, backtest, signals, paper trading, API and settings forms discover it automatically. No strategy-name `if/elif` anywhere.
+- **📉 RSI Dip Ladder** — NSE RSI-recovery entries with a finite four-lot 5% dip ladder, price-band quantities (`5/10/25/50` from ₹1,000; `10/20/50/100` below ₹1,000), a ₹250,000 open-capital guard, and an independent configurable target for every lot.
 - **🖥️ One website** — Dashboard · Screener · Backtest · Signals · Paper Trading · Settings, each with an NSE / Crypto switch.
 
 ## 🏗️ Architecture
@@ -53,8 +54,11 @@ graph TB
         IND[backend.core.indicators]
         REG[STRATEGIES registry]
         SB[STRONG_BUY_V1]
+        DL[RSI_DIP_LADDER_V1]
         REG --> SB
+        REG --> DL
         SB --> IND
+        DL --> IND
     end
     subgraph Engines["🚦 Engines"]
         SCR[Screener]

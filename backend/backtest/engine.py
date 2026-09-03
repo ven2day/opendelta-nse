@@ -26,6 +26,7 @@ from backend.backtest.result_writer import ResultWriter
 from backend.core.models import MarketContext
 from backend.markets.base import CandleSource, MarketSpec
 from backend.strategies.base import Strategy, decision_frame
+from backend.strategies.lot_policy import PriceBandLadder
 
 CANCEL_CHECK_BARS = 500
 
@@ -213,6 +214,7 @@ class BacktestEngine:
     def _run_symbol(self, request: BacktestRequest, config: Mapping[str, Any], symbol: str, metrics: MetricsAccumulator) -> None:
         timezone = self.market.timezone
         execution = request.execution
+        ladder = PriceBandLadder.from_config(config)
         bar_minutes = self.market.minutes(request.timeframe)
         warmup = self.strategy.required_history(config)
         start = datetime.combine(request.start_date, datetime.min.time()).replace(tzinfo=_zone(timezone))
@@ -239,6 +241,8 @@ class BacktestEngine:
         pending: tuple[int, int, str] | None = None  # (signal bar, entry number, cycle id)
         cycle = 0
         entries = 0
+        cycle_first_entry_price: float | None = None
+        last_entry_price: float | None = None
         bars = len(timestamps)
         for bar in range(bars):
             if bar % CANCEL_CHECK_BARS == 0:
@@ -247,7 +251,16 @@ class BacktestEngine:
             if pending is not None:
                 signal_bar, entry_number, cycle_id = pending
                 pending = None
-                open_lots.append(self._enter(request, execution, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_targets))
+                entered = self._enter(
+                    request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id,
+                    timestamps, opens, closes, signal_targets, cycle_first_entry_price, open_lots,
+                )
+                if entered is not None:
+                    open_lots.append(entered)
+                    cycle_first_entry_price = cycle_first_entry_price or entered.entry_price
+                    last_entry_price = entered.entry_price
+                else:
+                    entries -= 1
             still_open: list[_Lot] = []
             for lot in open_lots:
                 if bar > lot.entry_bar:
@@ -266,13 +279,18 @@ class BacktestEngine:
             open_lots = still_open
             if not open_lots and pending is None:
                 entries = 0
+                cycle_first_entry_price = None
+                last_entry_price = None
             if not decisions[bar] or not in_window[bar]:
                 continue
             metrics.add_signal()
             if not open_lots and pending is None:
                 cycle += 1
                 entries = 0
-            can_order = (not open_lots or execution.allow_additional_buys) and entries < execution.maximum_entries_per_cycle and bar + 1 < bars
+            maximum_entries = min(execution.maximum_entries_per_cycle, ladder.maximum_entries) if ladder else execution.maximum_entries_per_cycle
+            can_order = (not open_lots or execution.allow_additional_buys) and entries < maximum_entries and bar + 1 < bars
+            if can_order and ladder is not None and entries > 0:
+                can_order = last_entry_price is not None and ladder.additional_entry_allowed(float(closes[bar]), last_entry_price)
             if can_order:
                 pending = (bar, entries, f"{symbol}-Cycle{cycle}")
                 entries += 1
@@ -284,9 +302,17 @@ class BacktestEngine:
         if batch:
             self.writer.write_trades(request.run_id, batch)
 
-    def _enter(self, request, execution, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_targets) -> _Lot:
-        quantity = execution.lot_quantity(entry_number)
-        fill = self.market.fees.buy(float(opens[bar]), quantity)
+    def _enter(self, request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_targets, cycle_first_entry_price, open_lots) -> _Lot | None:
+        reference_price = float(opens[bar])
+        ladder = PriceBandLadder.from_config(config)
+        indicative_fill_price = self.market.fees.buy(reference_price, 1).price
+        first_price = cycle_first_entry_price or indicative_fill_price
+        quantity = ladder.quantity(entry_number, first_price) if ladder else execution.lot_quantity(entry_number)
+        fill = self.market.fees.buy(reference_price, quantity)
+        if ladder is not None:
+            current_open_capital = sum(lot.entry_price * lot.quantity for lot in open_lots)
+            if not ladder.within_capital(current_open_capital, fill.price, quantity):
+                return None
         entry_price = round(fill.price, 4)
         if execution.target_pct is not None:
             target = entry_price * (1 + execution.target_pct / 100)

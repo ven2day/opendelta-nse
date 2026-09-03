@@ -204,17 +204,59 @@ class PaperBroker:
         *,
         timeframe: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Fill queued entries at this candle's open, then update and possibly close open lots."""
+        """Process a strategy-timeframe candle (kept for backtests and direct callers)."""
         candle_timeframe = timeframe or self.timeframe
+        return self._process_market_candle(
+            symbol,
+            candle,
+            timestamp,
+            pending_timeframe=candle_timeframe,
+            lot_timeframe=candle_timeframe,
+        )
+
+    def on_market_candle(
+        self,
+        symbol: str,
+        candle: Mapping[str, Any] | pd.Series,
+        timestamp: datetime | None = None,
+        *,
+        execution_timeframe: str = "5m",
+    ) -> list[dict[str, Any]]:
+        """Process an independent market candle for every open strategy lot.
+
+        Strategy evaluation and execution clocks are deliberately separate. A
+        daily signal can therefore wait overnight and fill at the following
+        session's first observed intraday open, while marks, ladder triggers and
+        exits continue updating during the session.
+        """
+        return self._process_market_candle(
+            symbol,
+            candle,
+            timestamp,
+            pending_timeframe=None,
+            lot_timeframe=None,
+            execution_timeframe=execution_timeframe,
+        )
+
+    def _process_market_candle(
+        self,
+        symbol: str,
+        candle: Mapping[str, Any] | pd.Series,
+        timestamp: datetime | None,
+        *,
+        pending_timeframe: str | None,
+        lot_timeframe: str | None,
+        execution_timeframe: str | None = None,
+    ) -> list[dict[str, Any]]:
         stamp = pd.Timestamp(timestamp if timestamp is not None else candle["timestamp"]).to_pydatetime()
         open_, high, low, close = (float(candle[key]) for key in ("Open", "High", "Low", "Close"))
         closed: list[dict[str, Any]] = []
         with self._lock:
             deferred: list[dict[str, Any]] = []
             for signal in self.portfolio.pending_entries.pop(symbol, []):
-                if signal.get("timeframe") != candle_timeframe:
+                if pending_timeframe is not None and signal.get("timeframe") != pending_timeframe:
                     deferred.append(signal)
-                elif pd.Timestamp(signal["candleTimestamp"]) < pd.Timestamp(stamp):
+                elif self._pending_is_executable(signal, stamp, execution_timeframe):
                     self._fill_entry(signal, open_, stamp)
                     if signal.get("pendingEntryId"):
                         self.repositories.pending.delete(signal["pendingEntryId"])
@@ -224,7 +266,7 @@ class PaperBroker:
                 self.portfolio.pending_entries[symbol] = deferred
             survivors: dict[str, tuple[float, float]] = {}
             nse_exit_occurred = False
-            timeframe_lots = self.portfolio.lots_for(symbol, timeframe=candle_timeframe)
+            timeframe_lots = self.portfolio.lots_for(symbol, timeframe=lot_timeframe) if lot_timeframe else self.portfolio.lots_for(symbol)
             for lot in timeframe_lots:
                 if pd.Timestamp(lot["entryTimestamp"]) >= pd.Timestamp(stamp):
                     continue
@@ -246,12 +288,34 @@ class PaperBroker:
                         nse_exit_occurred = True
                 else:
                     survivors[lot["lotId"]] = (mae, mfe)
-            remaining_timeframe_lots = self.portfolio.lots_for(symbol, timeframe=candle_timeframe)
+            remaining_timeframe_lots = self.portfolio.lots_for(symbol, timeframe=lot_timeframe) if lot_timeframe else self.portfolio.lots_for(symbol)
             self._mark_open_lots(symbol, close, survivors, lots=remaining_timeframe_lots)
-            strategy_ids = list(dict.fromkeys(lot["strategyId"] for lot in remaining_timeframe_lots))
-            for strategy_id in strategy_ids:
-                self._queue_ladder_entry(symbol, close, stamp, strategy_id=strategy_id, timeframe=candle_timeframe)
+            strategy_keys = list(dict.fromkeys((lot["strategyId"], lot["timeframe"]) for lot in remaining_timeframe_lots))
+            for strategy_id, strategy_timeframe in strategy_keys:
+                self._queue_ladder_entry(symbol, close, stamp, strategy_id=strategy_id, timeframe=strategy_timeframe)
         return closed
+
+    def _pending_is_executable(self, signal: Mapping[str, Any], stamp: datetime, execution_timeframe: str | None) -> bool:
+        candle_stamp = pd.Timestamp(stamp)
+        if candle_stamp <= pd.Timestamp(signal["candleTimestamp"]):
+            return False
+        created_at = signal.get("createdAt")
+        if created_at is None or execution_timeframe is None:
+            return True
+        # Never use an intraday candle whose open was already known before the
+        # pending instruction existed. This is the restart/look-ahead guard.
+        created = pd.Timestamp(created_at)
+        if created.tzinfo is None and candle_stamp.tzinfo is not None:
+            created = created.tz_localize(candle_stamp.tzinfo)
+        elif created.tzinfo is not None and candle_stamp.tzinfo is not None:
+            created = created.tz_convert(candle_stamp.tzinfo)
+        interval = pd.Timedelta(minutes=self.market.minutes(execution_timeframe))
+        return candle_stamp >= created.ceil(interval)
+
+    def tracked_symbols(self) -> list[str]:
+        """Symbols that need execution, marking, or exit monitoring."""
+        with self._lock:
+            return sorted(set(self.portfolio.open_lots) | set(self.portfolio.pending_entries))
 
     def _queue_ladder_entry(self, symbol: str, close: float, stamp: datetime, *, strategy_id: str, timeframe: str) -> None:
         open_lots = self.portfolio.lots_for(symbol, strategy_id=strategy_id, timeframe=timeframe)

@@ -134,6 +134,13 @@ Each binding has an independent worker, completed-candle history, health row,
 deduplication identity and paper-lot grouping. Enable the second entry only
 after `scalping_v1` is registered.
 
+Daily strategies use two clocks. The strategy evaluates the completed `1d`
+candle once after the NSE close. Its paper instruction is stored durably and
+defaults to `NEXT_OPEN`; an independent completed `5m` feed fills it from the
+next executable session bar and then updates open-signal state, unrealized P/L,
+dip-ladder entries, FIFO targets and exits throughout the session. A restart
+cannot replay a candle whose open predates creation of the pending instruction.
+
 The legacy NSE live-signal engine and legacy pages keep running unchanged
 until the v2 workers are switched on and the legacy routes are retired.
 

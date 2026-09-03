@@ -146,6 +146,29 @@ class SignalEngine:
             else:
                 self.repository.update_last_price(signal["signalId"], last_price=close)
 
+    def track_market_candle(self, symbol: str, candle: Mapping[str, Any] | pd.Series, timestamp: datetime | None = None) -> None:
+        """Advance open signal state without evaluating strategy rules.
+
+        This is used by the independent intraday tracking feed for slower
+        strategies such as the daily RSI ladder.
+        """
+        stamp = pd.Timestamp(timestamp if timestamp is not None else candle["timestamp"])
+        row = candle if isinstance(candle, pd.Series) else pd.Series(candle)
+        with self._lock:
+            self._advance_open_signals(symbol, stamp, row)
+
+    def tracked_symbols(self) -> list[str]:
+        return sorted(
+            {
+                signal["symbol"]
+                for signal in self.repository.open(
+                    self.market.market,
+                    strategy_id=self.strategy.strategy_id,
+                    timeframe=self.timeframe,
+                )
+            }
+        )
+
     def _evaluate(self, symbol: str, stamp: pd.Timestamp) -> dict[str, Any] | None:
         context = MarketContext(market=self.market.market, symbol=symbol, timeframe=self.timeframe, timezone=self.market.timezone, as_of=stamp.to_pydatetime())
         decision = self.strategy.evaluate(self.history.get(symbol), context, self.configuration)

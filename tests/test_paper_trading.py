@@ -142,7 +142,14 @@ class MemoryPendingEntries:
         if cycle_id is not None and any(row["accountId"] == account_id and row.get("cycleId") == cycle_id and row.get("lotNumber") == lot_number for row in self.rows.values()):
             return None
         pending_id = str(uuid.uuid4())
-        row = {**dict(signal), "pendingEntryId": pending_id, "accountId": account_id, "cycleId": cycle_id, "lotNumber": lot_number}
+        row = {
+            **dict(signal),
+            "pendingEntryId": pending_id,
+            "accountId": account_id,
+            "cycleId": cycle_id,
+            "lotNumber": lot_number,
+            "createdAt": signal.get("createdAt", signal["candleTimestamp"]),
+        }
         self.rows[pending_id] = row
         return dict(row)
 
@@ -190,7 +197,7 @@ def candle(minute: int, *, open_: float, high: float, low: float, close: float) 
 
 
 def make_broker(repositories: PaperRepositories | None = None, *, market: str = "NSE", policy: ExecutionPolicy | None = None, balance: float | None = None) -> PaperBroker:
-    return PaperBroker(market=market_spec(market), repositories=repositories or memory_repositories(), policy=policy or ExecutionPolicy(), timeframe="5m", clock=lambda: datetime(2026, 9, 1, 12, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo), starting_balance=balance)
+    return PaperBroker(market=market_spec(market), repositories=repositories or memory_repositories(), policy=policy or ExecutionPolicy(price_model="SIGNAL_CLOSE"), timeframe="5m", clock=lambda: datetime(2026, 9, 1, 12, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo), starting_balance=balance)
 
 
 def fifo_target_return_pct(lot: dict[str, Any]) -> float:
@@ -201,6 +208,9 @@ def fifo_target_return_pct(lot: dict[str, Any]) -> float:
 
 
 class SizingAndCostTests(unittest.TestCase):
+    def test_forward_paper_trading_defaults_to_next_open(self) -> None:
+        self.assertEqual(ExecutionPolicy().price_model, "NEXT_OPEN")
+
     def test_fixed_quantity_and_fixed_capital_sizing(self) -> None:
         fixed = ExecutionPolicy(initial_quantity=100, additional_quantity_pct=50)
         self.assertEqual([fixed.lot_quantity(index, 250.0) for index in range(4)], [100, 50, 25, 12])
@@ -368,7 +378,7 @@ class OrderAndLotTests(unittest.TestCase):
         self.assertEqual(len(broker.repositories.lots.rows), 1)
 
     def test_each_strong_buy_lot_has_its_own_entry_target_and_closes_independently(self) -> None:
-        broker = make_broker(policy=ExecutionPolicy(initial_quantity=100, additional_quantity_pct=50))
+        broker = make_broker(policy=ExecutionPolicy(initial_quantity=100, additional_quantity_pct=50, price_model="SIGNAL_CLOSE"))
         first = broker.on_signal(signal(price=100.0, minute=0))
         second = broker.on_signal(signal(price=104.0, minute=5))
         third = broker.on_signal(signal(price=108.0, minute=10))
@@ -394,7 +404,7 @@ class OrderAndLotTests(unittest.TestCase):
         self.assertEqual((fourth["cycleId"], fourth["lotNumber"], fourth["quantity"]), ("TCS-Cycle2", 1, 100))
 
     def test_stop_loss_expiry_and_rejections(self) -> None:
-        broker = make_broker(policy=ExecutionPolicy(stop_loss_pct=1.0, maximum_holding_bars=2, maximum_entries_per_cycle=1))
+        broker = make_broker(policy=ExecutionPolicy(stop_loss_pct=1.0, maximum_holding_bars=2, maximum_entries_per_cycle=1, price_model="SIGNAL_CLOSE"))
         lot = broker.on_signal(signal(price=100.0))
         self.assertAlmostEqual(lot["stopPrice"], round(lot["entryPrice"] * 0.99, 4))
         self.assertIsNone(broker.on_signal(signal(price=100.5, minute=5)))  # cap of one entry per cycle
@@ -403,7 +413,7 @@ class OrderAndLotTests(unittest.TestCase):
         [stopped] = broker.on_completed_candle("TCS", row, stamp)
         self.assertEqual(stopped["status"], "STOPPED")
         self.assertLess(stopped["realizedPnl"], 0)
-        expiring = make_broker(policy=ExecutionPolicy(maximum_holding_bars=2))
+        expiring = make_broker(policy=ExecutionPolicy(maximum_holding_bars=2, price_model="SIGNAL_CLOSE"))
         lot = expiring.on_signal(signal(price=100.0))
         for minute in (5, 10):
             row, stamp = candle(minute, open_=100.0, high=100.2, low=99.9, close=100.0)
@@ -423,12 +433,42 @@ class OrderAndLotTests(unittest.TestCase):
         self.assertAlmostEqual(lot["entryPrice"], round(NseFeeModel().buy(100.4, 100).price, 4))
         self.assertEqual(pd.Timestamp(lot["entryTimestamp"]), pd.Timestamp(stamp))
 
+    def test_daily_signal_waits_for_next_session_intraday_open_and_marks_pnl(self) -> None:
+        broker = make_broker(policy=ExecutionPolicy(price_model="NEXT_OPEN"))
+        daily = signal("M&M", 3_200.0)
+        daily.update(
+            strategyId="rsi_dip_ladder_v1",
+            timeframe="1d",
+            candleTimestamp=datetime(2026, 9, 1, 0, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo).isoformat(),
+            createdAt=datetime(2026, 9, 1, 15, 30, tzinfo=pd.Timestamp.now(tz=IST).tzinfo).isoformat(),
+            targetPrice=3_360.0,
+            configurationSnapshot={"target_pct": 5.0},
+        )
+        self.assertIsNone(broker.on_signal(daily))
+
+        stale = {"Open": 3_210.0, "High": 3_220.0, "Low": 3_190.0, "Close": 3_200.0, "Volume": 1_000.0}
+        broker.on_market_candle(
+            "M&M",
+            stale,
+            datetime(2026, 9, 1, 15, 25, tzinfo=pd.Timestamp.now(tz=IST).tzinfo),
+        )
+        self.assertEqual(broker.positions(), [])
+
+        opening = {"Open": 3_100.0, "High": 3_130.0, "Low": 3_090.0, "Close": 3_120.0, "Volume": 1_000.0}
+        opening_stamp = datetime(2026, 9, 2, 9, 15, tzinfo=pd.Timestamp.now(tz=IST).tzinfo)
+        broker.on_market_candle("M&M", opening, opening_stamp)
+        [lot] = broker.positions()
+        self.assertEqual(pd.Timestamp(lot["entryTimestamp"]), pd.Timestamp(opening_stamp))
+        self.assertAlmostEqual(lot["entryPrice"], round(NseFeeModel().buy(3_100.0, 100).price, 4))
+        self.assertEqual(lot["lastPrice"], 3_120.0)
+        self.assertNotEqual(lot["unrealizedPnl"], 0.0)
+
 
 class AccountTests(unittest.TestCase):
     def test_nse_and_crypto_balances_positions_and_settings_stay_separate(self) -> None:
         repositories = memory_repositories()
         nse = make_broker(repositories, market="NSE")
-        crypto = make_broker(repositories, market="CRYPTO", policy=ExecutionPolicy(sizing_mode="FIXED_CAPITAL", capital_per_lot=1_000, whole_units=False))
+        crypto = make_broker(repositories, market="CRYPTO", policy=ExecutionPolicy(sizing_mode="FIXED_CAPITAL", capital_per_lot=1_000, whole_units=False, price_model="SIGNAL_CLOSE"))
         self.assertEqual((nse.account["currency"], crypto.account["currency"]), ("INR", "USDT"))
         self.assertNotEqual(nse.account["accountId"], crypto.account["accountId"])
         nse.on_signal(signal("TCS", 100.0))

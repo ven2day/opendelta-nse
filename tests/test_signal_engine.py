@@ -371,6 +371,48 @@ class WorkerTests(unittest.TestCase):
         worker._last_daily_poll_date = at_close.date()
         self.assertFalse(worker._poll_is_due(at_close + timedelta(hours=2)))
 
+    def test_daily_worker_tracks_only_new_completed_intraday_candles_while_open(self) -> None:
+        zone = self.candles.index.tz
+        self.now = datetime(2026, 9, 1, 9, 26, tzinfo=zone)
+        stamps = pd.date_range("2026-09-01 09:15", periods=3, freq="5min", tz=zone)
+        frame = pd.DataFrame(
+            {
+                "Open": [100.0, 101.0, 102.0],
+                "High": [101.0, 102.0, 103.0],
+                "Low": [99.0, 100.0, 101.0],
+                "Close": [100.5, 101.5, 102.5],
+                "Volume": [1_000.0, 1_000.0, 1_000.0],
+            },
+            index=stamps,
+        )
+        engine = SignalEngine(
+            market=market_spec("NSE"),
+            strategy=STRATEGIES.get("rsi_dip_ladder_v1"),
+            configuration={},
+            risk=RiskSettings(),
+            timeframe="1d",
+            repository=FakeSignalRepository(),
+            clock=lambda: self.now,
+        )
+        worker = MarketSignalWorker(
+            market=market_spec("NSE"),
+            engine=engine,
+            source=self.Source(frame),
+            universe=lambda: [],
+            status_repository=None,
+            clock=lambda: self.now,
+        )
+        received: list[pd.Timestamp] = []
+        worker.configure_market_tracking(
+            symbols=lambda: ["M&M"],
+            listener=lambda _symbol, _row, stamp: received.append(pd.Timestamp(stamp)),
+        )
+        self.assertEqual(worker.poll_market_once(), 2)  # 09:25 candle is still forming
+        self.assertEqual(worker.poll_market_once(), 0)
+        self.now = datetime(2026, 9, 1, 9, 31, tzinfo=zone)
+        self.assertEqual(worker.poll_market_once(), 1)
+        self.assertEqual(received, list(stamps))
+
 
 @unittest.skipUnless(TEST_DATABASE_URL, "TEST_DATABASE_URL is not set")
 class SignalRepositoryDatabaseTests(unittest.TestCase):

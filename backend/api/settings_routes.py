@@ -22,7 +22,7 @@ RISK_SCHEMA: dict[str, dict[str, Any]] = {
     "additionalQuantityPct": {"type": "number", "default": 50.0, "minimum": 0.01, "maximum": 100.0, "label": "Additional lot size %"},
     "additionalSizingMode": {"type": "string", "default": "REDUCE_EVERY_NEW_LOT", "enum": ["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"], "label": "Additional lot sizing"},
     "maximumEntriesPerCycle": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100, "label": "Maximum lots per cycle"},
-    "priceModel": {"type": "string", "default": "SIGNAL_CLOSE", "enum": ["SIGNAL_CLOSE", "NEXT_OPEN"], "label": "Paper entry price"},
+    "priceModel": {"type": "string", "default": "NEXT_OPEN", "enum": ["SIGNAL_CLOSE", "NEXT_OPEN"], "label": "Paper entry price"},
     "stopLossPct": {"type": "number", "default": None, "minimum": 0.01, "maximum": 99.99, "label": "Stop loss % (optional)"},
     "maximumHoldingBars": {"type": "integer", "default": None, "minimum": 1, "label": "Maximum holding bars (optional)"},
 }

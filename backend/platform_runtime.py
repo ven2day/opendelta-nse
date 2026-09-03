@@ -142,15 +142,32 @@ class PlatformRuntime:
             broker = self.paper_broker(market) if paper_enabled else None
             if broker is None:
                 logger.info("%s paper trading v2 is disabled", market)
+            broker_tracking_owner = False
             for binding in self.live_bindings(market):
                 worker = self.build_signal_worker(market, binding=binding)
                 if broker is not None:
                     worker.engine.publish = broker.on_signal
+                    if binding.timeframe != "1d":
+                        def forward_candle(symbol, row, stamp, *, _broker=broker, _timeframe=binding.timeframe):
+                            _broker.on_completed_candle(symbol, row, stamp, timeframe=_timeframe)
 
-                    def forward_candle(symbol, row, stamp, *, _broker=broker, _timeframe=binding.timeframe):
-                        _broker.on_completed_candle(symbol, row, stamp, timeframe=_timeframe)
+                        worker.add_candle_listener(forward_candle)
+                if binding.timeframe == "1d":
+                    track_broker = broker is not None and not broker_tracking_owner
+                    broker_tracking_owner = broker_tracking_owner or track_broker
 
-                    worker.add_candle_listener(forward_candle)
+                    def tracked_symbols(*, _engine=worker.engine, _broker=broker if track_broker else None):
+                        symbols = set(_engine.tracked_symbols())
+                        if _broker is not None:
+                            symbols.update(_broker.tracked_symbols())
+                        return sorted(symbols)
+
+                    def forward_market_candle(symbol, row, stamp, *, _engine=worker.engine, _broker=broker if track_broker else None):
+                        _engine.track_market_candle(symbol, row, stamp)
+                        if _broker is not None:
+                            _broker.on_market_candle(symbol, row, stamp, execution_timeframe="5m")
+
+                    worker.configure_market_tracking(symbols=tracked_symbols, listener=forward_market_candle)
                 key = self._worker_key(market, binding)
                 with self._lock:
                     self._workers[key] = worker
@@ -173,7 +190,19 @@ class PlatformRuntime:
         primary = self.live_bindings(key)[0]
         strategy = STRATEGIES.get(primary.strategy_id)
         active = self.strategy_configs().active(spec.market, strategy.strategy_id)
-        policy = ExecutionPolicy.from_mapping((active or {}).get("riskSettings"), whole_units=(key == "NSE"))
+        risk_settings = dict((active or {}).get("riskSettings") or {})
+        if primary.timeframe == "1d" and risk_settings.get("priceModel") == "SIGNAL_CLOSE":
+            logger.warning(
+                "%s %s uses 1d signals; overriding non-executable SIGNAL_CLOSE paper pricing with NEXT_OPEN",
+                key,
+                primary.strategy_id,
+            )
+            risk_settings["priceModel"] = "NEXT_OPEN"
+        policy = ExecutionPolicy.from_mapping(
+            risk_settings,
+            whole_units=(key == "NSE"),
+            price_model="NEXT_OPEN",
+        )
         broker = PaperBroker(market=spec, repositories=self.paper_repositories(), policy=policy, timeframe=primary.timeframe, clock=self.clock)
         with self._lock:
             self._brokers.setdefault(key, broker)

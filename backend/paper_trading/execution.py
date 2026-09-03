@@ -23,7 +23,9 @@ class ExecutionPolicy:
     additional_sizing_mode: str = "REDUCE_EVERY_NEW_LOT"
     minimum_quantity: float | None = None  # defaults to 1 whole unit, or 1e-8 for fractional markets
     maximum_entries_per_cycle: int = 10
-    price_model: str = "SIGNAL_CLOSE"
+    # A completed candle close is already historical when a signal exists.
+    # NEXT_OPEN is the only executable default for forward paper trading.
+    price_model: str = "NEXT_OPEN"
     stop_loss_pct: float | None = None
     maximum_holding_bars: int | None = None
     whole_units: bool = True  # shares are whole; crypto quantities may be fractional

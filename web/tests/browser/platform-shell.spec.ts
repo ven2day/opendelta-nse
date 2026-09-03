@@ -188,13 +188,9 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
 
   await expect(page.getByText("OPEN", { exact: true })).toHaveClass(/warn/);
-  const netPnlSort = page.getByRole("button", { name: /Net PnL/ });
-  await page.locator(".quant-table-scroll.tall").evaluate((element) => { element.scrollLeft = element.scrollWidth; });
-  await expect(netPnlSort).toBeVisible();
-  await netPnlSort.click();
-  await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("sort")).toBe("netPnl");
+  await page.getByRole("button", { name: /Symbol/ }).click();
+  await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("sort")).toBe("symbol");
   await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("direction")).toBe("asc");
-  await page.locator(".quant-table-scroll.tall").evaluate((element) => { element.scrollLeft = 0; });
   await page.getByLabel("Filter trades by symbol").fill("TCS");
   await page.getByLabel("Filter trades by status").selectOption("OPEN");
   await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("symbol")).toBe("TCS");

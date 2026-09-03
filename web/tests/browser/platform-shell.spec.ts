@@ -269,12 +269,36 @@ test("a saved result from a removed strategy is ignored and cannot crash the Bac
   await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 });
 
-test("desktop topbar navigation keeps the content full width", async ({ page }) => {
+test("desktop navigation stays on one row and the workspace uses the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
+  await page.goto("/screener");
   await expect(page.locator(".platform-topnav")).toBeVisible();
   await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
   await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeLessThanOrEqual(1);
+  const shell = await page.locator(".platform-topbar").evaluate((topbar) => {
+    const bar = topbar.getBoundingClientRect();
+    const children = Array.from(topbar.children).map((element) => element.getBoundingClientRect());
+    return {
+      height: bar.height,
+      childrenFitOneRow: children.every((box) => box.top >= bar.top - 1 && box.bottom <= bar.bottom + 1),
+    };
+  });
+  expect(shell.height).toBeLessThanOrEqual(60);
+  expect(shell.childrenFitOneRow).toBe(true);
+  const workspaceWidth = await page.locator(".quant-workspace").evaluate((element) => element.getBoundingClientRect().width);
+  expect(workspaceWidth).toBeGreaterThanOrEqual(1400);
+  const screenerColumns = await page.locator(".quant-screener-layout").evaluate((layout) => {
+    const sidebar = layout.querySelector(".quant-screener-sidebar")?.getBoundingClientRect();
+    const results = Array.from(layout.children).at(1)?.getBoundingClientRect();
+    return sidebar && results ? {
+      aligned: Math.abs(sidebar.top - results.top) <= 1,
+      sidebarWidth: sidebar.width,
+      resultsWidth: results.width,
+    } : null;
+  });
+  expect(screenerColumns).not.toBeNull();
+  expect(screenerColumns?.aligned).toBe(true);
+  expect(screenerColumns?.resultsWidth ?? 0).toBeGreaterThan((screenerColumns?.sidebarWidth ?? 0) * 2);
   expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-open"))).toBeNull();
 });
 

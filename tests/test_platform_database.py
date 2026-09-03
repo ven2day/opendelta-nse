@@ -92,5 +92,10 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertEqual([item["lotId"] for item in listed], ["TCS-Cycle1-Lot1", "TCS-Cycle1-Lot2"])
         self.assertEqual(listed[0]["netPnl"], 50.0)
         self.assertEqual(listed[1]["status"], "OPEN")
+        open_trades = self.trades.list(record["runId"], symbol="CS", status="OPEN", sort_by="netPnl", direction="desc")
+        self.assertEqual([item["lotId"] for item in open_trades], ["TCS-Cycle1-Lot2"])
+        self.assertEqual(self.trades.count(record["runId"], symbol="CS", status="OPEN"), 1)
+        with self.assertRaises(ValueError):
+            self.trades.list(record["runId"], sort_by="not_a_column")
         writer.finished(record["runId"], status="COMPLETE", metrics={"completedTrades": 1})
         self.assertEqual(self.runs.get(record["runId"])["status"], "COMPLETE")

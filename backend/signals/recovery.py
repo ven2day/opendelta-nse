@@ -27,6 +27,10 @@ def rebuild_histories(engine: SignalEngine, source: CandleSource, processor: Can
             failed.append({"symbol": symbol, "message": str(error)[:240]})
     latest = engine.history.latest_overall()
     engine.last_completed = latest
-    open_signals = engine.repository.open(engine.market.market)
+    open_signals = engine.repository.open(
+        engine.market.market,
+        strategy_id=engine.strategy.strategy_id,
+        timeframe=engine.timeframe,
+    )
     logger.info("Recovered %s %s symbols (%s failed) with %s open signal(s)", seeded, engine.market.market, len(failed), len(open_signals))
     return {"symbolsSeeded": seeded, "symbolsFailed": failed, "openSignals": len(open_signals), "lastCompletedCandle": latest.isoformat() if latest is not None else None}

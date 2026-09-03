@@ -25,7 +25,9 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const { data, error, loading, reload, refresh } = useV2Resource(load, DASHBOARD_REFRESH_MS);
   const query = marketQuery(market);
   const account = data?.paper.available ? data.paper.data?.account ?? null : null;
-  const worker = data?.signalEngine.data?.worker ?? data?.signalEngine.data?.stored ?? null;
+  const signalWorkers = data?.signalEngine.data?.workers ?? [];
+  const storedWorkers = data?.signalEngine.data?.stored ?? [];
+  const worker = signalWorkers[0] ?? storedWorkers[0] ?? null;
   const freshness = data?.marketData.data?.dataFreshness ?? null;
   const universe = data?.screener.data?.activeUniverse ?? null;
 
@@ -89,16 +91,14 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
 
       <Panel icon={<Radio size={17} />} title="Signal engine" description="Live worker report and the last stored engine heartbeat." aside={<a className="quant-action-link" href={`/signals${query}`}>Open signals</a>}>
         <SectionBody section={data.signalEngine}>{(section) => <dl className="quant-facts">
-          <div><dt>Worker</dt><dd>{section.worker?.status ?? "Not running"}</dd></div>
-          <div><dt>Connection</dt><dd>{section.worker?.connectionStatus ?? section.stored?.connectionStatus ?? "—"}</dd></div>
-          <div><dt>Data age</dt><dd>{formatAge(section.worker?.dataAgeSeconds ?? section.stored?.dataAgeSeconds)}</dd></div>
-          <div><dt>Last candle</dt><dd>{formatDateTime(section.worker?.lastCompletedCandle ?? section.stored?.lastCompletedCandle, market)}</dd></div>
-          <div><dt>Symbols</dt><dd>{section.worker?.symbols ? formatInteger(section.worker.symbols.length) : "—"}</dd></div>
-          <div><dt>Signals created</dt><dd>{formatInteger(section.worker?.signalsCreated)}</dd></div>
-          <div><dt>Duplicates rejected</dt><dd>{formatInteger(section.worker?.duplicatesRejected)}</dd></div>
-          <div><dt>Stored status</dt><dd>{section.stored?.status ?? "—"}</dd></div>
-          <div><dt>Stored at</dt><dd>{formatDateTime(section.stored?.updatedAt, market)}</dd></div>
-          <div><dt>Message</dt><dd className="wrap">{section.worker?.message ?? section.stored?.message ?? "—"}</dd></div>
+          <div><dt>Workers</dt><dd>{formatInteger(section.workers.length)}</dd></div>
+          <div><dt>Active strategies</dt><dd className="wrap">{section.workers.map((item) => `${item.strategyId} · ${item.timeframe}`).join(", ") || "Not running"}</dd></div>
+          <div><dt>Connection</dt><dd>{section.workers.every((item) => item.connectionStatus === "CONNECTED") && section.workers.length ? "CONNECTED" : (section.workers[0]?.connectionStatus ?? section.stored[0]?.connectionStatus ?? "—")}</dd></div>
+          <div><dt>Data age</dt><dd>{formatAge(section.workers[0]?.dataAgeSeconds ?? section.stored[0]?.dataAgeSeconds)}</dd></div>
+          <div><dt>Last candle</dt><dd>{formatDateTime(section.workers[0]?.lastCompletedCandle ?? section.stored[0]?.lastCompletedCandle, market)}</dd></div>
+          <div><dt>Signals created</dt><dd>{formatInteger(section.workers.reduce((total, item) => total + (item.signalsCreated ?? 0), 0))}</dd></div>
+          <div><dt>Duplicates rejected</dt><dd>{formatInteger(section.workers.reduce((total, item) => total + (item.duplicatesRejected ?? 0), 0))}</dd></div>
+          <div><dt>Message</dt><dd className="wrap">{section.workers[0]?.message ?? section.stored[0]?.message ?? "—"}</dd></div>
         </dl>}</SectionBody>
       </Panel>
 

@@ -105,7 +105,7 @@ routes answer 503 with the reason until an operator runs the command (or sets
 `PLATFORM_AUTO_MIGRATE=true` deliberately).
 
 Duplicate protection: `live_signals` is unique on
-`(market, strategy_version, symbol, timeframe, candle_timestamp, signal_type)`;
+`(market, strategy_id, strategy_version, symbol, timeframe, candle_timestamp, signal_type)`;
 `paper_orders` allows one filled BUY per signal per account; `backtest_trades`
 is unique per `(run_id, lot_id)`.
 
@@ -117,11 +117,22 @@ is unique per `(run_id, lot_id)`.
 | `PLATFORM_CANDLE_READ_MODE` | shared engine source: `legacy` (default), `timescale-fallback`, or strict `timescale` |
 | `SCREENER_CANDLE_BATCH_SIZE` | symbols read per TimescaleDB screener batch (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup (otherwise explicit) |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start the NSE live-signal worker (session-aware Dhan polling) |
-| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start the Crypto live-signal worker (24/7) |
+| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start all configured NSE live-signal workers (session-aware polling) |
+| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start all configured Crypto live-signal workers (24/7) |
 | `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default true when the worker runs) |
-| `NSE_LIVE_STRATEGY` / `CRYPTO_LIVE_STRATEGY` | strategy id for live signals (default `ema_vwap_strong_buy`) |
+| `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
+| `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | backwards-compatible single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
+
+Example with the daily swing strategy plus a future scalping strategy:
+
+```dotenv
+NSE_LIVE_STRATEGIES=[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"},{"strategyId":"scalping_v1","timeframe":"5m","enabled":false}]
+```
+
+Each binding has an independent worker, completed-candle history, health row,
+deduplication identity and paper-lot grouping. Enable the second entry only
+after `scalping_v1` is registered.
 
 The legacy NSE live-signal engine and legacy pages keep running unchanged
 until the v2 workers are switched on and the legacy routes are retired.

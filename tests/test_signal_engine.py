@@ -32,7 +32,7 @@ class FakeSignalRepository:
         self.published: list[dict[str, Any]] = []
 
     def insert_new(self, **values: Any) -> dict[str, Any] | None:
-        key = (values["market"], values["strategy_version"], values["symbol"], values["timeframe"], pd.Timestamp(values["candle_timestamp"]), values["signal_type"])
+        key = (values["market"], values["strategy_id"], values["strategy_version"], values["symbol"], values["timeframe"], pd.Timestamp(values["candle_timestamp"]), values["signal_type"])
         if key in self.keys:
             return None
         self.keys.add(key)
@@ -48,8 +48,16 @@ class FakeSignalRepository:
         self.rows[signal_id] = row
         return dict(row)
 
-    def open(self, market: str, symbol: str | None = None) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.rows.values() if row["market"] == market and row["status"] in {"STRONG_BUY", "HOLDING"} and (symbol is None or row["symbol"] == symbol)]
+    def open(self, market: str, symbol: str | None = None, *, strategy_id: str | None = None, timeframe: str | None = None) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in self.rows.values()
+            if row["market"] == market
+            and row["status"] in {"STRONG_BUY", "HOLDING"}
+            and (symbol is None or row["symbol"] == symbol)
+            and (strategy_id is None or row["strategyId"] == strategy_id)
+            and (timeframe is None or row["timeframe"] == timeframe)
+        ]
 
     def mark_holding(self, signal_id: str, *, last_price: float) -> None:
         if self.rows[signal_id]["status"] == "STRONG_BUY":
@@ -144,6 +152,24 @@ class SignalEngineTests(unittest.TestCase):
         self.assertIsNone(engine.process_completed_candle("SYN", row))
         self.assertEqual(len(engine.repository.rows), 0)
 
+    def test_nse_daily_candle_becomes_complete_only_at_session_close(self) -> None:
+        stamp = pd.Timestamp("2026-09-01 00:00", tz=IST)
+        frame = pd.DataFrame(
+            {"Open": [100.0], "High": [105.0], "Low": [99.0], "Close": [104.0], "Volume": [1_000]},
+            index=[stamp],
+        )
+        processor = CandleProcessor(
+            bar_minutes=375,
+            timezone=IST,
+            clock=lambda: stamp.to_pydatetime(),
+            daily_session_close=market_spec("NSE").daily_session_close,
+        )
+        self.assertTrue(processor.completed(frame, stamp.replace(hour=15, minute=29).to_pydatetime()).empty)
+        self.assertEqual(
+            list(processor.completed(frame, stamp.replace(hour=15, minute=30).to_pydatetime()).index),
+            [stamp],
+        )
+
     def test_lifecycle_holding_then_target_hit_with_last_price_tracking(self) -> None:
         repository = FakeSignalRepository()
         engine = make_engine(repository)
@@ -168,6 +194,30 @@ class SignalEngineTests(unittest.TestCase):
         self.assertEqual(engine.repository.open("NSE", "SYN"), [])
         engine.process_completed_candle("SYN", self.candles.iloc[[bar + 3]])
         self.assertEqual(row["status"], "TARGET_HIT")  # closed signals are never reopened
+
+    def test_one_strategy_worker_cannot_advance_another_strategys_signal(self) -> None:
+        repository = FakeSignalRepository()
+        stamp = self.candles.index[self.signal_bar - 1]
+        foreign = repository.insert_new(
+            market="NSE",
+            strategy_id="rsi_dip_ladder_v1",
+            strategy_version="1.0.0",
+            symbol="SYN",
+            timeframe="1d",
+            candle_timestamp=stamp,
+            signal_type="BUY",
+            signal_price=100.0,
+            target_price=100.01,
+            stop_price=None,
+            expires_at=None,
+            reasons=["RSI_RECOVERY"],
+            indicators={"rsi": 35.0},
+            configuration_snapshot={"target_pct": 5.0},
+        )
+        engine = make_engine(repository)
+        engine.history.seed("SYN", self.candles.iloc[: self.signal_bar])
+        engine.process_completed_candle("SYN", self.candles.iloc[[self.signal_bar]])
+        self.assertEqual(repository.rows[foreign["signalId"]]["status"], "STRONG_BUY")
 
     def test_stop_loss_and_expiry_close_signals(self) -> None:
         repository = FakeSignalRepository()
@@ -296,6 +346,31 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(status["status"], "MARKET_CLOSED")
         self.assertEqual(source.calls, 2)  # recovery only, one call per unique symbol; no polling while closed
 
+    def test_nse_daily_worker_polls_once_after_the_session_close(self) -> None:
+        engine = SignalEngine(
+            market=market_spec("NSE"),
+            strategy=STRATEGIES.get("rsi_dip_ladder_v1"),
+            configuration={},
+            risk=RiskSettings(),
+            timeframe="1d",
+            repository=FakeSignalRepository(),
+            clock=lambda: self.now,
+        )
+        worker = MarketSignalWorker(
+            market=market_spec("NSE"),
+            engine=engine,
+            source=self.Source(self.candles),
+            universe=lambda: ["SYN"],
+            status_repository=None,
+            clock=lambda: self.now,
+        )
+        before_close = datetime(2026, 9, 1, 15, 29, tzinfo=self.candles.index.tz)
+        at_close = datetime(2026, 9, 1, 15, 30, tzinfo=self.candles.index.tz)
+        self.assertFalse(worker._poll_is_due(before_close))
+        self.assertTrue(worker._poll_is_due(at_close))
+        worker._last_daily_poll_date = at_close.date()
+        self.assertFalse(worker._poll_is_due(at_close + timedelta(hours=2)))
+
 
 @unittest.skipUnless(TEST_DATABASE_URL, "TEST_DATABASE_URL is not set")
 class SignalRepositoryDatabaseTests(unittest.TestCase):
@@ -320,10 +395,12 @@ class SignalRepositoryDatabaseTests(unittest.TestCase):
     def test_database_uniqueness_constraint_rejects_duplicate_signals(self) -> None:
         first = self._insert()
         self.assertIsNotNone(first)
-        self.assertIsNone(self._insert())  # same market/version/symbol/timeframe/candle/type
+        self.assertIsNone(self._insert())  # same strategy/version/symbol/timeframe/candle/type
+        self.assertIsNotNone(self._insert(strategy_id="second_strategy"))  # semantic versions may match across strategies
         self.assertIsNotNone(self._insert(strategy_version="1.0.1"))
         self.assertIsNotNone(self._insert(candle_timestamp=datetime(2026, 9, 1, 10, 5, tzinfo=pd.Timestamp.now(tz=IST).tzinfo)))
-        self.assertEqual(len(self.signals.list("NSE", symbol="TCS")), 3)
+        self.assertEqual(len(self.signals.list("NSE", symbol="TCS")), 4)
+        self.assertEqual(len(self.signals.list("NSE", strategy_id="second_strategy", timeframe="5m")), 1)
 
     def test_lifecycle_updates_and_engine_status_upsert(self) -> None:
         stored = self._insert(symbol="INFY")

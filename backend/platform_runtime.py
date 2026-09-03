@@ -46,11 +46,11 @@ from backend.data.repositories import (
     StrategyConfigRepository,
 )
 from backend.markets.base import CandleSource, market_spec
+from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
 
-DEFAULT_LIVE_STRATEGY = "ema_vwap_strong_buy"
 LIVE_TIMEFRAME = "5m"
 
 logger = logging.getLogger("opendelta.platform")
@@ -138,17 +138,24 @@ class PlatformRuntime:
         for market in ("NSE", "CRYPTO"):
             if not _truthy(os.environ.get(f"{market}_SIGNAL_ENGINE_V2_ENABLED")):
                 continue
-            worker = self.build_signal_worker(market)
-            if not _truthy(os.environ.get(f"{market}_PAPER_TRADING_V2_ENABLED", "true")):
+            paper_enabled = _truthy(os.environ.get(f"{market}_PAPER_TRADING_V2_ENABLED", "true"))
+            broker = self.paper_broker(market) if paper_enabled else None
+            if broker is None:
                 logger.info("%s paper trading v2 is disabled", market)
-            else:
-                broker = self.paper_broker(market)
-                worker.engine.publish = broker.on_signal
-                worker.add_candle_listener(lambda symbol, row, stamp, _broker=broker: _broker.on_completed_candle(symbol, row, stamp))
-            with self._lock:
-                self._workers[market] = worker
-            worker.start()
-            logger.info("Started %s live-signal worker", market)
+            for binding in self.live_bindings(market):
+                worker = self.build_signal_worker(market, binding=binding)
+                if broker is not None:
+                    worker.engine.publish = broker.on_signal
+
+                    def forward_candle(symbol, row, stamp, *, _broker=broker, _timeframe=binding.timeframe):
+                        _broker.on_completed_candle(symbol, row, stamp, timeframe=_timeframe)
+
+                    worker.add_candle_listener(forward_candle)
+                key = self._worker_key(market, binding)
+                with self._lock:
+                    self._workers[key] = worker
+                worker.start()
+                logger.info("Started %s live-signal worker for %s at %s", market, binding.strategy_id, binding.timeframe)
 
     # ---- paper trading -----------------------------------------------------------
 
@@ -163,18 +170,47 @@ class PlatformRuntime:
         if broker is not None:
             return broker
         spec = market_spec(key)
-        strategy = STRATEGIES.get(os.environ.get(f"{key}_LIVE_STRATEGY", DEFAULT_LIVE_STRATEGY))
+        primary = self.live_bindings(key)[0]
+        strategy = STRATEGIES.get(primary.strategy_id)
         active = self.strategy_configs().active(spec.market, strategy.strategy_id)
         policy = ExecutionPolicy.from_mapping((active or {}).get("riskSettings"), whole_units=(key == "NSE"))
-        broker = PaperBroker(market=spec, repositories=self.paper_repositories(), policy=policy, timeframe=LIVE_TIMEFRAME, clock=self.clock)
+        broker = PaperBroker(market=spec, repositories=self.paper_repositories(), policy=policy, timeframe=primary.timeframe, clock=self.clock)
         with self._lock:
             self._brokers.setdefault(key, broker)
             return self._brokers[key]
 
-    def build_signal_worker(self, market: str, *, strategy_id: str | None = None) -> MarketSignalWorker:
+    def live_bindings(self, market: str) -> tuple[LiveStrategyBinding, ...]:
+        bindings = live_strategy_bindings(market)
         spec = market_spec(market)
-        strategy_key = strategy_id or os.environ.get(f"{market}_LIVE_STRATEGY", DEFAULT_LIVE_STRATEGY)
-        strategy = STRATEGIES.get(strategy_key)
+        for binding in bindings:
+            strategy = STRATEGIES.get(binding.strategy_id)
+            if spec.market not in strategy.supported_markets:
+                raise ValueError(f"{binding.strategy_id} does not support {spec.market}")
+            if binding.timeframe not in strategy.supported_timeframes:
+                raise ValueError(f"{binding.strategy_id} does not support the {binding.timeframe} timeframe")
+        return bindings
+
+    @staticmethod
+    def _worker_key(market: str, binding: LiveStrategyBinding) -> str:
+        return f"{market.strip().upper()}:{binding.worker_key}"
+
+    def build_signal_worker(
+        self,
+        market: str,
+        *,
+        strategy_id: str | None = None,
+        timeframe: str | None = None,
+        binding: LiveStrategyBinding | None = None,
+    ) -> MarketSignalWorker:
+        spec = market_spec(market)
+        selected = binding or (
+            LiveStrategyBinding(strategy_id, timeframe or LIVE_TIMEFRAME)
+            if strategy_id is not None
+            else self.live_bindings(spec.market)[0]
+        )
+        strategy = STRATEGIES.get(selected.strategy_id)
+        if selected.timeframe not in strategy.supported_timeframes:
+            raise ValueError(f"{strategy.strategy_id} does not support the {selected.timeframe} timeframe")
         active = self.strategy_configs().active(spec.market, strategy.strategy_id)
         configuration = active["configuration"] if active else {}
         risk = RiskSettings.from_mapping(active["riskSettings"] if active else None)
@@ -183,7 +219,7 @@ class PlatformRuntime:
             strategy=strategy,
             configuration=configuration,
             risk=risk,
-            timeframe=LIVE_TIMEFRAME,
+            timeframe=selected.timeframe,
             repository=self.signals(),
             clock=self.clock,
         )
@@ -204,12 +240,18 @@ class PlatformRuntime:
             status_repository=self.engine_status(),
             clock=self.clock,
             poll_seconds=float(os.environ.get(f"{market}_SIGNAL_POLL_SECONDS", "120" if market == "NSE" else "60")),
+            lookback_days=int(os.environ.get(f"{market}_SIGNAL_LOOKBACK_DAYS", "180" if selected.timeframe == "1d" else "2")),
         )
 
     def worker_status(self, market: str) -> dict[str, Any] | None:
+        statuses = self.worker_statuses(market)
+        return statuses[0] if statuses else None
+
+    def worker_statuses(self, market: str) -> list[dict[str, Any]]:
+        prefix = f"{market.strip().upper()}:"
         with self._lock:
-            worker = self._workers.get(market)
-        return worker.status() if worker else None
+            workers = [worker for key, worker in self._workers.items() if key.startswith(prefix)]
+        return [worker.status() for worker in workers]
 
     def signals(self) -> LiveSignalRepository:
         return LiveSignalRepository(self.require_database())
@@ -306,12 +348,15 @@ def install_platform(app: FastAPI, runtime: PlatformRuntime, *, overview: Callab
             overview=overview or (lambda: {}),
             screener_runs=lambda market: ScreenerRunRepository(runtime.require_database()).list(market, limit=1),
             backtest_runs=lambda market: runtime.runs().list(market, limit=5),
-            engine_health=lambda market: {"stored": runtime.engine_status().get("live-signals-v2", market), "worker": runtime.worker_status(market)},
+            engine_health=lambda market: {
+                "stored": [row for row in runtime.engine_status().list() if row["market"] == market and row["engine"].startswith("live-signals-v2")],
+                "workers": runtime.worker_statuses(market),
+            },
             paper_summary=lambda market: runtime.paper_broker(market).summary(),
             paper_positions=lambda market: runtime.paper_broker(market).positions(),
             active_universe=lambda market: runtime.universes().active(market),
         ).routes
     )
-    app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_status=runtime.worker_status).routes)
+    app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_statuses=runtime.worker_statuses).routes)
     app.router.routes.extend(create_paper_trading_router(runtime.paper_broker).routes)
     app.router.routes.extend(create_screener_router(runtime.screener()).routes)

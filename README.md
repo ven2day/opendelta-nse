@@ -194,7 +194,8 @@ opendelta-nse/
 | `PLATFORM_AUTO_MIGRATE` | `true` to migrate at startup; otherwise `python -m backend.data.migrate` |
 | `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
 | `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |
-| `NSE_LIVE_STRATEGY`, `CRYPTO_LIVE_STRATEGY` | strategy id for live signals |
+| `NSE_LIVE_STRATEGIES`, `CRYPTO_LIVE_STRATEGIES` | JSON array of live `strategyId` + `timeframe` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
+| `NSE_LIVE_STRATEGY`, `NSE_LIVE_TIMEFRAME` | legacy single-binding variables, used only when the plural JSON variable is absent |
 | `DHAN_*` | Dhan credentials, read only by `backend/collector.py` |
 | `BACKTEST_WORKERS`, `BACKTEST_CACHE_DIR` | legacy backtest service tuning and candle cache |
 

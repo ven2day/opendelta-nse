@@ -22,8 +22,13 @@ class Portfolio:
             portfolio.pending_entries.setdefault(entry["symbol"], []).append(dict(entry))
         return portfolio
 
-    def lots_for(self, symbol: str) -> list[dict[str, Any]]:
-        return list(self.open_lots.get(symbol, []))
+    def lots_for(self, symbol: str, *, strategy_id: str | None = None, timeframe: str | None = None) -> list[dict[str, Any]]:
+        lots = list(self.open_lots.get(symbol, []))
+        if strategy_id is not None:
+            lots = [lot for lot in lots if lot["strategyId"] == strategy_id]
+        if timeframe is not None:
+            lots = [lot for lot in lots if lot["timeframe"] == timeframe]
+        return lots
 
     def add_lot(self, lot: Mapping[str, Any]) -> None:
         self.open_lots.setdefault(lot["symbol"], []).append(dict(lot))

@@ -87,10 +87,11 @@ until these are set on `vento-nse-backtest.service`:
 | --- | --- |
 | `MARKET_DATA_DATABASE_URL` | already set by the TimescaleDB bootstrap |
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup instead of explicitly |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start the NSE v2 live-signal worker |
-| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start the Crypto v2 live-signal worker |
+| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured NSE v2 live-signal worker |
+| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured Crypto v2 live-signal worker |
 | `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default `true` with the worker) |
-| `NSE_LIVE_STRATEGY` / `CRYPTO_LIVE_STRATEGY` | strategy id (default `ema_vwap_strong_buy`) |
+| `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to daily `rsi_dip_ladder_v1` |
+| `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | legacy single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 
 Suggested order: apply migrations → restart the service → verify

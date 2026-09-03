@@ -16,18 +16,24 @@ const FALLBACK_COLOURS: Record<string, string> = { STRONG_BUY: "blue", HOLDING: 
 
 export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
   const [status, setStatus] = useState("");
+  const [strategy, setStrategy] = useState("");
+  const [timeframe, setTimeframe] = useState("");
   const [symbolInput, setSymbolInput] = useState("");
   const [symbol, setSymbol] = useState("");
   const loadHealth = useCallback(() => v2Get<SignalsHealth>("signals/health", { market }), [market]);
-  const loadSignals = useCallback(() => v2Get<SignalsResponse>("signals", { market, status: status || undefined, symbol: symbol || undefined, limit: SIGNAL_LIMIT }), [market, status, symbol]);
+  const loadSignals = useCallback(() => v2Get<SignalsResponse>("signals", { market, status: status || undefined, symbol: symbol || undefined, strategy: strategy || undefined, timeframe: timeframe || undefined, limit: SIGNAL_LIMIT }), [market, status, symbol, strategy, timeframe]);
   const health = useV2Resource(loadHealth, SIGNAL_REFRESH_MS);
   const signals = useV2Resource(loadSignals, SIGNAL_REFRESH_MS);
 
-  const worker = health.data?.workers?.[market] ?? null;
-  const stored = health.data?.engines?.find((engine) => engine.market === market) ?? null;
-  const engine = worker ?? stored;
+  const workers = health.data?.workers?.[market] ?? [];
+  const stored = health.data?.engines?.filter((engine) => engine.market === market) ?? [];
+  const engine = workers[0] ?? stored[0] ?? null;
   const colours = { ...FALLBACK_COLOURS, ...(signals.data?.colours ?? {}) };
   const rows = signals.data?.signals ?? [];
+  const strategyOptions = Array.from(new Set([...workers.map((item) => item.strategyId), ...rows.map((item) => item.strategyId)].filter((item): item is string => Boolean(item))));
+  const timeframeOptions = Array.from(new Set([...workers.map((item) => item.timeframe), ...rows.map((item) => item.timeframe)].filter((item): item is string => Boolean(item))));
+  const readyWorkers = workers.filter((item) => item.status === "READY").length;
+  const symbols = new Set(workers.flatMap((item) => item.symbols ?? []));
   const counts = rows.reduce<Record<string, number>>((accumulator, signal) => ({ ...accumulator, [signal.status]: (accumulator[signal.status] ?? 0) + 1 }), {});
 
   return <main className="quant-workspace">
@@ -38,14 +44,25 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
     />
 
     {health.error ? <RequestErrorState error={health.error} retry={health.reload} /> : <div className="quant-health-bar" role="status" aria-label="Signal engine health">
-      <div><span>Worker</span><strong>{health.loading ? "Checking" : (engine?.status ?? "Not running")}</strong><small>{worker ? "Live worker report" : stored ? "Last stored heartbeat" : "No engine report for this market"}</small></div>
-      <div><span>Connection</span><strong>{engine?.connectionStatus ?? "—"}</strong></div>
+      <div><span>Workers</span><strong>{health.loading ? "Checking" : `${readyWorkers} / ${workers.length} ready`}</strong><small>{workers.length ? "Independent strategy/timeframe workers" : stored.length ? "Last stored heartbeats" : "No engine report for this market"}</small></div>
+      <div><span>Connection</span><strong>{workers.length && workers.every((item) => item.connectionStatus === "CONNECTED") ? "CONNECTED" : (engine?.connectionStatus ?? "—")}</strong></div>
       <div><span>Data age</span><strong>{formatAge(engine?.dataAgeSeconds)}</strong></div>
       <div><span>Last completed candle</span><strong>{formatDateTime(engine?.lastCompletedCandle, market)}</strong></div>
-      <div><span>Symbols</span><strong>{worker?.symbols ? formatInteger(worker.symbols.length) : "—"}</strong></div>
-      <div><span>Created / duplicates</span><strong>{formatInteger(worker?.signalsCreated)} / {formatInteger(worker?.duplicatesRejected)}</strong></div>
-      <div><span>Message</span><strong title={engine?.message ?? undefined}>{engine?.message ?? "—"}</strong><small>{stored?.updatedAt ? `Stored ${formatDateTime(stored.updatedAt, market)}` : ""}</small></div>
+      <div><span>Symbols</span><strong>{workers.length ? formatInteger(symbols.size) : "—"}</strong></div>
+      <div><span>Created / duplicates</span><strong>{formatInteger(workers.reduce((total, item) => total + (item.signalsCreated ?? 0), 0))} / {formatInteger(workers.reduce((total, item) => total + (item.duplicatesRejected ?? 0), 0))}</strong></div>
+      <div><span>Message</span><strong title={engine?.message ?? undefined}>{workers.length ? `${workers.length} active strategy worker${workers.length === 1 ? "" : "s"}` : (engine?.message ?? "—")}</strong><small>{stored[0]?.updatedAt ? `Stored ${formatDateTime(stored[0].updatedAt, market)}` : ""}</small></div>
     </div>}
+
+    <Panel icon={<Activity size={17} />} title="Active signal strategies">
+      {workers.length ? <div className="quant-table-scroll"><table className="quant-table">
+        <thead><tr><th>Strategy</th><th>Timeframe</th><th>Status</th><th>Connection</th><th>Last completed candle</th><th className="numeric">Signals</th></tr></thead>
+        <tbody>{workers.map((item) => <tr key={item.engine ?? `${item.strategyId}:${item.timeframe}`}>
+          <td><strong>{item.strategyId}</strong><small>{item.strategyVersion ? `v${item.strategyVersion}` : ""}</small></td>
+          <td>{item.timeframe}</td><td><StatusBadge tone={tone(item.status)}>{item.status ?? "unknown"}</StatusBadge></td>
+          <td>{item.connectionStatus ?? "—"}</td><td>{formatDateTime(item.lastCompletedCandle, market)}</td><td className="numeric">{formatInteger(item.signalsCreated)}</td>
+        </tr>)}</tbody>
+      </table></div> : <EmptyState title="No active strategy workers" description="Enable at least one live strategy for this market." />}
+    </Panel>
 
     <section className="quant-kpi-grid dense">
       {STATUS_OPTIONS.map((option) => <article key={option}><span className="quant-signal-status" data-colour={colours[option] ?? "grey"}>{option.replace("_", " ")}</span><strong>{formatInteger(counts[option] ?? 0)}</strong></article>)}
@@ -53,6 +70,8 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
 
     <Panel icon={<Radio size={17} />} title="Signals" description={`Latest ${SIGNAL_LIMIT} ${marketLabel(market)} signals matching the filter.`} aside={<form className="quant-toolbar" onSubmit={(event) => { event.preventDefault(); setSymbol(symbolInput.trim().toUpperCase()); }}>
       <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace("_", " ")}</option>)}</select></label>
+      <label><span>Strategy</span><select value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="">All strategies</option>{strategyOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
+      <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframe(event.target.value)}><option value="">All timeframes</option>{timeframeOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
       <label><span>Symbol</span><input type="text" value={symbolInput} placeholder="Any symbol" onChange={(event) => setSymbolInput(event.target.value)} /></label>
       <button type="submit">Apply</button>
     </form>}>

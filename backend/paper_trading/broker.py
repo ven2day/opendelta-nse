@@ -105,7 +105,9 @@ class PaperBroker:
         if signal.get("market") != self.market.market or signal.get("signalType") != "BUY":
             return None
         with self._lock:
-            open_lots = self.portfolio.lots_for(signal["symbol"])
+            open_lots = self.portfolio.lots_for(
+                signal["symbol"], strategy_id=signal["strategyId"], timeframe=signal["timeframe"]
+            )
             if open_lots and PriceBandLadder.from_config(open_lots[0].get("configurationSnapshot")) is not None:
                 # The initial RSI signal starts the cycle. Further entries are
                 # driven only by completed-candle dip thresholds below.
@@ -118,7 +120,8 @@ class PaperBroker:
     def _fill_entry(self, signal: Mapping[str, Any], reference_price: float, entry_time: datetime) -> dict[str, Any] | None:
         account_id = self.account["accountId"]
         symbol = signal["symbol"]
-        open_lots = self.portfolio.lots_for(symbol)
+        signal_timeframe = str(signal.get("timeframe") or self.timeframe)
+        open_lots = self.portfolio.lots_for(symbol, strategy_id=signal["strategyId"], timeframe=signal_timeframe)
         snapshot = signal.get("configurationSnapshot") or {}
         ladder = PriceBandLadder.from_config(snapshot)
         cycles, _ = self.repositories.lots.cycle_state(account_id, symbol)
@@ -160,12 +163,14 @@ class PaperBroker:
             self.rejected += 1
             return None
         target_pct = float(snapshot.get("target_pct") or ((float(signal["targetPrice"]) / float(signal["signalPrice"]) - 1) * 100 if signal.get("targetPrice") else 1.0))
-        target, stop, expires = self.policy.targets(round(fill.price, 4), target_pct, entry_time, self.bar_minutes)
+        target, stop, expires = self.policy.targets(
+            round(fill.price, 4), target_pct, entry_time, self.market.minutes(signal_timeframe)
+        )
         if signal.get("stopPrice") is not None and stop is None:
             stop = float(signal["stopPrice"])
         lot = self.repositories.lots.insert(
             account_id=account_id, order_id=order["orderId"], signal_id=signal.get("signalId"), market=self.market.market,
-            strategy_id=signal["strategyId"], strategy_version=signal["strategyVersion"], symbol=symbol, timeframe=self.timeframe,
+            strategy_id=signal["strategyId"], strategy_version=signal["strategyVersion"], symbol=symbol, timeframe=signal_timeframe,
             cycle_id=f"{symbol}-Cycle{cycle_number}", lot_number=entry_number + 1, entry_timestamp=entry_time, entry_price=round(fill.price, 4),
             quantity=quantity, target_price=target, stop_price=stop, expires_at=expires, fees=round(fill.fees, 4),
             unrealized_pnl=Accounting.unrealized_pnl(round(fill.price, 4), round(fill.price, 4), quantity, fill.fees), configuration_snapshot=snapshot,
@@ -191,15 +196,25 @@ class PaperBroker:
 
     # ---- candles in --------------------------------------------------------------------
 
-    def on_completed_candle(self, symbol: str, candle: Mapping[str, Any] | pd.Series, timestamp: datetime | None = None) -> list[dict[str, Any]]:
+    def on_completed_candle(
+        self,
+        symbol: str,
+        candle: Mapping[str, Any] | pd.Series,
+        timestamp: datetime | None = None,
+        *,
+        timeframe: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Fill queued entries at this candle's open, then update and possibly close open lots."""
+        candle_timeframe = timeframe or self.timeframe
         stamp = pd.Timestamp(timestamp if timestamp is not None else candle["timestamp"]).to_pydatetime()
         open_, high, low, close = (float(candle[key]) for key in ("Open", "High", "Low", "Close"))
         closed: list[dict[str, Any]] = []
         with self._lock:
             deferred: list[dict[str, Any]] = []
             for signal in self.portfolio.pending_entries.pop(symbol, []):
-                if pd.Timestamp(signal["candleTimestamp"]) < pd.Timestamp(stamp):
+                if signal.get("timeframe") != candle_timeframe:
+                    deferred.append(signal)
+                elif pd.Timestamp(signal["candleTimestamp"]) < pd.Timestamp(stamp):
                     self._fill_entry(signal, open_, stamp)
                     if signal.get("pendingEntryId"):
                         self.repositories.pending.delete(signal["pendingEntryId"])
@@ -209,7 +224,8 @@ class PaperBroker:
                 self.portfolio.pending_entries[symbol] = deferred
             survivors: dict[str, tuple[float, float]] = {}
             nse_exit_occurred = False
-            for lot in self.portfolio.lots_for(symbol):
+            timeframe_lots = self.portfolio.lots_for(symbol, timeframe=candle_timeframe)
+            for lot in timeframe_lots:
                 if pd.Timestamp(lot["entryTimestamp"]) >= pd.Timestamp(stamp):
                     continue
                 entry_price = float(lot["entryPrice"])
@@ -230,13 +246,20 @@ class PaperBroker:
                         nse_exit_occurred = True
                 else:
                     survivors[lot["lotId"]] = (mae, mfe)
-            self._mark_open_lots(symbol, close, survivors)
-            self._queue_ladder_entry(symbol, close, stamp)
+            remaining_timeframe_lots = self.portfolio.lots_for(symbol, timeframe=candle_timeframe)
+            self._mark_open_lots(symbol, close, survivors, lots=remaining_timeframe_lots)
+            strategy_ids = list(dict.fromkeys(lot["strategyId"] for lot in remaining_timeframe_lots))
+            for strategy_id in strategy_ids:
+                self._queue_ladder_entry(symbol, close, stamp, strategy_id=strategy_id, timeframe=candle_timeframe)
         return closed
 
-    def _queue_ladder_entry(self, symbol: str, close: float, stamp: datetime) -> None:
-        open_lots = self.portfolio.lots_for(symbol)
-        if not open_lots or self.portfolio.pending_entries.get(symbol) or not self.policy.allow_additional_buys:
+    def _queue_ladder_entry(self, symbol: str, close: float, stamp: datetime, *, strategy_id: str, timeframe: str) -> None:
+        open_lots = self.portfolio.lots_for(symbol, strategy_id=strategy_id, timeframe=timeframe)
+        matching_pending = any(
+            item.get("strategyId") == strategy_id and item.get("timeframe") == timeframe
+            for item in self.portfolio.pending_entries.get(symbol, [])
+        )
+        if not open_lots or matching_pending or not self.policy.allow_additional_buys:
             return
         cycle_id = open_lots[0]["cycleId"]
         cycle_lots = self.repositories.lots.cycle(self.account["accountId"], symbol, cycle_id)
@@ -258,7 +281,7 @@ class PaperBroker:
             "strategyId": first["strategyId"],
             "strategyVersion": first["strategyVersion"],
             "symbol": symbol,
-            "timeframe": self.timeframe,
+            "timeframe": timeframe,
             "candleTimestamp": stamp.isoformat(),
             "signalType": "BUY",
             "signalPrice": close,
@@ -328,11 +351,24 @@ class PaperBroker:
                 inventory.consume(float(trade["quantity"]))
         return inventories
 
-    def _mark_open_lots(self, symbol: str, close: float, excursions: Mapping[str, tuple[float, float]]) -> None:
-        lots = sorted(self.portfolio.lots_for(symbol), key=lambda item: (item["entryTimestamp"], item["lotNumber"]))
+    def _mark_open_lots(
+        self,
+        symbol: str,
+        close: float,
+        excursions: Mapping[str, tuple[float, float]],
+        *,
+        lots: list[dict[str, Any]] | None = None,
+    ) -> None:
+        lots = sorted(lots if lots is not None else self.portfolio.lots_for(symbol), key=lambda item: (item["entryTimestamp"], item["lotNumber"]))
         if not lots:
             return
-        matches = [self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"])])[0] for lot in lots] if self.market.market == "NSE" else [None] * len(lots)
+        # Every open tranche is an independent candidate sale. Dhan will match
+        # whichever tranche triggers against the then-current oldest inventory,
+        # so each target must preview FIFO from the front of the same queue.
+        matches = [
+            self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"])])[0]
+            for lot in lots
+        ] if self.market.market == "NSE" else [None] * len(lots)
         for lot, matched in zip(lots, matches):
             cost_basis_price = round(matched.cost_basis_price, 4) if matched is not None else float(lot["entryPrice"])
             entry_fees = matched.entry_fees if matched is not None else float(lot.get("fees") or 0.0)

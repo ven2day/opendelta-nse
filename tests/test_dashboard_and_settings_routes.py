@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from backend.api.dashboard_routes import create_dashboard_router
+from backend.api.signal_routes import create_signal_router
 from backend.api.settings_routes import StrategyConfigRequest, create_settings_router
 from backend.data.database import DatabaseUnavailable
 from backend.strategies import STRATEGIES
@@ -94,7 +95,7 @@ class DashboardRouteTests(unittest.TestCase):
                 overview=lambda: {"dataFreshness": {"status": "FRESH"}},
                 screener_runs=lambda market: [{"runId": "r1", "market": market, "status": "COMPLETE"}],
                 backtest_runs=lambda market: [],
-                engine_health=lambda market: {"stored": None, "worker": {"status": "READY"}},
+                engine_health=lambda market: {"stored": [], "workers": [{"status": "READY", "strategyId": "rsi_dip_ladder_v1", "timeframe": "1d"}]},
                 paper_summary=broken,
                 paper_positions=lambda market: [],
                 active_universe=lambda market: {"name": "Liquid", "symbols": ["TCS"]},
@@ -105,9 +106,61 @@ class DashboardRouteTests(unittest.TestCase):
         self.assertEqual(payload["marketData"]["data"]["dataFreshness"]["status"], "FRESH")
         self.assertEqual(payload["screener"]["data"]["latestRun"]["runId"], "r1")
         self.assertEqual(payload["screener"]["data"]["activeUniverse"]["name"], "Liquid")
-        self.assertEqual(payload["signalEngine"]["data"]["worker"]["status"], "READY")
+        self.assertEqual(payload["signalEngine"]["data"]["workers"][0]["status"], "READY")
         self.assertFalse(payload["paper"]["available"])
         self.assertIn("no database", payload["paper"]["error"])
         self.assertTrue(payload["paperOnly"] and not payload["liveOrdersEnabled"])
         with self.assertRaises(HTTPException):
             api["GET /v2/dashboard"](market="FOREX")
+
+
+class SignalRouteTests(unittest.TestCase):
+    def test_strategy_timeframe_filters_and_multiple_worker_health_are_exposed(self) -> None:
+        class Signals:
+            arguments: dict[str, Any] = {}
+
+            def list(self, market, **arguments):
+                self.arguments = {"market": market, **arguments}
+                return [{"status": "STRONG_BUY", "strategyId": "rsi_dip_ladder_v1", "timeframe": "1d"}]
+
+        class Statuses:
+            def list(self):
+                return [{"market": "NSE", "engine": "live-signals-v2:rsi_dip_ladder_v1:1d"}]
+
+        signals = Signals()
+        workers = {
+            "NSE": [
+                {"strategyId": "rsi_dip_ladder_v1", "timeframe": "1d", "status": "READY"},
+                {"strategyId": "scalping_v1", "timeframe": "5m", "status": "READY"},
+            ],
+            "CRYPTO": [],
+        }
+        api = endpoints(
+            create_signal_router(
+                signals=lambda: signals,
+                engine_status=lambda: Statuses(),
+                worker_statuses=lambda market: workers[market],
+            )
+        )
+        payload = api["GET /v2/signals"](
+            market="nse",
+            status="strong_buy",
+            symbol=" m&m ",
+            strategy="rsi_dip_ladder_v1",
+            timeframe="1d",
+            limit=50,
+        )
+        self.assertEqual(payload["signals"][0]["colour"], "blue")
+        self.assertEqual(
+            signals.arguments,
+            {
+                "market": "NSE",
+                "status": "STRONG_BUY",
+                "symbol": "M&M",
+                "strategy_id": "rsi_dip_ladder_v1",
+                "timeframe": "1d",
+                "limit": 50,
+            },
+        )
+        health = api["GET /v2/signals/health"](market="NSE")
+        self.assertEqual([item["strategyId"] for item in health["workers"]["NSE"]], ["rsi_dip_ladder_v1", "scalping_v1"])

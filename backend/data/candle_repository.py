@@ -114,7 +114,7 @@ class CanonicalCandleRepository:
               ON candles.instrument_id=requested.requested_symbol
             WHERE candles.market=%s AND candles.timeframe=%s AND candles.complete{provider_clause}
             GROUP BY requested.requested_symbol, candles.provider, candles.instrument_id
-            ORDER BY requested.requested_symbol, candles.provider, candles.instrument_id
+            ORDER BY requested_symbol, provider, instrument_id
             """,
             parameters,
         )

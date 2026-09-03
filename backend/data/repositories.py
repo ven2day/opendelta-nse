@@ -127,7 +127,7 @@ class BacktestRunRepository:
 
 TRADE_COLUMNS = (
     "run_id", "market", "strategy_id", "strategy_version", "symbol", "timeframe", "lot_id", "cycle_id", "lot_number",
-    "signal_timestamp", "signal_price", "entry_timestamp", "entry_price", "quantity", "target_price", "stop_price", "expires_at",
+    "signal_timestamp", "signal_price", "entry_timestamp", "entry_price", "cost_basis_price", "fifo_allocations", "quantity", "target_price", "stop_price", "expires_at",
     "exit_timestamp", "exit_price", "status", "gross_pnl", "fees", "slippage", "net_pnl", "unrealized_pnl", "last_price",
     "mae_pct", "mfe_pct", "holding_bars", "holding_minutes",
 )
@@ -149,6 +149,8 @@ def _public_trade(row: Mapping[str, Any]) -> dict[str, Any]:
         "signalPrice": row["signal_price"],
         "entryTimestamp": row["entry_timestamp"].isoformat(),
         "entryPrice": row["entry_price"],
+        "costBasisPrice": row["cost_basis_price"],
+        "fifoAllocations": row["fifo_allocations"],
         "quantity": row["quantity"],
         "targetPrice": row["target_price"],
         "stopPrice": row["stop_price"],
@@ -251,6 +253,8 @@ def _trade_value(row: Mapping[str, Any], column: str) -> Any:
     value = row.get(column)
     if column == "run_id":
         return uuid.UUID(str(value))
+    if column == "fifo_allocations":
+        return jsonb(value or [])
     return value
 
 
@@ -842,6 +846,8 @@ def _public_lot(row: Mapping[str, Any]) -> dict[str, Any]:
         "lotNumber": int(row["lot_number"]),
         "entryTimestamp": _iso(row["entry_timestamp"]),
         "entryPrice": row["entry_price"],
+        "costBasisPrice": row["cost_basis_price"],
+        "fifoAllocations": row["fifo_allocations"],
         "quantity": row["quantity"],
         "targetPrice": row["target_price"],
         "stopPrice": row["stop_price"],
@@ -870,13 +876,15 @@ class PaperLotRepository:
         self.database.execute(
             """
             INSERT INTO paper_lots (lot_id, account_id, order_id, signal_id, market, strategy_id, strategy_version, symbol, timeframe, cycle_id, lot_number,
-                entry_timestamp, entry_price, quantity, target_price, stop_price, expires_at, status, fees, last_price, unrealized_pnl, mae_pct, mfe_pct, configuration_snapshot)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, %s, %s, %s)
+                entry_timestamp, entry_price, cost_basis_price, fifo_allocations, quantity, target_price, stop_price, expires_at, status, fees, last_price, unrealized_pnl, mae_pct, mfe_pct, configuration_snapshot)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, %s, %s, %s)
             """,
             (
                 lot_id, uuid.UUID(str(values["account_id"])), uuid.UUID(str(values["order_id"])), uuid.UUID(str(values["signal_id"])) if values.get("signal_id") else None,
                 values["market"], values["strategy_id"], values["strategy_version"], values["symbol"], values["timeframe"], values["cycle_id"], values["lot_number"],
-                values["entry_timestamp"], values["entry_price"], values["quantity"], values["target_price"], values.get("stop_price"), values.get("expires_at"),
+                values["entry_timestamp"], values["entry_price"], values.get("cost_basis_price", values["entry_price"]),
+                jsonb(values.get("fifo_allocations") or [{"lotId": str(lot_id), "quantity": values["quantity"], "entryPrice": values["entry_price"], "fees": values.get("fees", 0.0)}]),
+                values["quantity"], values["target_price"], values.get("stop_price"), values.get("expires_at"),
                 values.get("fees", 0.0), values["entry_price"], values.get("unrealized_pnl", 0.0), 0.0, 0.0, jsonb(dict(values.get("configuration_snapshot") or {})),
             ),
         )
@@ -917,18 +925,18 @@ class PaperLotRepository:
         )
         return (int(row["cycles"]), int(row["open_lots"])) if row else (0, 0)
 
-    def mark(self, lot_id: uuid.UUID | str, *, last_price: float, unrealized_pnl: float, mae_pct: float, mfe_pct: float) -> None:
+    def mark(self, lot_id: uuid.UUID | str, *, last_price: float, cost_basis_price: float, fifo_allocations: Sequence[Mapping[str, Any]], entry_fees: float, unrealized_pnl: float, mae_pct: float, mfe_pct: float) -> None:
         self.database.execute(
-            "UPDATE paper_lots SET last_price = %s, unrealized_pnl = %s, mae_pct = %s, mfe_pct = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
-            (last_price, unrealized_pnl, mae_pct, mfe_pct, _now(), uuid.UUID(str(lot_id))),
+            "UPDATE paper_lots SET last_price = %s, cost_basis_price = %s, fifo_allocations = %s, fees = %s, unrealized_pnl = %s, mae_pct = %s, mfe_pct = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
+            (last_price, cost_basis_price, jsonb(list(fifo_allocations)), entry_fees, unrealized_pnl, mae_pct, mfe_pct, _now(), uuid.UUID(str(lot_id))),
         )
 
-    def close(self, lot_id: uuid.UUID | str, *, status: str, exit_timestamp: datetime, exit_price: float, realized_pnl: float, fees: float) -> dict[str, Any]:
+    def close(self, lot_id: uuid.UUID | str, *, status: str, exit_timestamp: datetime, exit_price: float, cost_basis_price: float, fifo_allocations: Sequence[Mapping[str, Any]], realized_pnl: float, fees: float) -> dict[str, Any]:
         if status not in PAPER_LOT_CLOSED_STATUSES:
             raise ValueError(f"{status} is not a closing lot status")
         self.database.execute(
-            "UPDATE paper_lots SET status = %s, exit_timestamp = %s, exit_price = %s, realized_pnl = %s, fees = %s, unrealized_pnl = 0, last_price = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
-            (status, exit_timestamp, exit_price, realized_pnl, fees, exit_price, _now(), uuid.UUID(str(lot_id))),
+            "UPDATE paper_lots SET status = %s, exit_timestamp = %s, exit_price = %s, cost_basis_price = %s, fifo_allocations = %s, realized_pnl = %s, fees = %s, unrealized_pnl = 0, last_price = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
+            (status, exit_timestamp, exit_price, cost_basis_price, jsonb(list(fifo_allocations)), realized_pnl, fees, exit_price, _now(), uuid.UUID(str(lot_id))),
         )
         return self.get(lot_id)
 
@@ -962,6 +970,13 @@ class PaperTradeRepository:
 
     def list(self, account_id: uuid.UUID | str, *, limit: int = 500) -> list[dict[str, Any]]:
         rows = self.database.fetch_all("SELECT * FROM paper_trades WHERE account_id = %s ORDER BY executed_at DESC, trade_id DESC LIMIT %s", (uuid.UUID(str(account_id)), limit))
+        return [_public_paper_trade(row) for row in rows]
+
+    def chronological(self, account_id: uuid.UUID | str) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all(
+            "SELECT * FROM paper_trades WHERE account_id = %s ORDER BY executed_at, trade_id",
+            (uuid.UUID(str(account_id)),),
+        )
         return [_public_paper_trade(row) for row in rows]
 
 

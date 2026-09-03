@@ -106,7 +106,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
           <tbody>{snapshot.data.positions.map((lot) => <tr key={lot.lotId}>
             <td><strong>{lot.symbol}</strong><small>Lot {lot.lotNumber ?? "—"} · {formatDateTime(lot.entryTimestamp, market)}</small></td>
             <td className="numeric">{formatNumber(lot.quantity, 4)}</td>
-            <td className="numeric">{formatNumber(lot.entryPrice)}</td>
+            <td className="numeric">{formatNumber(lot.entryPrice)}{lot.costBasisPrice != null && lot.entryPrice != null && Math.abs(lot.costBasisPrice - lot.entryPrice) > 0.0001 && <small>FIFO {formatNumber(lot.costBasisPrice)} · {lot.fifoAllocations?.length ?? 1} buys</small>}</td>
             <td className="numeric">{formatNumber(lot.lastPrice)}</td>
             <td className="numeric">{formatNumber(lot.targetPrice)}</td>
             <td className="numeric">{formatNumber(lot.stopPrice)}</td>

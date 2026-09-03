@@ -75,7 +75,7 @@ class MemoryLots:
 
     def insert(self, **values):
         lot_id = str(uuid.uuid4())
-        row = {"lotId": lot_id, "accountId": values["account_id"], "orderId": values["order_id"], "signalId": values.get("signal_id"), "market": values["market"], "strategyId": values["strategy_id"], "strategyVersion": values["strategy_version"], "symbol": values["symbol"], "timeframe": values["timeframe"], "cycleId": values["cycle_id"], "lotNumber": values["lot_number"], "entryTimestamp": pd.Timestamp(values["entry_timestamp"]).isoformat(), "entryPrice": values["entry_price"], "quantity": values["quantity"], "targetPrice": values["target_price"], "stopPrice": values.get("stop_price"), "expiresAt": values["expires_at"].isoformat() if values.get("expires_at") else None, "status": "OPEN", "exitTimestamp": None, "exitPrice": None, "realizedPnl": None, "unrealizedPnl": values.get("unrealized_pnl", 0.0), "fees": values.get("fees", 0.0), "lastPrice": values["entry_price"], "maePct": 0.0, "mfePct": 0.0, "configurationSnapshot": dict(values.get("configuration_snapshot") or {})}
+        row = {"lotId": lot_id, "accountId": values["account_id"], "orderId": values["order_id"], "signalId": values.get("signal_id"), "market": values["market"], "strategyId": values["strategy_id"], "strategyVersion": values["strategy_version"], "symbol": values["symbol"], "timeframe": values["timeframe"], "cycleId": values["cycle_id"], "lotNumber": values["lot_number"], "entryTimestamp": pd.Timestamp(values["entry_timestamp"]).isoformat(), "entryPrice": values["entry_price"], "costBasisPrice": values.get("cost_basis_price", values["entry_price"]), "fifoAllocations": list(values.get("fifo_allocations") or [{"lotId": lot_id, "quantity": values["quantity"], "entryPrice": values["entry_price"], "fees": values.get("fees", 0.0)}]), "quantity": values["quantity"], "targetPrice": values["target_price"], "stopPrice": values.get("stop_price"), "expiresAt": values["expires_at"].isoformat() if values.get("expires_at") else None, "status": "OPEN", "exitTimestamp": None, "exitPrice": None, "realizedPnl": None, "unrealizedPnl": values.get("unrealized_pnl", 0.0), "fees": values.get("fees", 0.0), "lastPrice": values["entry_price"], "maePct": 0.0, "mfePct": 0.0, "configurationSnapshot": dict(values.get("configuration_snapshot") or {})}
         self.rows[lot_id] = row
         return dict(row)
 
@@ -99,14 +99,14 @@ class MemoryLots:
         cycles = max((int(r["cycleId"].rsplit("Cycle", 1)[1]) for r in lots), default=0)
         return cycles, sum(1 for r in lots if r["status"] == "OPEN")
 
-    def mark(self, lot_id, *, last_price, unrealized_pnl, mae_pct, mfe_pct):
+    def mark(self, lot_id, *, last_price, cost_basis_price, fifo_allocations, entry_fees, unrealized_pnl, mae_pct, mfe_pct):
         if self.rows[lot_id]["status"] == "OPEN":
-            self.rows[lot_id].update(lastPrice=last_price, unrealizedPnl=unrealized_pnl, maePct=mae_pct, mfePct=mfe_pct)
+            self.rows[lot_id].update(lastPrice=last_price, costBasisPrice=cost_basis_price, fifoAllocations=list(fifo_allocations), fees=entry_fees, unrealizedPnl=unrealized_pnl, maePct=mae_pct, mfePct=mfe_pct)
 
-    def close(self, lot_id, *, status, exit_timestamp, exit_price, realized_pnl, fees):
+    def close(self, lot_id, *, status, exit_timestamp, exit_price, cost_basis_price, fifo_allocations, realized_pnl, fees):
         row = self.rows[lot_id]
         if row["status"] == "OPEN":
-            row.update(status=status, exitTimestamp=pd.Timestamp(exit_timestamp).isoformat(), exitPrice=exit_price, realizedPnl=realized_pnl, fees=fees, unrealizedPnl=0.0, lastPrice=exit_price)
+            row.update(status=status, exitTimestamp=pd.Timestamp(exit_timestamp).isoformat(), exitPrice=exit_price, costBasisPrice=cost_basis_price, fifoAllocations=list(fifo_allocations), realizedPnl=realized_pnl, fees=fees, unrealizedPnl=0.0, lastPrice=exit_price)
         return dict(row)
 
 
@@ -119,6 +119,17 @@ class MemoryTrades:
 
     def list(self, account_id, *, limit=500):
         return [dict(r) for r in self.rows if r["account_id"] == account_id][:limit]
+
+    def chronological(self, account_id):
+        rows = [row for row in self.rows if row["account_id"] == account_id]
+        rows.sort(key=lambda row: row["executed_at"])
+        return [
+            {
+                "lotId": row["lot_id"], "symbol": row["symbol"], "side": row["side"], "quantity": row["quantity"],
+                "price": row["price"], "fees": row["fees"], "executedAt": pd.Timestamp(row["executed_at"]).isoformat(),
+            }
+            for row in rows
+        ]
 
 
 class MemoryPendingEntries:
@@ -220,6 +231,37 @@ class SizingAndCostTests(unittest.TestCase):
 
 
 class OrderAndLotTests(unittest.TestCase):
+    def test_nse_target_sale_uses_dhan_fifo_cost_and_recalculates_remaining_average(self) -> None:
+        broker = make_broker()
+        first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))
+        trigger, trigger_stamp = candle(5, open_=2860.0, high=2870.0, low=2840.0, close=2850.0)
+        broker.on_completed_candle("M&M", trigger, trigger_stamp)
+        next_bar, next_stamp = candle(10, open_=2840.0, high=2850.0, low=2830.0, close=2845.0)
+        broker.on_completed_candle("M&M", next_bar, next_stamp)
+        second = max(broker.positions(), key=lambda lot: lot["lotNumber"])
+
+        exit_bar, exit_stamp = candle(15, open_=float(second["targetPrice"]), high=float(second["targetPrice"]) + 1, low=float(second["targetPrice"]) - 2, close=float(second["targetPrice"]))
+        [closed] = broker.on_completed_candle("M&M", exit_bar, exit_stamp)
+
+        expected_fifo_cost = (float(first["entryPrice"]) * 5 + float(second["entryPrice"]) * 5) / 10
+        self.assertEqual((closed["lotNumber"], closed["quantity"]), (2, 10))
+        self.assertAlmostEqual(closed["costBasisPrice"], expected_fifo_cost, places=4)
+        self.assertEqual(
+            [(allocation["lotId"], allocation["quantity"]) for allocation in closed["fifoAllocations"]],
+            [(first["lotId"], 5), (second["lotId"], 5)],
+        )
+        [remaining] = broker.positions()
+        self.assertEqual(remaining["lotNumber"], 1)  # strategy target ticket remains open
+        self.assertAlmostEqual(remaining["costBasisPrice"], second["entryPrice"], places=4)  # Dhan FIFO inventory is the rest of lot 2
+        self.assertEqual(remaining["unrealizedPnl"], Accounting.unrealized_pnl(remaining["costBasisPrice"], exit_bar["Close"], 5, float(second["fees"]) / 2))
+
+        reborn = make_broker(broker.repositories)
+        [recovered] = reborn.positions()
+        self.assertAlmostEqual(recovered["costBasisPrice"], second["entryPrice"], places=4)
+        closed_after_restart = reborn.close_lot_manually(recovered["lotId"], price=float(first["targetPrice"]), timestamp=exit_stamp + timedelta(minutes=5))
+        self.assertAlmostEqual(closed_after_restart["costBasisPrice"], second["entryPrice"], places=4)
+        self.assertEqual(reborn.positions(), [])
+
     def test_scheduled_ladder_entry_survives_restart_before_next_open(self) -> None:
         repositories = memory_repositories()
         broker = make_broker(repositories)

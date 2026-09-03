@@ -340,7 +340,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <td><strong>{trade.symbol}</strong><small>Lot {trade.lotNumber ?? "—"} · {shortId(trade.cycleId)}</small></td>
             <td><StatusBadge tone={tone(trade.status)}>{trade.status}</StatusBadge></td>
             <td>{formatDateTime(trade.entryTimestamp, market)}</td>
-            <td className="numeric">{formatNumber(trade.entryPrice)}</td>
+            <td className="numeric">{formatNumber(trade.entryPrice)}{trade.costBasisPrice != null && trade.entryPrice != null && Math.abs(trade.costBasisPrice - trade.entryPrice) > 0.0001 && <small>FIFO {formatNumber(trade.costBasisPrice)} · {trade.fifoAllocations?.length ?? 1} buys</small>}</td>
             <td className="numeric">{formatNumber(trade.quantity, 4)}</td>
             <td className="numeric">{formatNumber(trade.targetPrice)}</td>
             <td className="numeric">{formatNumber(trade.stopPrice)}</td>

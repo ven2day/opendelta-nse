@@ -145,6 +145,8 @@ export type BacktestTrade = {
   signalTimestamp?: string | null;
   entryTimestamp?: string | null;
   entryPrice?: number | null;
+  costBasisPrice?: number | null;
+  fifoAllocations?: Array<{ lotId: string; quantity: number; entryPrice: number; fees: number }>;
   quantity?: number | null;
   targetPrice?: number | null;
   stopPrice?: number | null;
@@ -227,6 +229,8 @@ export type PaperLot = {
   lotNumber?: number | null;
   entryTimestamp?: string | null;
   entryPrice?: number | null;
+  costBasisPrice?: number | null;
+  fifoAllocations?: Array<{ lotId: string; quantity: number; entryPrice: number; fees: number }>;
   quantity?: number | null;
   targetPrice?: number | null;
   stopPrice?: number | null;

@@ -36,7 +36,7 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_migrations_are_versioned_and_idempotent(self) -> None:
         self.assertEqual(
             self.first_migration,
-            ["001_platform", "001_timescale_market_data", "002_timescale_candle_reader", "003_backtest_trade_last_price", "004_paper_pending_entries"],
+            ["001_platform", "001_timescale_market_data", "002_timescale_candle_reader", "003_backtest_trade_last_price", "004_paper_pending_entries", "005_dhan_fifo_cost_basis"],
         )
         self.assertEqual(self.database.migrate(), [])
         tables = {row["table_name"] for row in self.database.fetch_all("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}
@@ -82,7 +82,7 @@ class PlatformDatabaseTests(unittest.TestCase):
         row = {
             "run_id": record["runId"], "market": "NSE", "strategy_id": "ema_vwap_strong_buy", "strategy_version": "1.0.0", "symbol": "TCS", "timeframe": "5m",
             "lot_id": "TCS-Cycle1-Lot1", "cycle_id": "TCS-Cycle1", "lot_number": 1, "signal_timestamp": stamp, "signal_price": 100.0, "entry_timestamp": stamp,
-            "entry_price": 100.05, "quantity": 100, "target_price": 101.05, "stop_price": None, "expires_at": None, "exit_timestamp": stamp, "exit_price": 101.0,
+            "entry_price": 100.05, "cost_basis_price": 100.05, "quantity": 100, "target_price": 101.05, "stop_price": None, "expires_at": None, "exit_timestamp": stamp, "exit_price": 101.0,
             "status": "TARGET_HIT", "gross_pnl": 95.0, "fees": 45.0, "slippage": 10.0, "net_pnl": 50.0, "unrealized_pnl": 0.0, "mae_pct": -0.2, "mfe_pct": 1.1, "holding_bars": 12, "holding_minutes": 60.0,
         }
         writer.write_trades(record["runId"], [row, {**row, "lot_id": "TCS-Cycle1-Lot2", "lot_number": 2, "status": "OPEN", "exit_timestamp": None, "exit_price": None}])

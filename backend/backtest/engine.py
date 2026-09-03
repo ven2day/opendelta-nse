@@ -23,6 +23,7 @@ import pandas as pd
 
 from backend.backtest.metrics import MetricsAccumulator
 from backend.backtest.result_writer import ResultWriter
+from backend.core.fifo import FifoInventory, FifoMatch
 from backend.core.models import MarketContext
 from backend.markets.base import CandleSource, MarketSpec
 from backend.strategies.base import Strategy, decision_frame
@@ -238,6 +239,7 @@ class BacktestEngine:
 
         batch: list[dict[str, Any]] = []
         open_lots: list[_Lot] = []
+        inventory = FifoInventory()
         pending: tuple[int, int, str] | None = None  # (signal bar, entry number, cycle id)
         cycle = 0
         entries = 0
@@ -253,10 +255,11 @@ class BacktestEngine:
                 pending = None
                 entered = self._enter(
                     request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id,
-                    timestamps, opens, closes, signal_targets, cycle_first_entry_price, open_lots,
+                    timestamps, opens, closes, signal_targets, cycle_first_entry_price, inventory.cost,
                 )
                 if entered is not None:
                     open_lots.append(entered)
+                    inventory.add(entered.lot_id, entered.entry_timestamp, entered.entry_price, entered.quantity, entered.fees)
                     cycle_first_entry_price = cycle_first_entry_price or entered.entry_price
                     last_entry_price = entered.entry_price
                 else:
@@ -270,7 +273,8 @@ class BacktestEngine:
                 if closed is None:
                     still_open.append(lot)
                 else:
-                    row = self._trade_row(request, symbol, lot, bar_minutes, closed)
+                    fifo = inventory.consume(lot.quantity) if self.market.market == "NSE" else None
+                    row = self._trade_row(request, symbol, lot, bar_minutes, closed, fifo=fifo)
                     metrics.add_trade(row)
                     batch.append(row)
                     if len(batch) >= execution.batch_size:
@@ -312,14 +316,15 @@ class BacktestEngine:
                 pending = (bar, entries, f"{symbol}-Cycle{cycle}")
                 entries += 1
         last_close = float(closes[-1]) if bars else 0.0
-        for lot in open_lots:
-            row = self._trade_row(request, symbol, lot, bar_minutes, None, last_close=last_close, last_bar=bars - 1)
+        open_fifo = inventory.preview_allocations([lot.quantity for lot in open_lots]) if self.market.market == "NSE" else [None] * len(open_lots)
+        for lot, fifo in zip(open_lots, open_fifo):
+            row = self._trade_row(request, symbol, lot, bar_minutes, None, last_close=last_close, last_bar=bars - 1, fifo=fifo)
             metrics.add_trade(row)
             batch.append(row)
         if batch:
             self.writer.write_trades(request.run_id, batch)
 
-    def _enter(self, request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_targets, cycle_first_entry_price, open_lots) -> _Lot | None:
+    def _enter(self, request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_targets, cycle_first_entry_price, current_open_capital) -> _Lot | None:
         reference_price = float(opens[bar])
         ladder = PriceBandLadder.from_config(config)
         indicative_fill_price = self.market.fees.buy(reference_price, 1).price
@@ -327,7 +332,6 @@ class BacktestEngine:
         quantity = ladder.quantity(entry_number, first_price) if ladder else execution.lot_quantity(entry_number)
         fill = self.market.fees.buy(reference_price, quantity)
         if ladder is not None:
-            current_open_capital = sum(lot.entry_price * lot.quantity for lot in open_lots)
             if not ladder.within_capital(current_open_capital, fill.price, quantity):
                 return None
         entry_price = round(fill.price, 4)
@@ -372,7 +376,9 @@ class BacktestEngine:
             return ("EXPIRED", float(closes[bar]), stamp, bar)
         return None
 
-    def _trade_row(self, request, symbol, lot: _Lot, bar_minutes: int, closed, *, last_close: float | None = None, last_bar: int | None = None) -> dict[str, Any]:
+    def _trade_row(self, request, symbol, lot: _Lot, bar_minutes: int, closed, *, last_close: float | None = None, last_bar: int | None = None, fifo: FifoMatch | None = None) -> dict[str, Any]:
+        cost_basis_price = round(fifo.cost_basis_price, 4) if fifo is not None else lot.entry_price
+        entry_fees = fifo.entry_fees if fifo is not None else lot.fees
         base = {
             "run_id": request.run_id,
             "market": self.market.market,
@@ -387,6 +393,11 @@ class BacktestEngine:
             "signal_price": round(lot.signal_price, 4),
             "entry_timestamp": lot.entry_timestamp,
             "entry_price": lot.entry_price,
+            "cost_basis_price": cost_basis_price,
+            "fifo_allocations": [
+                {"lotId": item.acquisition_id, "quantity": item.quantity, "entryPrice": item.price, "fees": round(item.fees, 4)}
+                for item in (fifo.allocations if fifo is not None else ())
+            ],
             "quantity": lot.quantity,
             "target_price": lot.target_price,
             "stop_price": lot.stop_price,
@@ -403,10 +414,10 @@ class BacktestEngine:
                 "exit_price": None,
                 "status": "OPEN",
                 "gross_pnl": 0.0,
-                "fees": round(lot.fees, 4),
+                "fees": round(entry_fees, 4),
                 "slippage": round(lot.slippage, 4),
                 "net_pnl": 0.0,
-                "unrealized_pnl": round((price - lot.entry_price) * lot.quantity - lot.fees, 2),
+                "unrealized_pnl": round((price - cost_basis_price) * lot.quantity - entry_fees, 2),
                 "last_price": price,
                 "holding_bars": holding_bars,
                 "holding_minutes": float(holding_bars * bar_minutes),
@@ -415,8 +426,8 @@ class BacktestEngine:
         fill = self.market.fees.sell(raw_exit, lot.quantity)
         exit_price = round(fill.price, 4)
         # Stored fields reconcile exactly: net == gross - fees on the rounded values.
-        gross = round((exit_price - lot.entry_price) * lot.quantity, 2)
-        fees = round(lot.fees + fill.fees, 4)
+        gross = round((exit_price - cost_basis_price) * lot.quantity, 2)
+        fees = round(entry_fees + fill.fees, 4)
         slippage = round(lot.slippage + fill.slippage, 4)
         holding_bars = exit_bar - lot.entry_bar
         return {

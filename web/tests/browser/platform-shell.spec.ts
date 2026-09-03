@@ -188,6 +188,28 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   const tops = await controls.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
   expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
 
+  const tradeScroller = page.locator(".quant-trades-scroll");
+  const tradeTable = page.locator(".quant-trades-table");
+  await expect(tradeTable).toBeVisible();
+  const dimensions = await tradeScroller.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }));
+  expect(dimensions.scrollWidth).toBeGreaterThan(dimensions.clientWidth);
+  const headings = await tradeTable.locator("thead tr:first-child th").evaluateAll((elements) =>
+    elements.map((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width };
+    }),
+  );
+  for (let index = 0; index < headings.length - 1; index += 1) {
+    expect(headings[index].width).toBeGreaterThanOrEqual(70);
+    expect(headings[index].right).toBeLessThanOrEqual(headings[index + 1].left + 1);
+  }
+  expect(headings.at(-1)?.width).toBeGreaterThanOrEqual(100);
+  await tradeScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+  await expect(page.getByRole("columnheader", { name: /Holding/ })).toBeInViewport();
+
   await expect(page.getByText("OPEN", { exact: true })).toHaveClass(/warn/);
   await page.getByRole("button", { name: /Symbol/ }).click();
   await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("sort")).toBe("symbol");

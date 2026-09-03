@@ -36,7 +36,7 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_migrations_are_versioned_and_idempotent(self) -> None:
         self.assertEqual(
             self.first_migration,
-            ["001_platform", "001_timescale_market_data", "002_timescale_candle_reader", "003_backtest_trade_last_price", "004_paper_pending_entries", "005_dhan_fifo_cost_basis"],
+            ["001_platform", "001_timescale_market_data", "002_timescale_candle_reader", "003_backtest_trade_last_price", "004_paper_pending_entries", "005_dhan_fifo_cost_basis", "006_live_signal_strategy_identity"],
         )
         self.assertEqual(self.database.migrate(), [])
         tables = {row["table_name"] for row in self.database.fetch_all("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}

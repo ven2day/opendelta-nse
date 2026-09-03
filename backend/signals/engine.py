@@ -31,7 +31,14 @@ HISTORY_BUFFER_BARS = 50
 class SignalPersistence(Protocol):
     def insert_new(self, **values: Any) -> dict[str, Any] | None: ...
 
-    def open(self, market: str, symbol: str | None = None) -> list[dict[str, Any]]: ...
+    def open(
+        self,
+        market: str,
+        symbol: str | None = None,
+        *,
+        strategy_id: str | None = None,
+        timeframe: str | None = None,
+    ) -> list[dict[str, Any]]: ...
 
     def mark_holding(self, signal_id: str, *, last_price: float) -> None: ...
 
@@ -116,7 +123,12 @@ class SignalEngine:
     def _advance_open_signals(self, symbol: str, stamp: pd.Timestamp, row: pd.Series) -> None:
         exit_stamp = stamp.to_pydatetime()
         high, low, close = float(row["High"]), float(row["Low"]), float(row["Close"])
-        for signal in self.repository.open(self.market.market, symbol):
+        for signal in self.repository.open(
+            self.market.market,
+            symbol,
+            strategy_id=self.strategy.strategy_id,
+            timeframe=self.timeframe,
+        ):
             signal_stamp = pd.Timestamp(signal["candleTimestamp"])
             if stamp <= signal_stamp:
                 continue

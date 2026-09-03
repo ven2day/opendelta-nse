@@ -238,6 +238,31 @@ class SizingAndCostTests(unittest.TestCase):
 
 
 class OrderAndLotTests(unittest.TestCase):
+    def test_same_symbol_strategies_keep_independent_lots_and_candle_timeframes(self) -> None:
+        broker = make_broker()
+        intraday = signal("TCS", 100.0)
+        daily = signal("TCS", 200.0, minute=5)
+        daily.update(
+            strategyId="rsi_dip_ladder_v1",
+            timeframe="1d",
+            targetPrice=202.0,
+            configurationSnapshot={"target_pct": 1.0},
+        )
+        first = broker.on_signal(intraday)
+        second = broker.on_signal(daily)
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(
+            {(lot["strategyId"], lot["timeframe"], lot["lotNumber"]) for lot in broker.positions()},
+            {("ema_vwap_strong_buy", "5m", 1), ("rsi_dip_ladder_v1", "1d", 1)},
+        )
+
+        row, stamp = candle(10, open_=100.0, high=100.5, low=99.5, close=100.25)
+        broker.on_completed_candle("TCS", row, stamp, timeframe="5m")
+        by_strategy = {lot["strategyId"]: lot for lot in broker.positions()}
+        self.assertEqual(by_strategy["ema_vwap_strong_buy"]["lastPrice"], 100.25)
+        self.assertEqual(by_strategy["rsi_dip_ladder_v1"]["lastPrice"], second["lastPrice"])
+
     def test_nse_target_sale_uses_dhan_fifo_cost_and_recalculates_remaining_average(self) -> None:
         broker = make_broker()
         first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))

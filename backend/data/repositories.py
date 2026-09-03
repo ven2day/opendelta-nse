@@ -344,7 +344,16 @@ class LiveSignalRepository:
             raise KeyError(f"Signal {signal_id} was not found")
         return _public_signal(row)
 
-    def list(self, market: str | None = None, *, status: str | None = None, symbol: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def list(
+        self,
+        market: str | None = None,
+        *,
+        status: str | None = None,
+        symbol: str | None = None,
+        strategy_id: str | None = None,
+        timeframe: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         parameters: list[Any] = []
         if market:
@@ -356,15 +365,39 @@ class LiveSignalRepository:
         if symbol:
             clauses.append("symbol = %s")
             parameters.append(symbol)
+        if strategy_id:
+            clauses.append("strategy_id = %s")
+            parameters.append(strategy_id)
+        if timeframe:
+            clauses.append("timeframe = %s")
+            parameters.append(timeframe)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = self.database.fetch_all(f"SELECT * FROM live_signals{where} ORDER BY candle_timestamp DESC LIMIT %s", (*parameters, limit))
         return [_public_signal(row) for row in rows]
 
-    def open(self, market: str, symbol: str | None = None) -> list[dict[str, Any]]:
+    def open(
+        self,
+        market: str,
+        symbol: str | None = None,
+        *,
+        strategy_id: str | None = None,
+        timeframe: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["market = %s", "status IN ('STRONG_BUY', 'HOLDING')"]
+        parameters: list[Any] = [market]
         if symbol:
-            rows = self.database.fetch_all("SELECT * FROM live_signals WHERE market = %s AND symbol = %s AND status IN ('STRONG_BUY', 'HOLDING') ORDER BY candle_timestamp", (market, symbol))
-        else:
-            rows = self.database.fetch_all("SELECT * FROM live_signals WHERE market = %s AND status IN ('STRONG_BUY', 'HOLDING') ORDER BY candle_timestamp", (market,))
+            clauses.append("symbol = %s")
+            parameters.append(symbol)
+        if strategy_id:
+            clauses.append("strategy_id = %s")
+            parameters.append(strategy_id)
+        if timeframe:
+            clauses.append("timeframe = %s")
+            parameters.append(timeframe)
+        rows = self.database.fetch_all(
+            f"SELECT * FROM live_signals WHERE {' AND '.join(clauses)} ORDER BY candle_timestamp",
+            tuple(parameters),
+        )
         return [_public_signal(row) for row in rows]
 
     def mark_holding(self, signal_id: uuid.UUID | str, *, last_price: float) -> None:

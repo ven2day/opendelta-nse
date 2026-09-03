@@ -12,6 +12,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from backend.data.repositories import EngineStatusRepository
 from backend.markets.base import CandleSource, MarketSpec
@@ -38,6 +39,7 @@ class MarketSignalWorker:
         closed_poll_seconds: float = 30.0,
         maximum_backoff_seconds: float = 300.0,
         lookback_days: int = 2,
+        engine_name: str | None = None,
     ) -> None:
         self.market = market
         self.engine = engine
@@ -49,11 +51,19 @@ class MarketSignalWorker:
         self.closed_poll_seconds = closed_poll_seconds
         self.maximum_backoff_seconds = maximum_backoff_seconds
         self.lookback_days = lookback_days
-        self.processor = CandleProcessor(bar_minutes=market.minutes(engine.timeframe), timezone=market.timezone, clock=clock)
+        self.engine_name = engine_name or f"{ENGINE_NAME}:{engine.strategy.strategy_id}:{engine.timeframe}"
+        daily_session_close = market.daily_session_close if engine.timeframe == "1d" else None
+        self.processor = CandleProcessor(
+            bar_minutes=market.minutes(engine.timeframe),
+            timezone=market.timezone,
+            clock=clock,
+            daily_session_close=daily_session_close,
+        )
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._symbols: list[str] = []
+        self._last_daily_poll_date = None
         self._state: dict[str, Any] = {"status": "STOPPED", "connectionStatus": "DISCONNECTED", "message": "Not started", "consecutiveFailures": 0, "polls": 0}
         self.candle_listeners: list[Callable[[str, Any, datetime], None]] = []
 
@@ -85,12 +95,15 @@ class MarketSignalWorker:
             self._set_state(status="ERROR", connection="DISCONNECTED", message=f"Recovery failed: {error}"[:240])
         backoff = self.poll_seconds
         while not self._stop.is_set():
-            if not self.market.session_is_open(self.clock()):
+            now = self.clock()
+            if not self._poll_is_due(now):
                 self._set_state(status="MARKET_CLOSED", connection="DISCONNECTED", message=f"{self.market.market} session is closed")
                 self._stop.wait(self.closed_poll_seconds)
                 continue
             try:
                 created = self.poll_once()
+                if self.engine.timeframe == "1d" and self.market.daily_session_close is not None:
+                    self._last_daily_poll_date = self._local_moment(now).date()
                 backoff = self.poll_seconds
                 self._set_state(status="READY", connection="CONNECTED", message=f"{created} new signal(s) on the last poll" if created else "Completed candles evaluated", reset_failures=True)
                 self._stop.wait(self.poll_seconds)
@@ -98,6 +111,19 @@ class MarketSignalWorker:
                 backoff = min(backoff * 2, self.maximum_backoff_seconds)
                 self._set_state(status="ERROR", connection="DISCONNECTED", message=f"Poll failed, retrying in {int(backoff)}s: {error}"[:240], failure=True)
                 self._stop.wait(backoff)
+
+    def _local_moment(self, moment: datetime) -> datetime:
+        zone = ZoneInfo(self.market.timezone)
+        return moment.replace(tzinfo=zone) if moment.tzinfo is None else moment.astimezone(zone)
+
+    def _poll_is_due(self, moment: datetime) -> bool:
+        """Intraday workers follow the session; NSE daily workers run once after close."""
+        if self.engine.timeframe != "1d" or self.market.daily_session_close is None:
+            return self.market.session_is_open(moment)
+        local = self._local_moment(moment)
+        if local.weekday() >= 5 or local.time() < self.market.daily_session_close:
+            return False
+        return self._last_daily_poll_date != local.date()
 
     # ---- work ----------------------------------------------------------------------
 
@@ -162,7 +188,7 @@ class MarketSignalWorker:
                 snapshot = self.engine.snapshot()
                 last = self.engine.last_completed
                 self.status_repository.upsert(
-                    engine=ENGINE_NAME,
+                    engine=self.engine_name,
                     market=self.market.market,
                     status=status,
                     connection_status=connection,
@@ -178,4 +204,4 @@ class MarketSignalWorker:
         with self._lock:
             state = dict(self._state)
             state["symbols"] = list(self._symbols)
-        return {**self.engine.snapshot(), **state, "engine": ENGINE_NAME}
+        return {**self.engine.snapshot(), **state, "engine": self.engine_name}

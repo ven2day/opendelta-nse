@@ -9,7 +9,7 @@ provider says.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Callable
 
 import pandas as pd
@@ -76,10 +76,18 @@ class CandleHistory:
 
 
 class CandleProcessor:
-    def __init__(self, *, bar_minutes: int, timezone: str, clock: Callable[[], datetime]) -> None:
+    def __init__(
+        self,
+        *,
+        bar_minutes: int,
+        timezone: str,
+        clock: Callable[[], datetime],
+        daily_session_close: time | None = None,
+    ) -> None:
         self.bar = timedelta(minutes=bar_minutes)
         self.timezone = timezone
         self.clock = clock
+        self.daily_session_close = daily_session_close
 
     def completed(self, frame: pd.DataFrame, now: datetime | None = None) -> pd.DataFrame:
         """Only rows that are complete by both the provider flag and the clock."""
@@ -90,7 +98,17 @@ class CandleProcessor:
         data = frame.copy()
         data.index = pd.DatetimeIndex(data.index)
         data.index = data.index.tz_localize(self.timezone) if data.index.tz is None else data.index.tz_convert(self.timezone)
-        closed_by_clock = (data.index + self.bar) <= moment
+        if self.daily_session_close is None:
+            closes_at = data.index + self.bar
+        else:
+            # Exchange daily bars are date-labelled.  They become usable at the
+            # exchange session close, not ``bar_minutes`` after midnight.
+            closes_at = data.index.normalize() + pd.Timedelta(
+                hours=self.daily_session_close.hour,
+                minutes=self.daily_session_close.minute,
+                seconds=self.daily_session_close.second,
+            )
+        closed_by_clock = closes_at <= moment
         if COMPLETE_COLUMN in data:
             closed_by_clock &= data[COMPLETE_COLUMN].astype(bool).to_numpy()
         return data.loc[closed_by_clock, list(CANDLE_COLUMNS)]

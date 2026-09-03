@@ -175,7 +175,15 @@ export type EngineStatus = {
   message?: string | null;
   updatedAt?: string | null;
 };
-export type WorkerStatus = EngineStatus & { symbols?: string[] | null; signalsCreated?: number | null; duplicatesRejected?: number | null };
+export type WorkerStatus = EngineStatus & {
+  engine?: string | null;
+  strategyId?: string | null;
+  strategyVersion?: string | null;
+  timeframe?: string | null;
+  symbols?: string[] | null;
+  signalsCreated?: number | null;
+  duplicatesRejected?: number | null;
+};
 export type SignalStatus = "STRONG_BUY" | "HOLDING" | "TARGET_HIT" | "EXITED" | "EXPIRED";
 export type Signal = {
   signalId: string;
@@ -202,7 +210,7 @@ export type Signal = {
   colour?: string | null;
 };
 export type SignalsResponse = { signals: Signal[]; colours: Record<string, string> };
-export type SignalsHealth = { engines: EngineStatus[]; workers: Partial<Record<PlatformMarket, WorkerStatus | null>> };
+export type SignalsHealth = { engines: EngineStatus[]; workers: Partial<Record<PlatformMarket, WorkerStatus[]>> };
 
 export type PaperAccount = {
   market?: PlatformMarket;
@@ -271,7 +279,7 @@ export type DashboardPayload = {
   marketData: Section<MarketDataSummary>;
   screener: Section<{ latestRun: ScreenerRun | null; activeUniverse: Universe | null }>;
   backtests: Section<{ recent: BacktestRun[] }>;
-  signalEngine: Section<{ stored: EngineStatus | null; worker: WorkerStatus | null }>;
+  signalEngine: Section<{ stored: EngineStatus[]; workers: WorkerStatus[] }>;
   paper: Section<{ account: PaperAccount; openPositions: PaperLot[] }>;
   paperOnly?: boolean;
   liveOrdersEnabled?: boolean;

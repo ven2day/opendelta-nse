@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Protocol
+from typing import Callable, Protocol, Sequence
 
 import pandas as pd
 
@@ -36,6 +36,28 @@ class CandleSource(Protocol):
     """Completed candles for one symbol; engines process one symbol at a time."""
 
     def candles(self, symbol: str, timeframe: str, start: datetime, end: datetime, *, warmup_bars: int) -> pd.DataFrame: ...
+
+
+@dataclass
+class CandleBatch:
+    """Per-symbol batch result; one bad instrument never poisons its neighbours."""
+
+    frames: dict[str, pd.DataFrame]
+    errors: dict[str, Exception]
+
+
+class BatchCandleSource(CandleSource, Protocol):
+    """Optional fast path used by universe-sized readers such as TimescaleDB."""
+
+    def candles_many(
+        self,
+        symbols: Sequence[str],
+        timeframe: str,
+        start: datetime,
+        end: datetime,
+        *,
+        warmup_bars: int,
+    ) -> CandleBatch: ...
 
 
 @dataclass(frozen=True)

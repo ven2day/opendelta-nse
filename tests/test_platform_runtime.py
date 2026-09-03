@@ -42,6 +42,9 @@ class _StubDatabase:
         self._pending = []
         return ["001"]
 
+    def execute(self, _query: str, _parameters=None) -> int:
+        return 0
+
 
 class StartupPolicyTests(unittest.TestCase):
     def test_pending_migrations_fail_closed_unless_auto_migrate_is_explicit(self) -> None:
@@ -156,11 +159,17 @@ class EndToEndBacktestTests(unittest.TestCase):
         crypto = TimescaleCandleSource(repository, market="CRYPTO", provider="OKX").candles(
             "READERTEST", "5m", start, start + timedelta(minutes=10), warmup_bars=0
         )
+        nse_batch = TimescaleCandleSource(repository, market="NSE", provider="DHAN").candles_many(
+            ["READERTEST", "NOTSTORED"], "5m", start, start + timedelta(minutes=10), warmup_bars=0
+        )
 
         self.assertEqual(list(nse.index), [start - timedelta(minutes=5), start, start + timedelta(minutes=5)])
         self.assertEqual(list(crypto.index), [start])
         self.assertEqual(list(nse["Close"]), [101.0, 101.0, 101.0])
         self.assertEqual(list(crypto["Close"]), [202.0])
+        self.assertEqual(list(nse_batch.frames["READERTEST"]["Close"]), [101.0, 101.0])
+        self.assertTrue(nse_batch.frames["NOTSTORED"].empty)
+        self.assertEqual(nse_batch.errors, {})
 
     def test_cancel_is_durable_and_a_cancelled_run_finishes_as_cancelled(self) -> None:
         created = self.api["POST /v2/backtests"](BacktestCreateRequest(market="NSE", strategyId="ema_vwap_strong_buy", symbols=[f"SYM{index:02d}" for index in range(12)], startDate=date(2026, 8, 3), endDate=date(2026, 8, 31)))

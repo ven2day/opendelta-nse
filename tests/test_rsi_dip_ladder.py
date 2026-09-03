@@ -73,17 +73,17 @@ class RsiDipLadderTests(unittest.TestCase):
         live = [self.strategy.evaluate(frame.iloc[: position + 1], context, self.config).decision for position in range(len(frame))]
         self.assertEqual(vectorized["Decision"].tolist(), live)
 
-    def test_backtest_enters_next_open_requires_each_five_percent_dip_and_keeps_targets_per_lot(self) -> None:
-        # Three independent RSI recoveries: the second is not 5% below the first
-        # entry and is ignored; the third is sufficiently lower and adds lot 2.
-        frame = candles([1100, 1080, 1060, 1040, 1060, 1080, 1060, 1040, 1060, 1070, 990, 970, 990, 1000, 1000])
+    def test_backtest_initial_rsi_signal_then_price_only_dips_fill_each_next_open(self) -> None:
+        frame = candles([1100, 1080, 1060, 1040, 1060, 1080, 1070, 1020, 1000, 970, 940, 910, 880, 850, 830])
+        decisions = decision_frame(self.strategy, frame, MarketContext(market="NSE", symbol="TEST", timeframe="5m", timezone=IST), self.config)
+        self.assertEqual((decisions["Decision"] == "BUY").sum(), 1)
         writer = MemoryResultWriter()
         engine = BacktestEngine(strategy=self.strategy, market=market_spec("NSE"), source=Source(frame), writer=writer, cancel_event=threading.Event())
         result = engine.run(BacktestRequest(run_id="ladder", market="NSE", strategy_id=self.strategy.strategy_id, symbols=["TEST"], timeframe="5m", start_date=date(2026, 8, 3), end_date=date(2026, 8, 3), configuration={"rsi_length": 2, "rsi_low": 30, "rsi_recovery": 35}, execution=ExecutionSettings(target_pct=50)))
         self.assertEqual(result["status"], "COMPLETE")
         lots = sorted(writer.trades, key=lambda row: row["lot_number"])
-        self.assertEqual([lot["lot_number"] for lot in lots], [1, 2])
-        self.assertEqual([lot["quantity"] for lot in lots], [5, 10])
+        self.assertEqual([lot["lot_number"] for lot in lots], [1, 2, 3, 4])
+        self.assertEqual([lot["quantity"] for lot in lots], [5, 10, 25, 50])
         self.assertTrue(all(lot["target_price"] == round(lot["entry_price"] * 1.5, 4) for lot in lots))
         for lot in lots:
             signal_position = frame.index.get_loc(pd.Timestamp(lot["signal_timestamp"]))

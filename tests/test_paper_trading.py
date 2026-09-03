@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from backend.data.database import Database
-from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperTradeRepository
+from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperPendingEntryRepository, PaperTradeRepository
 from backend.markets.base import market_spec
 from backend.markets.nse.fees import NseFeeModel
 from backend.paper_trading import Accounting, ExecutionPolicy, PaperBroker, PaperRepositories
@@ -85,6 +85,12 @@ class MemoryLots:
     def open(self, account_id, symbol=None):
         return [dict(r) for r in self.rows.values() if r["accountId"] == account_id and r["status"] == "OPEN" and (symbol is None or r["symbol"] == symbol)]
 
+    def cycle(self, account_id, symbol, cycle_id):
+        return sorted(
+            [dict(r) for r in self.rows.values() if r["accountId"] == account_id and r["symbol"] == symbol and r["cycleId"] == cycle_id],
+            key=lambda row: row["lotNumber"],
+        )
+
     def list(self, account_id, *, status=None, limit=500):
         return [dict(r) for r in self.rows.values() if r["accountId"] == account_id and (status is None or r["status"] == status)][:limit]
 
@@ -115,8 +121,32 @@ class MemoryTrades:
         return [dict(r) for r in self.rows if r["account_id"] == account_id][:limit]
 
 
+class MemoryPendingEntries:
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, Any]] = {}
+
+    def insert(self, signal, *, account_id, cycle_id=None, lot_number=None):
+        if signal.get("signalId") and any(row["accountId"] == account_id and row.get("signalId") == signal["signalId"] for row in self.rows.values()):
+            return None
+        if cycle_id is not None and any(row["accountId"] == account_id and row.get("cycleId") == cycle_id and row.get("lotNumber") == lot_number for row in self.rows.values()):
+            return None
+        pending_id = str(uuid.uuid4())
+        row = {**dict(signal), "pendingEntryId": pending_id, "accountId": account_id, "cycleId": cycle_id, "lotNumber": lot_number}
+        self.rows[pending_id] = row
+        return dict(row)
+
+    def list(self, account_id):
+        return [dict(row) for row in self.rows.values() if row["accountId"] == account_id]
+
+    def delete(self, pending_entry_id):
+        self.rows.pop(str(pending_entry_id), None)
+
+    def clear(self, account_id):
+        self.rows = {key: row for key, row in self.rows.items() if row["accountId"] != account_id}
+
+
 def memory_repositories() -> PaperRepositories:
-    return PaperRepositories(MemoryAccounts(), MemoryOrders(), MemoryLots(), MemoryTrades())  # type: ignore[arg-type]
+    return PaperRepositories(MemoryAccounts(), MemoryOrders(), MemoryLots(), MemoryTrades(), MemoryPendingEntries())  # type: ignore[arg-type]
 
 
 def signal(symbol: str = "TCS", price: float = 100.0, minute: int = 0, *, market: str = "NSE", signal_id: str | None = None) -> dict[str, Any]:
@@ -190,28 +220,63 @@ class SizingAndCostTests(unittest.TestCase):
 
 
 class OrderAndLotTests(unittest.TestCase):
+    def test_scheduled_ladder_entry_survives_restart_before_next_open(self) -> None:
+        repositories = memory_repositories()
+        broker = make_broker(repositories)
+        first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))
+
+        trigger, trigger_stamp = candle(5, open_=2860.0, high=2870.0, low=2840.0, close=2850.0)
+        broker.on_completed_candle("M&M", trigger, trigger_stamp)
+        self.assertEqual(len(repositories.pending.rows), 1)
+
+        reborn = make_broker(repositories)
+        following, following_stamp = candle(10, open_=2840.0, high=2850.0, low=2830.0, close=2845.0)
+        reborn.on_completed_candle("M&M", following, following_stamp)
+
+        lots = sorted(reborn.positions(), key=lambda lot: lot["lotNumber"])
+        self.assertEqual([(lot["lotNumber"], lot["quantity"]) for lot in lots], [(1, 5), (2, 10)])
+        self.assertEqual(pd.Timestamp(lots[1]["entryTimestamp"]), pd.Timestamp(following_stamp))
+        self.assertEqual(repositories.pending.rows, {})
+
     def test_rsi_dip_ladder_uses_frozen_price_band_dip_gate_and_independent_targets_after_restart(self) -> None:
         repositories = memory_repositories()
         broker = make_broker(repositories)
         first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))
         self.assertEqual((first["lotNumber"], first["quantity"]), (1, 5))
+        # A repeated RSI signal does not control additional ladder entries.
         self.assertIsNone(broker.on_signal(ladder_signal("M&M", 2900.0, 5)))
-        self.assertEqual(repositories.orders.rows[-1]["reason"], "DIP_THRESHOLD_NOT_REACHED")
-        second = broker.on_signal(ladder_signal("M&M", 2850.0, 10))
-        third = broker.on_signal(ladder_signal("M&M", 2705.0, 15))
+        row, stamp = candle(5, open_=2900.0, high=2910.0, low=2890.0, close=2900.0)
+        broker.on_completed_candle("M&M", row, stamp)
+        self.assertEqual(len(broker.positions()), 1)
+        # The completed close crosses the 5% level; lot 2 fills at the next open.
+        row, stamp = candle(10, open_=2850.0, high=2860.0, low=2840.0, close=2850.0)
+        broker.on_completed_candle("M&M", row, stamp)
+        row, stamp = candle(15, open_=2840.0, high=2850.0, low=2830.0, close=2840.0)
+        broker.on_completed_candle("M&M", row, stamp)
+        second = max(broker.positions(), key=lambda lot: lot["lotNumber"])
+        # Lot 3 is likewise triggered by price alone, without a new RSI signal.
+        row, stamp = candle(20, open_=2700.0, high=2710.0, low=2690.0, close=2690.0)
+        broker.on_completed_candle("M&M", row, stamp)
+        row, stamp = candle(25, open_=2680.0, high=2690.0, low=2670.0, close=2680.0)
+        broker.on_completed_candle("M&M", row, stamp)
+        third = max(broker.positions(), key=lambda lot: lot["lotNumber"])
         self.assertEqual([second["quantity"], third["quantity"]], [10, 25])
         self.assertTrue(all(lot["targetPrice"] == round(lot["entryPrice"] * 1.05, 4) for lot in (first, second, third)))
 
-        row, stamp = candle(20, open_=2800.0, high=float(third["targetPrice"]) + 1, low=2790.0, close=2800.0)
+        row, stamp = candle(30, open_=2800.0, high=float(third["targetPrice"]) + 1, low=2790.0, close=2800.0)
         closed = broker.on_completed_candle("M&M", row, stamp)
         self.assertEqual([lot["lotNumber"] for lot in closed], [3])
         self.assertEqual(sorted(lot["lotNumber"] for lot in broker.positions()), [1, 2])
 
         reborn = make_broker(repositories)
-        fourth = reborn.on_signal(ladder_signal("M&M", 2565.0, 25))
+        row, stamp = candle(35, open_=2540.0, high=2550.0, low=2530.0, close=2530.0)
+        reborn.on_completed_candle("M&M", row, stamp)
+        row, stamp = candle(40, open_=2520.0, high=2530.0, low=2510.0, close=2520.0)
+        reborn.on_completed_candle("M&M", row, stamp)
+        fourth = max(reborn.positions(), key=lambda lot: lot["lotNumber"])
         self.assertEqual((fourth["cycleId"], fourth["lotNumber"], fourth["quantity"]), ("M&M-Cycle1", 4, 50))
         self.assertIsNone(reborn.on_signal(ladder_signal("M&M", 2400.0, 30)))
-        self.assertEqual(repositories.orders.rows[-1]["reason"], "MAXIMUM_ENTRIES_PER_CYCLE")
+        self.assertEqual(len(reborn.positions()), 3)
 
     def test_the_same_signal_cannot_open_two_paper_orders(self) -> None:
         broker = make_broker()
@@ -335,7 +400,7 @@ class PaperDatabaseTests(unittest.TestCase):
         cls.database.open()
         cls.database.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         cls.database.migrate()
-        cls.repositories = PaperRepositories(PaperAccountRepository(cls.database), PaperOrderRepository(cls.database), PaperLotRepository(cls.database), PaperTradeRepository(cls.database))
+        cls.repositories = PaperRepositories(PaperAccountRepository(cls.database), PaperOrderRepository(cls.database), PaperLotRepository(cls.database), PaperTradeRepository(cls.database), PaperPendingEntryRepository(cls.database))
 
     @classmethod
     def tearDownClass(cls) -> None:

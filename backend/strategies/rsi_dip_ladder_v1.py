@@ -1,8 +1,9 @@
 """RSI_DIP_LADDER_V1: confirmed RSI recovery with finite price-band scaling.
 
-The strategy emits a BUY only after RSI has visited the low threshold and then
-crossed the recovery threshold on a completed candle. Backtest and paper engines
-apply the declared finite dip/quantity policy and enter at the next candle open.
+The strategy emits the initial BUY only after RSI has visited the low threshold
+and crossed the recovery threshold on a completed candle. Once that cycle is
+open, the backtest and paper engines use completed-candle dip levels to schedule
+later ladder lots at the next candle open without requiring another RSI signal.
 Each resulting lot has its own profit target.
 """
 

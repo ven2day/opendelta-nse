@@ -281,16 +281,33 @@ class BacktestEngine:
                 entries = 0
                 cycle_first_entry_price = None
                 last_entry_price = None
-            if not decisions[bar] or not in_window[bar]:
+            if not in_window[bar]:
                 continue
-            metrics.add_signal()
+            strategy_buy = bool(decisions[bar])
+            if strategy_buy:
+                metrics.add_signal()
+            maximum_entries = min(execution.maximum_entries_per_cycle, ladder.maximum_entries) if ladder else execution.maximum_entries_per_cycle
+            if ladder is not None and open_lots:
+                can_add_ladder_lot = (
+                    execution.allow_additional_buys
+                    and pending is None
+                    and entries < maximum_entries
+                    and bar + 1 < bars
+                    and last_entry_price is not None
+                    and ladder.additional_entry_allowed(float(closes[bar]), last_entry_price)
+                )
+                if can_add_ladder_lot:
+                    pending = (bar, entries, open_lots[0].cycle_id)
+                    entries += 1
+                # Once RSI opens a ladder cycle, completed-candle dip levels—not
+                # repeated RSI recoveries—own all additional entries.
+                continue
+            if not strategy_buy:
+                continue
             if not open_lots and pending is None:
                 cycle += 1
                 entries = 0
-            maximum_entries = min(execution.maximum_entries_per_cycle, ladder.maximum_entries) if ladder else execution.maximum_entries_per_cycle
             can_order = (not open_lots or execution.allow_additional_buys) and entries < maximum_entries and bar + 1 < bars
-            if can_order and ladder is not None and entries > 0:
-                can_order = last_entry_price is not None and ladder.additional_entry_allowed(float(closes[bar]), last_entry_price)
             if can_order:
                 pending = (bar, entries, f"{symbol}-Cycle{cycle}")
                 entries += 1
@@ -316,6 +333,8 @@ class BacktestEngine:
         entry_price = round(fill.price, 4)
         if execution.target_pct is not None:
             target = entry_price * (1 + execution.target_pct / 100)
+        elif ladder is not None:
+            target = entry_price * (1 + float(config["target_pct"]) / 100)
         else:
             strategy_target = float(signal_targets[signal_bar])
             signal_close = float(closes[signal_bar])

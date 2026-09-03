@@ -672,6 +672,7 @@ class PaperAccountRepository:
             raise KeyError(f"No paper account for {market}")
         balance = float(starting_balance if starting_balance is not None else account["startingBalance"])
         with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM paper_pending_entries WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
             cursor.execute("DELETE FROM paper_trades WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
             cursor.execute("DELETE FROM paper_lots WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
             cursor.execute("DELETE FROM paper_orders WHERE account_id = %s", (uuid.UUID(account["accountId"]),))
@@ -763,6 +764,69 @@ class PaperOrderRepository:
         return [_public_order(row) for row in rows]
 
 
+def _public_pending_entry(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "pendingEntryId": str(row["pending_entry_id"]),
+        "signalId": str(row["signal_id"]) if row["signal_id"] else None,
+        "market": row["market"],
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "symbol": row["symbol"],
+        "timeframe": row["timeframe"],
+        "candleTimestamp": _iso(row["trigger_timestamp"]),
+        "signalType": "BUY",
+        "signalPrice": row["signal_price"],
+        "targetPrice": row["target_price"],
+        "stopPrice": row["stop_price"],
+        "configurationSnapshot": row["configuration_snapshot"],
+        "entryReason": row["entry_reason"],
+        "cycleId": row["cycle_id"],
+        "lotNumber": row["lot_number"],
+    }
+
+
+class PaperPendingEntryRepository:
+    """Durable next-open entries, including price-triggered ladder additions."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def insert(self, signal: Mapping[str, Any], *, account_id: uuid.UUID | str, cycle_id: str | None = None, lot_number: int | None = None) -> dict[str, Any] | None:
+        pending_entry_id = uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO paper_pending_entries (
+                    pending_entry_id, account_id, signal_id, market, strategy_id, strategy_version,
+                    symbol, timeframe, trigger_timestamp, signal_price, target_price, stop_price,
+                    configuration_snapshot, entry_reason, cycle_id, lot_number
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING RETURNING *
+                """,
+                (
+                    pending_entry_id, uuid.UUID(str(account_id)), uuid.UUID(str(signal["signalId"])) if signal.get("signalId") else None,
+                    signal["market"], signal["strategyId"], signal["strategyVersion"], signal["symbol"], signal["timeframe"],
+                    signal["candleTimestamp"], signal["signalPrice"], signal.get("targetPrice"), signal.get("stopPrice"),
+                    jsonb(dict(signal.get("configurationSnapshot") or {})), signal.get("entryReason", "SIGNAL_ENTRY"), cycle_id, lot_number,
+                ),
+            )
+            row = cursor.fetchone()
+        return _public_pending_entry(row) if row else None
+
+    def list(self, account_id: uuid.UUID | str) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all(
+            "SELECT * FROM paper_pending_entries WHERE account_id = %s ORDER BY trigger_timestamp, created_at",
+            (uuid.UUID(str(account_id)),),
+        )
+        return [_public_pending_entry(row) for row in rows]
+
+    def delete(self, pending_entry_id: uuid.UUID | str) -> None:
+        self.database.execute("DELETE FROM paper_pending_entries WHERE pending_entry_id = %s", (uuid.UUID(str(pending_entry_id)),))
+
+    def clear(self, account_id: uuid.UUID | str) -> None:
+        self.database.execute("DELETE FROM paper_pending_entries WHERE account_id = %s", (uuid.UUID(str(account_id)),))
+
+
 def _public_lot(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "lotId": str(row["lot_id"]),
@@ -829,6 +893,13 @@ class PaperLotRepository:
             rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND symbol = %s AND status = 'OPEN' ORDER BY entry_timestamp, lot_number", (uuid.UUID(str(account_id)), symbol))
         else:
             rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND status = 'OPEN' ORDER BY symbol, entry_timestamp, lot_number", (uuid.UUID(str(account_id)),))
+        return [_public_lot(row) for row in rows]
+
+    def cycle(self, account_id: uuid.UUID | str, symbol: str, cycle_id: str) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all(
+            "SELECT * FROM paper_lots WHERE account_id = %s AND symbol = %s AND cycle_id = %s ORDER BY lot_number",
+            (uuid.UUID(str(account_id)), symbol, cycle_id),
+        )
         return [_public_lot(row) for row in rows]
 
     def list(self, account_id: uuid.UUID | str, *, status: str | None = None, limit: int = 500) -> list[dict[str, Any]]:

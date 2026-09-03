@@ -28,7 +28,7 @@ reproducible after a strategy changes.
 
 ## ✨ Key Features
 
-- **🔍 Screener** — configurable price, liquidity, volume, volatility and candle-coverage filters; every symbol is recorded as passed or rejected with a reason; rank by the key you choose and keep all passing symbols or a maximum you set; manual include/exclude; saved universes consumed by Backtest and Signals.
+- **🔍 Screener** — configurable price, liquidity, volume, volatility and candle-coverage filters; ready-made, dated NIFTY 50 and NIFTY Top 20 Equal Weight constituent snapshots; every symbol is recorded as passed or rejected with a reason; saved universes are consumed by Backtest and Signals.
 - **🔄 Backtest** — background jobs, one symbol at a time with bounded memory, next-candle-open entries, independent lots with their own target/stop/expiry, fees and slippage on both sides, MAE/MFE, drawdown, cancellation, failed-symbol isolation, trades written to PostgreSQL in batches.
 - **📡 Live Signals** — an independent worker per market (NSE follows the session; Crypto runs 24/7), completed candles only, duplicate-safe storage via a database constraint, `STRONG_BUY → HOLDING → TARGET_HIT / EXITED / EXPIRED` lifecycle, restart recovery, connection/data-age/last-candle health.
 - **💼 Paper Trading** — internal `PaperBroker`, fixed-quantity or fixed-capital sizing with Strong Buy lot multipliers, one order per signal, candle-driven exits, realized/unrealized/daily P&L, portfolio rebuilt from the database after a restart.
@@ -88,6 +88,11 @@ The evaluator contract is `Strategy.evaluate(candles, market_context, config) �
 (BUY / SELL / NONE with prices, reasons, indicators, version and snapshot),
 called only on completed candles; entries happen at the next candle's open.
 Details: [docs/unified-platform.md](docs/unified-platform.md).
+
+NSE constituent presets come from the official [NIFTY 50](https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv)
+and [NIFTY Top 20 Equal Weight](https://www.niftyindices.com/IndexConstituent/ind_niftyTop20EqualWeight_list.csv)
+downloads. Each preset carries an `asOf` date, and Backtest resolves it on the
+server before storing the exact symbol list with the run.
 
 ## 🚀 Quick Start
 

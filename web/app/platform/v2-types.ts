@@ -46,6 +46,16 @@ export type Universe = {
   createdAt?: string | null;
 };
 export type UniversesResponse = { universes: Universe[]; active?: Partial<Record<PlatformMarket, Universe | null>> };
+export type UniversePreset = {
+  presetId: string;
+  market: PlatformMarket;
+  name: string;
+  description: string;
+  asOf: string;
+  sourceUrl: string;
+  symbols: string[];
+};
+export type UniversePresetsResponse = { presets: UniversePreset[] };
 
 export type Strategy = {
   strategyId: string;

@@ -275,6 +275,23 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(missing.exception.status_code, 404)
         self.assertIn("liquidity", self.api["GET /v2/screener/filters"]()["rankBy"])
 
+    def test_official_presets_are_listed_and_resolved_by_the_backend(self) -> None:
+        presets = self.api["GET /v2/screener/presets"](market="NSE")["presets"]
+        self.assertEqual([(item["presetId"], len(item["symbols"])) for item in presets], [("nifty_50", 50), ("nifty_top_20", 20)])
+        self.assertEqual(self.api["GET /v2/screener/presets"](market="CRYPTO")["presets"], [])
+
+        started = self.api["POST /v2/screener/runs"](ScreenerRunRequest(market="NSE", presetId="nifty_top_20"))
+        self.assertEqual(started["symbolsTotal"], 20)
+        self._wait(started["runId"])
+
+        for request in (
+            ScreenerRunRequest(market="CRYPTO", presetId="nifty_50"),
+            ScreenerRunRequest(market="NSE", presetId="nifty_50", symbols=["TCS"]),
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                self.api["POST /v2/screener/runs"](request)
+            self.assertEqual(caught.exception.status_code, 422)
+
 
 @unittest.skipUnless(TEST_DATABASE_URL, "TEST_DATABASE_URL is not set")
 class ScreenerDatabaseTests(unittest.TestCase):

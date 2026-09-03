@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository
+from backend.data.universe_presets import get_universe_preset, list_universe_presets
 from backend.screener.engine import ScreenerEngine, apply_manual_selection
 from backend.screener.filters import ScreenerFilters
 from backend.screener.ranking import RANKING_KEYS
@@ -24,6 +25,7 @@ class ScreenerRunRequest(BaseModel):
     market: str = Field(pattern="^(NSE|CRYPTO)$")
     filters: dict[str, Any] = Field(default_factory=dict)
     symbols: list[str] | None = Field(default=None, max_length=5_000)  # None = the market's full catalogue
+    presetId: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class SaveUniverseRequest(BaseModel):
@@ -100,14 +102,28 @@ def create_screener_router(services: ScreenerServices) -> APIRouter:
     def describe_filters() -> dict[str, Any]:
         return {"defaults": ScreenerFilters().public(), "rankBy": sorted(RANKING_KEYS), "markets": list(MARKETS)}
 
+    @router.get("/presets")
+    def list_presets(market: str | None = Query(default=None)) -> dict[str, Any]:
+        key = _market(market) if market else None
+        return {"presets": [preset.public() for preset in list_universe_presets(key)]}
+
     @router.post("/runs", status_code=202)
     def start_run(request: ScreenerRunRequest) -> dict[str, Any]:
         market = _market(request.market)
+        if request.presetId is not None and request.symbols is not None:
+            raise HTTPException(status_code=422, detail="Use either presetId or symbols, not both")
         try:
             filters = ScreenerFilters.from_mapping(request.filters)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        symbols = [symbol.strip().upper() for symbol in (request.symbols if request.symbols is not None else _guard(lambda: services.catalogue_for(market))) if symbol.strip()]
+        if request.presetId is not None:
+            try:
+                requested_symbols = get_universe_preset(request.presetId, market).symbols
+            except KeyError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        else:
+            requested_symbols = request.symbols if request.symbols is not None else _guard(lambda: services.catalogue_for(market))
+        symbols = [symbol.strip().upper() for symbol in requested_symbols if symbol.strip()]
         symbols = list(dict.fromkeys(symbols))
         if not symbols:
             raise HTTPException(status_code=422, detail="The symbol universe is empty")

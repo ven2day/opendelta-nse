@@ -6,7 +6,6 @@ import {
   Gauge,
   LayoutDashboard,
   LogOut,
-  Menu,
   Moon,
   Radio,
   ScanSearch,
@@ -81,11 +80,6 @@ function statusTone(status: string): "good" | "warn" | "bad" | "neutral" {
 export function PlatformChrome({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [open, setOpen] = useState(() => {
-    if (typeof window === "undefined") return true;
-    if (window.matchMedia("(max-width: 820px)").matches) return false;
-    return window.localStorage.getItem("opendelta-sidebar-open") !== "false";
-  });
   // Seeded after mount only: a server-rendered time can never match the client and would break hydration.
   const [clock, setClock] = useState<Date | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -160,18 +154,6 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
     ? `Live overview refreshes every 15 seconds. Last update ${overviewUpdatedAt.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })} IST.`
     : "Connecting to the live overview service.";
 
-  const toggleNavigation = () => {
-    setOpen((current) => {
-      const next = !current;
-      window.localStorage.setItem("opendelta-sidebar-open", String(next));
-      return next;
-    });
-  };
-
-  const closeNavigationOnMobile = () => {
-    if (window.matchMedia("(max-width: 820px)").matches) setOpen(false);
-  };
-
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -179,14 +161,11 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="platform-frame" data-theme={theme} data-navigation-open={open ? "true" : "false"} data-ui-version="unified-v2" suppressHydrationWarning>
+    <div className="platform-frame" data-theme={theme} data-ui-version="unified-v2" suppressHydrationWarning>
       <a className="platform-skip-link" href="#main-content">Skip to content</a>
-      <div className="platform-shell" data-navigation-open={open ? "true" : "false"}>
+      <div className="platform-shell">
         <header className="platform-topbar">
-          <button className="platform-menu" type="button" onClick={toggleNavigation} aria-label="Toggle navigation" title={open ? "Hide navigation" : "Show navigation"} aria-expanded={open}>
-            <Menu size={20} />
-          </button>
-          <a className="platform-identity" href="/" aria-label="OpenDelta dashboard" onClick={closeNavigationOnMobile}>
+          <a className="platform-identity" href="/" aria-label="OpenDelta dashboard">
             <span aria-hidden="true">Δ</span>
             <div><strong>OpenDelta</strong><small>Quant research</small></div>
           </a>
@@ -196,7 +175,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           </div>
           <div className="platform-market-switch" role="group" aria-label="Active market">
             {MARKETS.map((item) => (
-              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, search, item)} aria-current={market === item ? "true" : undefined} onClick={closeNavigationOnMobile}>{marketLabel(item)}</a>
+              <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, search, item)} aria-current={market === item ? "true" : undefined}>{marketLabel(item)}</a>
             ))}
           </div>
           <div className="platform-live-strip">
@@ -209,23 +188,20 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
             </button>
             <a className="platform-icon-action platform-signout" href="/api/logout" aria-label="Sign out" title="Sign out"><LogOut size={17} /></a>
           </div>
-        </header>
-        <aside className="platform-sidebar" aria-label="Platform navigation">
-          <nav aria-label="Main navigation">
-            <section className="platform-nav-group">
-              {navigation.map((item) => {
-                const { href, label, icon: Icon, match } = item;
-                return (
-                  <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined} onClick={closeNavigationOnMobile}>
-                    <Icon size={17} /><span>{label}</span>
-                  </a>
-                );
-              })}
-            </section>
+          <span className="platform-safety-chip" title="Paper research only · Broker execution disabled">
+            <ShieldCheck size={15} /><strong><span>Paper research only</span><i>Paper only</i></strong><small>Broker disabled</small>
+          </span>
+          <nav className="platform-topnav" aria-label="Main navigation">
+            {navigation.map((item) => {
+              const { href, label, icon: Icon, match } = item;
+              return (
+                <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined}>
+                  <Icon size={16} /><span>{label}</span>
+                </a>
+              );
+            })}
           </nav>
-          <div className="platform-safety"><ShieldCheck size={16} /><div><strong>Paper research only</strong><span>Broker execution disabled</span></div></div>
-        </aside>
-        {open && <button className="platform-backdrop" type="button" onClick={() => setOpen(false)} aria-label="Close navigation" />}
+        </header>
       </div>
       <div className="platform-content" id="main-content">{children}</div>
     </div>

@@ -83,15 +83,15 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
     for (const route of authenticatedRoutes) {
       await page.goto(route);
       await expect(page.locator(".platform-topbar")).toHaveCount(1);
-      await expect(page.locator(".platform-sidebar")).toHaveCount(1);
-      await expect(page.locator(".platform-menu")).toHaveCount(1);
+      await expect(page.locator(".platform-topnav")).toHaveCount(1);
+      await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
       if (routesWithEmbeddedHeader.has(route)) {
         await expect(page.locator(".global-header .brand")).not.toBeVisible();
         await expect(page.locator(".global-header .top-nav")).not.toBeVisible();
       }
       if (route === "/legacy/signals") await expect(page.locator(".global-header")).toHaveCount(0);
-      await expect(page.locator(".platform-sidebar nav a span")).toHaveText(["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"]);
+      await expect(page.locator(".platform-topnav a span")).toHaveText(["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"]);
       if (viewport.width === 1440 && !route.startsWith("/legacy") && route !== "/admin") {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
       }
@@ -112,7 +112,7 @@ test("legacy NSE Signals presents an expected market-close state without false d
   await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 });
 
-test("sidebar links perform full document navigation in production", async ({ page }) => {
+test("topbar links perform full document navigation in production", async ({ page }) => {
   await page.goto("/");
 
   const signalsLink = page.getByRole("link", { name: "Signals", exact: true });
@@ -269,27 +269,13 @@ test("a saved result from a removed strategy is ignored and cannot crash the Bac
   await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 });
 
-test("desktop hamburger fully hides, restores, and remembers the sidebar", async ({ page }) => {
+test("desktop topbar navigation keeps the content full width", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-
-  const menu = page.getByRole("button", { name: "Toggle navigation" });
-  await expect(menu).toHaveAttribute("aria-expanded", "true");
-  await menu.click();
-  await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "false");
-  await expect(menu).toHaveAttribute("aria-expanded", "false");
-
-  await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expect(page.locator(".platform-topnav")).toBeVisible();
+  await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
   await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeLessThanOrEqual(1);
-  expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-open"))).toBe("false");
-
-  await page.reload();
-  await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "false");
-  await page.getByRole("button", { name: "Toggle navigation" }).click();
-  await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "true");
-  await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
-  const sidebarWidth = await page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().width);
-  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeGreaterThanOrEqual(sidebarWidth - 1);
+  expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-open"))).toBeNull();
 });
 
 test("legacy screener session values remain inside the table", async ({ page }) => {
@@ -327,10 +313,9 @@ test("theme preference persists while navigating between product areas", async (
 test("mobile navigation, logout, and authentication redirects work", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/paper-trading");
-  const menu = page.getByRole("button", { name: "Toggle navigation" });
-  await menu.click();
-  await expect(menu).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator(".platform-sidebar")).toBeVisible();
+  await expect(page.locator(".platform-topnav")).toBeVisible();
+  await expect(page.locator(".platform-topnav a", { hasText: "Paper Trading" })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
   await page.locator(".platform-signout").click();
   await expect(page).toHaveURL(/\/login$/);
   await page.goto("/backtest", { waitUntil: "domcontentloaded" });

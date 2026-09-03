@@ -94,8 +94,8 @@ export function isoDate(date: Date): string {
 
 export function tone(status: unknown): "good" | "warn" | "bad" | "neutral" {
   const value = String(status ?? "").toUpperCase();
-  if (["HEALTHY", "FRESH", "RUNNING", "AVAILABLE", "COMPLETE", "COMPLETED", "ACTIVE", "CONNECTED", "FILLED", "TARGET_HIT", "OPEN", "READY", "STRONG_BUY"].includes(value)) return "good";
+  if (["HEALTHY", "FRESH", "RUNNING", "AVAILABLE", "COMPLETE", "COMPLETED", "ACTIVE", "CONNECTED", "FILLED", "TARGET_HIT", "READY", "STRONG_BUY"].includes(value)) return "good";
   if (["FAILED", "UNAVAILABLE", "INVALID", "ERROR", "REJECTED", "CANCELLED", "INTERRUPTED", "DISCONNECTED", "EXITED", "EXPIRED", "STOPPED_OUT"].includes(value)) return "bad";
-  if (["STALE", "DEGRADED", "STOPPED", "QUEUED", "PENDING", "HOLDING", "CONNECTING", "MARKET_CLOSED", "IDLE"].includes(value)) return "warn";
+  if (["STALE", "DEGRADED", "STOPPED", "QUEUED", "PENDING", "HOLDING", "OPEN", "CONNECTING", "MARKET_CLOSED", "IDLE"].includes(value)) return "warn";
   return "neutral";
 }

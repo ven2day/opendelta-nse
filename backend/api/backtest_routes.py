@@ -139,6 +139,9 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
     def list_backtest_trades(
         run_id: str,
         symbol: str | None = Query(default=None),
+        status: str | None = None,
+        sort: str = "entryTimestamp",
+        direction: str = "asc",
         limit: int = Query(default=500, ge=1, le=5_000),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, Any]:
@@ -147,6 +150,21 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             _guard(services.runs).get(run_id)
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=404, detail="Backtest run was not found") from error
-        return {"runId": run_id, "trades": trades.list(run_id, symbol=symbol.strip().upper() if symbol else None, limit=limit, offset=offset), "total": trades.count(run_id), "limit": limit, "offset": offset}
+        symbol_filter = symbol.strip().upper() if symbol else None
+        status_filter = status.strip().upper() if status else None
+        try:
+            page = trades.list(
+                run_id,
+                symbol=symbol_filter,
+                status=status_filter,
+                sort_by=sort,
+                direction=direction,
+                limit=limit,
+                offset=offset,
+            )
+            total = trades.count(run_id, symbol=symbol_filter, status=status_filter)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"runId": run_id, "trades": page, "total": total, "limit": limit, "offset": offset}
 
     return router

@@ -36,11 +36,11 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_migrations_are_versioned_and_idempotent(self) -> None:
         self.assertEqual(
             self.first_migration,
-            ["001_platform", "001_timescale_market_data", "002_timescale_candle_reader", "003_backtest_trade_last_price"],
+            ["001_platform", "001_timescale_market_data", "002_timescale_candle_reader", "003_backtest_trade_last_price", "004_paper_pending_entries"],
         )
         self.assertEqual(self.database.migrate(), [])
         tables = {row["table_name"] for row in self.database.fetch_all("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}
-        for expected in ("screener_runs", "screener_results", "saved_universes", "strategy_configs", "backtest_runs", "backtest_trades", "live_signals", "paper_accounts", "paper_orders", "paper_lots", "paper_trades", "engine_status", "schema_migrations"):
+        for expected in ("screener_runs", "screener_results", "saved_universes", "strategy_configs", "backtest_runs", "backtest_trades", "live_signals", "paper_accounts", "paper_orders", "paper_pending_entries", "paper_lots", "paper_trades", "engine_status", "schema_migrations"):
             self.assertIn(expected, tables)
 
     def test_run_lifecycle_and_progress(self) -> None:

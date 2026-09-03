@@ -4,7 +4,8 @@ The strategy emits the initial BUY only after RSI has visited the low threshold
 and crossed the recovery threshold on a completed candle. Once that cycle is
 open, the backtest and paper engines use completed-candle dip levels to schedule
 later ladder lots at the next candle open without requiring another RSI signal.
-Each resulting lot has its own profit target.
+Each resulting tranche retains its sell quantity; NSE execution derives its
+profit target from the shares that FIFO would consume.
 """
 
 from __future__ import annotations

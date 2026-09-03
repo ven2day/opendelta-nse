@@ -23,7 +23,7 @@ import pandas as pd
 
 from backend.backtest.metrics import MetricsAccumulator
 from backend.backtest.result_writer import ResultWriter
-from backend.core.fifo import FifoInventory, FifoMatch
+from backend.core.fifo import FifoInventory, FifoMatch, net_profit_target_price
 from backend.core.models import MarketContext
 from backend.markets.base import CandleSource, MarketSpec
 from backend.strategies.base import Strategy, decision_frame
@@ -144,6 +144,7 @@ class _Lot:
     entry_price: float
     quantity: int
     target_price: float
+    target_pct: float
     stop_price: float | None
     expires_bar: int | None
     fees: float
@@ -260,27 +261,37 @@ class BacktestEngine:
                 if entered is not None:
                     open_lots.append(entered)
                     inventory.add(entered.lot_id, entered.entry_timestamp, entered.entry_price, entered.quantity, entered.fees)
+                    self._refresh_fifo_targets(open_lots, inventory)
                     cycle_first_entry_price = cycle_first_entry_price or entered.entry_price
                     last_entry_price = entered.entry_price
                 else:
                     entries -= 1
             still_open: list[_Lot] = []
+            nse_exit_occurred = False
+            inventory_changed = False
             for lot in open_lots:
                 if bar > lot.entry_bar:
                     lot.lowest = min(lot.lowest, float(lows[bar]))
                     lot.highest = max(lot.highest, float(highs[bar]))
                 closed = self._maybe_exit(lot, bar, stamp, highs, lows, closes)
+                if closed is not None and closed[0] == "TARGET_HIT" and nse_exit_occurred:
+                    closed = None
                 if closed is None:
                     still_open.append(lot)
                 else:
                     fifo = inventory.consume(lot.quantity) if self.market.market == "NSE" else None
+                    inventory_changed = fifo is not None
                     row = self._trade_row(request, symbol, lot, bar_minutes, closed, fifo=fifo)
+                    if self.market.market == "NSE":
+                        nse_exit_occurred = True
                     metrics.add_trade(row)
                     batch.append(row)
                     if len(batch) >= execution.batch_size:
                         self.writer.write_trades(request.run_id, batch)
                         batch = []
             open_lots = still_open
+            if inventory_changed:
+                self._refresh_fifo_targets(open_lots, inventory)
             if not open_lots and pending is None:
                 entries = 0
                 cycle_first_entry_price = None
@@ -316,7 +327,7 @@ class BacktestEngine:
                 pending = (bar, entries, f"{symbol}-Cycle{cycle}")
                 entries += 1
         last_close = float(closes[-1]) if bars else 0.0
-        open_fifo = inventory.preview_allocations([lot.quantity for lot in open_lots]) if self.market.market == "NSE" else [None] * len(open_lots)
+        open_fifo = [inventory.preview_allocations([lot.quantity])[0] for lot in open_lots] if self.market.market == "NSE" else [None] * len(open_lots)
         for lot, fifo in zip(open_lots, open_fifo):
             row = self._trade_row(request, symbol, lot, bar_minutes, None, last_close=last_close, last_bar=bars - 1, fifo=fifo)
             metrics.add_trade(row)
@@ -337,13 +348,16 @@ class BacktestEngine:
         entry_price = round(fill.price, 4)
         if execution.target_pct is not None:
             target = entry_price * (1 + execution.target_pct / 100)
+            target_pct = execution.target_pct
         elif ladder is not None:
             target = entry_price * (1 + float(config["target_pct"]) / 100)
+            target_pct = float(config["target_pct"])
         else:
             strategy_target = float(signal_targets[signal_bar])
             signal_close = float(closes[signal_bar])
             # Preserve the strategy's target distance relative to the actual fill.
             target = entry_price * (strategy_target / signal_close) if signal_close > 0 and not math.isnan(strategy_target) else entry_price * 1.01
+            target_pct = (target / entry_price - 1) * 100
         stop = entry_price * (1 - execution.stop_loss_pct / 100) if execution.stop_loss_pct is not None else None
         expires_bar = bar + execution.maximum_holding_bars if execution.maximum_holding_bars is not None else None
         return _Lot(
@@ -357,6 +371,7 @@ class BacktestEngine:
             entry_price=entry_price,
             quantity=quantity,
             target_price=round(target, 4),
+            target_pct=target_pct,
             stop_price=round(stop, 4) if stop is not None else None,
             expires_bar=expires_bar,
             fees=fill.fees,
@@ -364,6 +379,13 @@ class BacktestEngine:
             lowest=fill.price,
             highest=fill.price,
         )
+
+    def _refresh_fifo_targets(self, lots: Sequence[_Lot], inventory: FifoInventory) -> None:
+        if self.market.market != "NSE":
+            return
+        for lot in lots:
+            matched = inventory.preview_allocations([lot.quantity])[0]
+            lot.target_price = net_profit_target_price(matched, self.market.fees, lot.target_pct)
 
     def _maybe_exit(self, lot: _Lot, bar: int, stamp: datetime, highs, lows, closes) -> tuple[str, float, datetime, int] | None:
         if bar <= lot.entry_bar:

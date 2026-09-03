@@ -102,7 +102,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
 
       <Panel icon={<Wallet size={17} />} title="Open positions" description="Open paper lots with live marks. Closing a lot records a simulated exit at the price you enter." aside={<StatusBadge tone="good">{formatInteger(snapshot.data.positions.length)} open</StatusBadge>}>
         {!snapshot.data.positions.length ? <EmptyState title="No open paper positions" description="Lots open automatically when the signal engine records a strong buy." /> : <div className="quant-table-scroll"><table className="quant-table">
-          <thead><tr><th>Symbol</th><th className="numeric">Qty</th><th className="numeric">Entry</th><th className="numeric">Last</th><th className="numeric">Target</th><th className="numeric">Stop</th><th className="numeric">Unrealized</th><th className="numeric">MAE / MFE</th><th>Expires</th><th>Status</th><th>Manual close</th></tr></thead>
+          <thead><tr><th>Symbol</th><th className="numeric">Qty</th><th className="numeric">Entry</th><th className="numeric">Last</th><th className="numeric">{market === "NSE" ? "FIFO net target" : "Target"}</th><th className="numeric">Stop</th><th className="numeric">Unrealized</th><th className="numeric">MAE / MFE</th><th>Expires</th><th>Status</th><th>Manual close</th></tr></thead>
           <tbody>{snapshot.data.positions.map((lot) => <tr key={lot.lotId}>
             <td><strong>{lot.symbol}</strong><small>Lot {lot.lotNumber ?? "—"} · {formatDateTime(lot.entryTimestamp, market)}</small></td>
             <td className="numeric">{formatNumber(lot.quantity, 4)}</td>

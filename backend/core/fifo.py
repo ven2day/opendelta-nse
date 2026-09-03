@@ -7,8 +7,16 @@ separate from the tranche that requested a sale.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Protocol
+
+from backend.markets.base import Fill
+
+
+class SellFeeModel(Protocol):
+    def sell(self, price: float, quantity: float) -> Fill: ...
 
 
 @dataclass
@@ -34,6 +42,37 @@ class FifoMatch:
     cost_basis_price: float
     entry_fees: float
     allocations: tuple[FifoAllocation, ...]
+
+    @property
+    def acquisition_cost(self) -> float:
+        return self.cost_basis_price * self.quantity + self.entry_fees
+
+
+def net_profit_target_price(match: FifoMatch, fee_model: SellFeeModel, target_pct: float) -> float:
+    """Raw market price needed to retain ``target_pct`` after all execution costs."""
+    if target_pct <= 0:
+        raise ValueError("FIFO profit target must be positive")
+    desired_proceeds = match.acquisition_cost * (1 + float(target_pct) / 100)
+
+    def proceeds(raw_price: float) -> float:
+        fill = fee_model.sell(raw_price, match.quantity)
+        return fill.price * match.quantity - fill.fees
+
+    low = 0.0
+    high = max(match.cost_basis_price * (1 + float(target_pct) / 100), 1.0)
+    while proceeds(high) < desired_proceeds:
+        high *= 2
+        if not math.isfinite(high):
+            raise ValueError("FIFO profit target cannot be represented")
+    for _ in range(64):
+        middle = (low + high) / 2
+        if proceeds(middle) >= desired_proceeds:
+            high = middle
+        else:
+            low = middle
+    # NSE targets are placed in paise. Never round down below the configured
+    # net return after fees and adverse sell slippage.
+    return math.ceil(high * 100) / 100
 
 
 class FifoInventory:

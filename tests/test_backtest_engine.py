@@ -24,6 +24,13 @@ from test_strategy_engine import synthetic_nse_candles  # tests/ is on sys.path 
 IST = "Asia/Kolkata"
 
 
+def fifo_target_return_pct(trade: dict) -> float:
+    entry_fees = sum(float(item["fees"]) for item in trade["fifo_allocations"])
+    acquisition_cost = float(trade["cost_basis_price"]) * float(trade["quantity"]) + entry_fees
+    fill = NseFeeModel().sell(float(trade["target_price"]), float(trade["quantity"]))
+    return (fill.price * float(trade["quantity"]) - fill.fees - acquisition_cost) / acquisition_cost * 100
+
+
 class SyntheticSource:
     """Generates a distinct deterministic history per symbol on demand."""
 
@@ -128,7 +135,7 @@ class EngineBehaviourTests(unittest.TestCase):
             self.assertAlmostEqual(trade["net_pnl"], round(trade["gross_pnl"] - trade["fees"], 2), places=2)
             self.assertGreaterEqual(trade["mfe_pct"], 0.0)
             self.assertLessEqual(trade["mae_pct"], 0.0)
-        self.assertTrue(any(trade["cost_basis_price"] != trade["entry_price"] for trade in hits))
+            self.assertGreaterEqual(fifo_target_return_pct(trade), 1.0)
 
     def test_lot_ids_are_unique_and_statuses_are_well_formed(self) -> None:
         lot_ids = [trade["lot_id"] for trade in self.trades]
@@ -161,8 +168,8 @@ class EngineBehaviourTests(unittest.TestCase):
             entries = [lot["entry_timestamp"] for lot in lots]
             self.assertEqual(entries, sorted(entries))
             self.assertEqual(len({lot["entry_price"] for lot in lots}), len(lots))
-            for lot in lots:  # each lot carries its own target from its own fill
-                self.assertAlmostEqual(lot["target_price"], round(lot["entry_price"] * 1.08, 4))
+            for lot in lots:
+                self.assertGreaterEqual(fifo_target_return_pct(lot), 8.0)
             self.assertEqual(len({lot["lot_id"] for lot in lots}), len(lots))
         limited = MemoryResultWriter()
         engine(limited, SyntheticSource()).run(request(["AAA", "BBB"], execution=ExecutionSettings(target_pct=8.0, allow_additional_buys=False)))
@@ -196,7 +203,7 @@ class ExitRuleTests(unittest.TestCase):
         writer = MemoryResultWriter()
         engine(writer, SyntheticSource()).run(request(["AAA"], execution=ExecutionSettings(target_pct=0.3)))
         for trade in writer.trades:
-            self.assertAlmostEqual(trade["target_price"], round(trade["entry_price"] * 1.003, 4))
+            self.assertGreaterEqual(fifo_target_return_pct(trade), 0.3)
 
     def test_invalid_execution_settings_are_rejected(self) -> None:
         for bad in ({"stop_loss_pct": 0}, {"maximum_holding_bars": 0}, {"initial_quantity": 0}, {"additional_sizing_mode": "NOPE"}, {"unknownSetting": 1}):

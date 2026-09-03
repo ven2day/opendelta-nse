@@ -925,10 +925,10 @@ class PaperLotRepository:
         )
         return (int(row["cycles"]), int(row["open_lots"])) if row else (0, 0)
 
-    def mark(self, lot_id: uuid.UUID | str, *, last_price: float, cost_basis_price: float, fifo_allocations: Sequence[Mapping[str, Any]], entry_fees: float, unrealized_pnl: float, mae_pct: float, mfe_pct: float) -> None:
+    def mark(self, lot_id: uuid.UUID | str, *, last_price: float, cost_basis_price: float, fifo_allocations: Sequence[Mapping[str, Any]], target_price: float, entry_fees: float, unrealized_pnl: float, mae_pct: float, mfe_pct: float) -> None:
         self.database.execute(
-            "UPDATE paper_lots SET last_price = %s, cost_basis_price = %s, fifo_allocations = %s, fees = %s, unrealized_pnl = %s, mae_pct = %s, mfe_pct = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
-            (last_price, cost_basis_price, jsonb(list(fifo_allocations)), entry_fees, unrealized_pnl, mae_pct, mfe_pct, _now(), uuid.UUID(str(lot_id))),
+            "UPDATE paper_lots SET last_price = %s, cost_basis_price = %s, fifo_allocations = %s, target_price = %s, fees = %s, unrealized_pnl = %s, mae_pct = %s, mfe_pct = %s, updated_at = %s WHERE lot_id = %s AND status = 'OPEN'",
+            (last_price, cost_basis_price, jsonb(list(fifo_allocations)), target_price, entry_fees, unrealized_pnl, mae_pct, mfe_pct, _now(), uuid.UUID(str(lot_id))),
         )
 
     def close(self, lot_id: uuid.UUID | str, *, status: str, exit_timestamp: datetime, exit_price: float, cost_basis_price: float, fifo_allocations: Sequence[Mapping[str, Any]], realized_pnl: float, fees: float) -> dict[str, Any]:

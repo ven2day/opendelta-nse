@@ -76,14 +76,17 @@ to freeze the band from the first fill. The initial lot requires the strategy's
 RSI-recovery signal; while that cycle remains open, each completed-candle close
 at least the configured percentage below the previous fill schedules the next
 lot at the following candle open without requiring another RSI signal. The
-engines enforce the finite quantity array and capital ceiling and retain an
-independent target for every lot.
+engines enforce the finite quantity array and capital ceiling. Each tranche
+retains its sell quantity while the executable target changes with FIFO cost.
 
 For NSE/CNC, those targets are sell instructions rather than broker-selectable
 inventory lots. Dhan accepts a symbol and quantity, then matches the sale to the
-oldest available shares using FIFO. Backtest and Paper Trading therefore retain
-the tranche entry that triggered the sale while calculating realized P/L from
-the FIFO cost basis and recalculating the remaining holding cost after the sale.
+oldest available shares using FIFO. Before every NSE profit exit, Backtest and
+Paper Trading preview those shares and calculate the market price needed to
+retain the configured `target_pct` after allocated buy fees, sell fees and
+adverse slippage. A completed candle below that executable FIFO target cannot
+close the tranche. Only one profit exit is allowed per completed candle; after
+it executes, the remaining FIFO cost and targets are recalculated.
 
 ## Database
 

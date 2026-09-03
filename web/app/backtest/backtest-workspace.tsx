@@ -321,7 +321,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
               <SortableHeading label="Entry" column="entryTimestamp" active={tradeSort === "entryTimestamp"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Entry price" column="entryPrice" active={tradeSort === "entryPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Qty" column="quantity" active={tradeSort === "quantity"} direction={tradeDirection} numeric onSort={sortTrades} />
-              <SortableHeading label="Target" column="targetPrice" active={tradeSort === "targetPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label={market === "NSE" ? "FIFO net target" : "Target"} column="targetPrice" active={tradeSort === "targetPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Stop" column="stopPrice" active={tradeSort === "stopPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Exit" column="exitTimestamp" active={tradeSort === "exitTimestamp"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Exit price" column="exitPrice" active={tradeSort === "exitPrice"} direction={tradeDirection} numeric onSort={sortTrades} />

@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
-from backend.core.fifo import FifoInventory
+from backend.core.fifo import FifoInventory, net_profit_target_price
 from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperPendingEntryRepository, PaperTradeRepository
 from backend.markets.base import MarketSpec
 from backend.paper_trading.accounting import Accounting
@@ -175,6 +175,8 @@ class PaperBroker:
             self._fifo_inventory(symbol).add(lot["lotId"], entry_time, round(fill.price, 4), quantity, round(fill.fees, 4))
         self.account["cashBalance"] = self.repositories.accounts.adjust_cash(account_id, -cost)
         self.portfolio.add_lot(lot)
+        self._mark_open_lots(symbol, round(fill.price, 4), {})
+        lot = next(item for item in self.portfolio.lots_for(symbol) if item["lotId"] == lot["lotId"])
         self.filled += 1
         return lot
 
@@ -206,6 +208,7 @@ class PaperBroker:
             if deferred:
                 self.portfolio.pending_entries[symbol] = deferred
             survivors: dict[str, tuple[float, float]] = {}
+            nse_exit_occurred = False
             for lot in self.portfolio.lots_for(symbol):
                 if pd.Timestamp(lot["entryTimestamp"]) >= pd.Timestamp(stamp):
                     continue
@@ -215,10 +218,16 @@ class PaperBroker:
                 expires = lot.get("expiresAt")
                 if stop is not None and low <= float(stop):
                     closed.append(self._close_lot(lot, "STOPPED", float(stop), stamp, mae, mfe))
-                elif high >= float(lot["targetPrice"]):
+                    if self.market.market == "NSE":
+                        nse_exit_occurred = True
+                elif high >= float(lot["targetPrice"]) and not nse_exit_occurred:
                     closed.append(self._close_lot(lot, "TARGET_HIT", float(lot["targetPrice"]), stamp, mae, mfe))
+                    if self.market.market == "NSE":
+                        nse_exit_occurred = True
                 elif expires is not None and pd.Timestamp(stamp) >= pd.Timestamp(expires):
                     closed.append(self._close_lot(lot, "EXPIRED", close, stamp, mae, mfe))
+                    if self.market.market == "NSE":
+                        nse_exit_occurred = True
                 else:
                     survivors[lot["lotId"]] = (mae, mfe)
             self._mark_open_lots(symbol, close, survivors)
@@ -295,7 +304,7 @@ class PaperBroker:
             fifo_allocations = [{"lotId": lot["lotId"], "quantity": quantity, "entryPrice": cost_basis_price, "fees": entry_fees}]
         total_fees = round(entry_fees + fill.fees, 4)
         realized = Accounting.realized_pnl(cost_basis_price, round(fill.price, 4), quantity, total_fees)
-        self.repositories.lots.mark(lot["lotId"], last_price=raw_price, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, entry_fees=entry_fees, unrealized_pnl=0.0, mae_pct=mae, mfe_pct=mfe)
+        self.repositories.lots.mark(lot["lotId"], last_price=raw_price, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, target_price=float(lot["targetPrice"]), entry_fees=entry_fees, unrealized_pnl=0.0, mae_pct=mae, mfe_pct=mfe)
         updated = self.repositories.lots.close(lot["lotId"], status=status, exit_timestamp=stamp, exit_price=round(fill.price, 4), cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, realized_pnl=realized, fees=total_fees)
         self.repositories.trades.insert(account_id=self.account["accountId"], lot_id=lot["lotId"], market=self.market.market, symbol=lot["symbol"], side="SELL", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason=status, executed_at=stamp)
         if self.market.market == "NSE":
@@ -323,15 +332,16 @@ class PaperBroker:
         lots = sorted(self.portfolio.lots_for(symbol), key=lambda item: (item["entryTimestamp"], item["lotNumber"]))
         if not lots:
             return
-        matches = self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"]) for lot in lots]) if self.market.market == "NSE" else [None] * len(lots)
+        matches = [self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"])])[0] for lot in lots] if self.market.market == "NSE" else [None] * len(lots)
         for lot, matched in zip(lots, matches):
             cost_basis_price = round(matched.cost_basis_price, 4) if matched is not None else float(lot["entryPrice"])
             entry_fees = matched.entry_fees if matched is not None else float(lot.get("fees") or 0.0)
             fifo_allocations = _public_fifo_allocations(matched.allocations) if matched is not None else [{"lotId": lot["lotId"], "quantity": float(lot["quantity"]), "entryPrice": cost_basis_price, "fees": entry_fees}]
+            target_price = net_profit_target_price(matched, self.market.fees, _target_pct(lot)) if matched is not None else float(lot["targetPrice"])
             mae, mfe = excursions.get(lot["lotId"], (float(lot.get("maePct") or 0.0), float(lot.get("mfePct") or 0.0)))
             unrealized = Accounting.unrealized_pnl(cost_basis_price, close, float(lot["quantity"]), entry_fees)
-            self.repositories.lots.mark(lot["lotId"], last_price=close, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, entry_fees=entry_fees, unrealized_pnl=unrealized, mae_pct=mae, mfe_pct=mfe)
-            self.portfolio.replace_lot({**lot, "lastPrice": close, "costBasisPrice": cost_basis_price, "fifoAllocations": fifo_allocations, "unrealizedPnl": unrealized, "maePct": mae, "mfePct": mfe})
+            self.repositories.lots.mark(lot["lotId"], last_price=close, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, target_price=target_price, entry_fees=entry_fees, unrealized_pnl=unrealized, mae_pct=mae, mfe_pct=mfe)
+            self.portfolio.replace_lot({**lot, "lastPrice": close, "costBasisPrice": cost_basis_price, "fifoAllocations": fifo_allocations, "targetPrice": target_price, "unrealizedPnl": unrealized, "maePct": mae, "mfePct": mfe})
 
     # ---- views ----------------------------------------------------------------------------
 
@@ -352,3 +362,10 @@ def _public_fifo_allocations(allocations) -> list[dict[str, Any]]:
         {"lotId": item.acquisition_id, "quantity": item.quantity, "entryPrice": item.price, "fees": round(item.fees, 4)}
         for item in allocations
     ]
+
+
+def _target_pct(lot: Mapping[str, Any]) -> float:
+    value = (lot.get("configurationSnapshot") or {}).get("target_pct")
+    if value is None:
+        raise ValueError(f"Paper lot {lot['lotId']} has no immutable target_pct")
+    return float(value)

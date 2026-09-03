@@ -11,11 +11,19 @@ import pandas as pd
 from backend.backtest import BacktestEngine, BacktestRequest, ExecutionSettings, MemoryResultWriter
 from backend.core.models import MarketContext
 from backend.markets.base import market_spec
+from backend.markets.nse.fees import NseFeeModel
 from backend.strategies import STRATEGIES
 from backend.strategies.base import decision_frame
 from backend.strategies.lot_policy import PriceBandLadder
 
 IST = "Asia/Kolkata"
+
+
+def fifo_target_return_pct(trade: dict) -> float:
+    entry_fees = sum(float(item["fees"]) for item in trade["fifo_allocations"])
+    acquisition_cost = float(trade["cost_basis_price"]) * float(trade["quantity"]) + entry_fees
+    fill = NseFeeModel().sell(float(trade["target_price"]), float(trade["quantity"]))
+    return (fill.price * float(trade["quantity"]) - fill.fees - acquisition_cost) / acquisition_cost * 100
 
 
 def candles(closes: list[float]) -> pd.DataFrame:
@@ -84,18 +92,18 @@ class RsiDipLadderTests(unittest.TestCase):
         lots = sorted(writer.trades, key=lambda row: row["lot_number"])
         self.assertEqual([lot["lot_number"] for lot in lots], [1, 2, 3, 4])
         self.assertEqual([lot["quantity"] for lot in lots], [5, 10, 25, 50])
-        self.assertTrue(all(lot["target_price"] == round(lot["entry_price"] * 1.5, 4) for lot in lots))
+        self.assertTrue(all(fifo_target_return_pct(lot) >= 50 for lot in lots))
         for lot in lots:
             signal_position = frame.index.get_loc(pd.Timestamp(lot["signal_timestamp"]))
             self.assertEqual(pd.Timestamp(lot["entry_timestamp"]), frame.index[signal_position + 1])
 
-    def test_five_percent_targets_are_independent_by_default(self) -> None:
+    def test_five_percent_targets_use_each_candidate_fifo_quantity(self) -> None:
         frame = candles([900, 880, 860, 840, 860, 880, 820, 800, 820, 840, 860, 880, 920])
         writer = MemoryResultWriter()
         BacktestEngine(strategy=self.strategy, market=market_spec("NSE"), source=Source(frame), writer=writer).run(BacktestRequest(run_id="targets", market="NSE", strategy_id=self.strategy.strategy_id, symbols=["TEST"], timeframe="5m", start_date=date(2026, 8, 3), end_date=date(2026, 8, 3), configuration={"rsi_length": 2, "rsi_low": 30, "rsi_recovery": 35}))
         self.assertTrue(writer.trades)
         for lot in writer.trades:
-            self.assertAlmostEqual(lot["target_price"], round(lot["entry_price"] * 1.05, 4))
+            self.assertGreaterEqual(fifo_target_return_pct(lot), 5)
         self.assertEqual([lot["quantity"] for lot in sorted(writer.trades, key=lambda row: row["lot_number"])], [10, 20])
 
 

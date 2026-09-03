@@ -182,8 +182,9 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/backtest");
   await expect(page.getByRole("button", { name: "Run backtest" })).toBeVisible();
-  const controls = ["Strategy", "Timeframe", "Start date", "End date", "Universe"];
-  const tops = await Promise.all(controls.map((label) => page.getByLabel(label, { exact: true }).evaluate((element) => Math.round(element.getBoundingClientRect().top))));
+  const controls = page.locator(".quant-backtest-run-grid select, .quant-backtest-run-grid input");
+  await expect(controls).toHaveCount(5);
+  const tops = await controls.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
   expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
 
   await expect(page.getByText("OPEN", { exact: true })).toHaveClass(/warn/);

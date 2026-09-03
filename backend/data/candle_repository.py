@@ -43,26 +43,30 @@ class CanonicalCandleRepository:
     ) -> CandleStream | None:
         key = symbol.strip().upper()
         provider_key = provider.strip().upper() if provider else None
+        provider_clause = " AND provider=%s" if provider_key else ""
+        parameters: tuple[Any, ...] = (
+            market.strip().upper(), timeframe, key,
+            *((provider_key,) if provider_key else ()),
+            market.strip().upper(), timeframe, key,
+            *((provider_key,) if provider_key else ()),
+        )
         rows = self.database.fetch_all(
-            """
+            f"""
             SELECT DISTINCT provider, instrument_id
             FROM (
                 SELECT provider, instrument_id
                 FROM market_candles
                 WHERE market=%s AND timeframe=%s AND complete
-                  AND symbol=%s AND (%s IS NULL OR provider=%s)
+                  AND symbol=%s{provider_clause}
                 UNION
                 SELECT provider, instrument_id
                 FROM market_candles
                 WHERE market=%s AND timeframe=%s AND complete
-                  AND instrument_id=%s AND (%s IS NULL OR provider=%s)
+                  AND instrument_id=%s{provider_clause}
             ) AS candidates
             ORDER BY provider, instrument_id
             """,
-            (
-                market.strip().upper(), timeframe, key, provider_key, provider_key,
-                market.strip().upper(), timeframe, key, provider_key, provider_key,
-            ),
+            parameters,
         )
         if not rows:
             return None

@@ -7,7 +7,7 @@ import type { PlatformMarket } from "./platform/platform-client";
 import { useV2Resource } from "./platform/use-v2";
 import { v2Get } from "./platform/v2-client";
 import type { DashboardPayload, Section } from "./platform/v2-types";
-import { EmptyState, LoadingState, MarketTabs, Panel, PaperOnlyBadge, PnlValue, RequestErrorState, SectionError, StatusBadge, SymbolTags, WorkspaceHeader } from "./platform/workspace-ui";
+import { EmptyState, LoadingState, Panel, PaperOnlyBadge, PnlValue, RequestErrorState, SectionError, StatusBadge, SymbolTags, WorkspaceHeader } from "./platform/workspace-ui";
 
 const DASHBOARD_REFRESH_MS = 30_000;
 
@@ -36,7 +36,6 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
       description="One view of market data health, the screener universe, recent backtests, the live signal engine and the paper account. Every number here is research or paper only."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button></div>}
     />
-    <MarketTabs market={market} pathname="/" />
     {loading ? <LoadingState label="Loading dashboard" /> : error ? <RequestErrorState error={error} retry={reload} /> : data && <>
       <section className="quant-kpi-grid">
         <article><span>Market data</span><strong>{freshness?.status ?? "Unknown"}</strong><small>{freshness?.ageSeconds != null ? `Age ${formatAge(freshness.ageSeconds)}` : (freshness?.reason ?? "No freshness report")}</small></article>

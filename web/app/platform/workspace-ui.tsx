@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, DatabaseZap, LoaderCircle } from "lucide-react";
-import { formatSignedMoney, MARKETS, marketLabel } from "./format";
+import { formatSignedMoney } from "./format";
 import type { PlatformMarket } from "./platform-client";
 import { isPlatformUnconfigured } from "./v2-client";
 
@@ -41,11 +41,6 @@ export function StatusBadge({ children, tone = "neutral" }: { children: ReactNod
 
 export function PaperOnlyBadge() {
   return <StatusBadge tone="good">Paper only · broker execution disabled</StatusBadge>;
-}
-
-/** Page-level market selector; navigates to the same page with `?market=` so the chrome and the page agree. */
-export function MarketTabs({ market, pathname }: { market: PlatformMarket; pathname: string }) {
-  return <nav className="quant-market-tabs" aria-label="Market selector">{MARKETS.map((item) => <a key={item} className={market === item ? "active" : ""} href={`${pathname}?market=${item}`} aria-current={market === item ? "page" : undefined}>{marketLabel(item)}</a>)}</nav>;
 }
 
 export function Panel({ icon, title, description, aside, children, className }: { icon?: ReactNode; title: string; description?: string; aside?: ReactNode; children: ReactNode; className?: string }) {

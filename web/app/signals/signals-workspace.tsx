@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { v2Get } from "../platform/v2-client";
 import type { SignalsHealth, SignalsResponse } from "../platform/v2-types";
-import { EmptyState, LoadingState, MarketTabs, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, Tag, WorkspaceHeader } from "../platform/workspace-ui";
+import { EmptyState, LoadingState, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, Tag, WorkspaceHeader } from "../platform/workspace-ui";
 
 const SIGNAL_REFRESH_MS = 15_000;
 const SIGNAL_LIMIT = 200;
@@ -37,7 +37,6 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
       description="Completed-candle signals from the unified engine. Gold is a fresh strong buy, orange is holding, green hit its target, and red exited or expired. Refreshes every 15 seconds."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { health.refresh(); signals.refresh(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
-    <MarketTabs market={market} pathname="/signals" />
 
     {health.error ? <RequestErrorState error={health.error} retry={health.reload} /> : <div className="quant-health-bar" role="status" aria-label="Signal engine health">
       <div><span>Worker</span><strong>{health.loading ? "Checking" : (engine?.status ?? "Not running")}</strong><small>{worker ? "Live worker report" : stored ? "Last stored heartbeat" : "No engine report for this market"}</small></div>

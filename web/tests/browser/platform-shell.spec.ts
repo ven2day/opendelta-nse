@@ -148,7 +148,8 @@ test("the market switcher keeps the current page and carries the market into nav
   await expect(cryptoSwitch).toHaveAttribute("href", "/screener?market=CRYPTO");
   await cryptoSwitch.click();
   await expect(page).toHaveURL(/\/screener\?market=CRYPTO$/);
-  await expect(page.locator('.quant-market-tabs a[aria-current="page"]')).toHaveText("Crypto");
+  await expect(page.locator('.platform-market-switch a.active')).toHaveText("Crypto");
+  await expect(page.locator('.quant-market-tabs[aria-label="Market selector"]')).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("href", "/signals?market=CRYPTO");
 });
 

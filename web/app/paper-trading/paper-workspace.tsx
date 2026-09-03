@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { PaperAccount, PaperLot, PaperOrder, PaperTrade } from "../platform/v2-types";
-import { EmptyState, LoadingState, MarketTabs, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const PAPER_REFRESH_MS = 15_000;
 type Notice = { kind: "success" | "error"; text: string } | null;
@@ -84,7 +84,6 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
       description={`Simulated ${currency} account driven by the signal engine. Fills, fees and slippage are modelled; nothing here reaches a broker.`}
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button></div>}
     />
-    <MarketTabs market={market} pathname="/paper-trading" />
 
     {snapshot.loading ? <LoadingState label="Loading paper account" /> : snapshot.error ? <RequestErrorState error={snapshot.error} retry={snapshot.reload} /> : snapshot.data && account && <>
       <section className="quant-kpi-grid">

@@ -54,6 +54,10 @@ class RsiDipLadderTests(unittest.TestCase):
         self.assertEqual(policy.maximum_entries, 4)
         self.assertEqual(self.config["target_pct"], 5)
 
+    def test_four_hour_nse_backtests_are_exposed(self) -> None:
+        self.assertIn("4h", self.strategy.supported_timeframes)
+        self.assertEqual(market_spec("NSE").minutes("4h"), 240)
+
     def test_invalid_ladders_and_rsi_thresholds_are_rejected(self) -> None:
         for override in (
             {"rsi_low": 35, "rsi_recovery": 35},

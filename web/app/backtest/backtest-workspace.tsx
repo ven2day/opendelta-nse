@@ -324,7 +324,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
               <SortableHeading label="Stop" column="stopPrice" active={tradeSort === "stopPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Exit" column="exitTimestamp" active={tradeSort === "exitTimestamp"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Exit price" column="exitPrice" active={tradeSort === "exitPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
-              <SortableHeading label="Net PnL" column="netPnl" active={tradeSort === "netPnl"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="P&amp;L" column="netPnl" active={tradeSort === "netPnl"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="MAE / MFE" column="maePct" active={tradeSort === "maePct"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Holding" column="holdingMinutes" active={tradeSort === "holdingMinutes"} direction={tradeDirection} numeric onSort={sortTrades} />
             </tr>
@@ -344,9 +344,9 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <td className="numeric">{formatNumber(trade.stopPrice)}</td>
             <td>{formatDateTime(trade.exitTimestamp, market)}</td>
             <td className="numeric">{formatNumber(trade.exitPrice)}</td>
-            <td className="numeric"><PnlValue value={trade.netPnl ?? trade.unrealizedPnl} market={market} /></td>
+            <td className="numeric"><PnlValue value={trade.status === "OPEN" ? trade.unrealizedPnl : trade.netPnl} market={market} /><small>{trade.status === "OPEN" ? "Unrealized" : "Realized"}</small></td>
             <td className="numeric">{formatPercent(trade.maePct)} / {formatPercent(trade.mfePct)}</td>
-            <td className="numeric">{formatMinutes(trade.holdingMinutes)}</td>
+            <td className="numeric">{trade.holdingMinutes != null ? formatMinutes(trade.holdingMinutes) : trade.holdingBars != null ? `${formatInteger(trade.holdingBars)} bars` : "—"}</td>
           </tr>)}</tbody>
         </table></div>
       {!trades.loading && !trades.error && trades.data && <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{total ? `${pageStart}–${pageEnd}` : "0"} of {formatInteger(total)} trades</span></div>}

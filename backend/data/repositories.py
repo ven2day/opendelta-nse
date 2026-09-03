@@ -179,7 +179,7 @@ class BacktestTradeRepository:
         "stopPrice": "stop_price",
         "exitTimestamp": "exit_timestamp",
         "exitPrice": "exit_price",
-        "netPnl": "net_pnl",
+        "netPnl": "CASE WHEN status = 'OPEN' THEN unrealized_pnl ELSE net_pnl END",
         "maePct": "mae_pct",
         "mfePct": "mfe_pct",
         "holdingMinutes": "holding_minutes",

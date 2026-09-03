@@ -134,6 +134,13 @@ class EngineBehaviourTests(unittest.TestCase):
         self.assertEqual(len(lot_ids), len(set(lot_ids)))
         self.assertTrue({"TARGET_HIT", "OPEN"} & {trade["status"] for trade in self.trades})
 
+    def test_open_lots_publish_mark_to_market_pnl_and_holding_duration(self) -> None:
+        open_trades = [trade for trade in self.trades if trade["status"] == "OPEN"]
+        self.assertGreater(len(open_trades), 0)
+        for trade in open_trades:
+            self.assertIsInstance(trade["unrealized_pnl"], float)
+            self.assertEqual(trade["holding_minutes"], float(trade["holding_bars"] * 5))
+
     def test_each_strong_buy_lot_is_tracked_and_closed_independently(self) -> None:
         """A far target keeps lots open, so later signals in the same cycle add further independent lots."""
         writer = MemoryResultWriter()

@@ -389,7 +389,7 @@ class BacktestEngine:
                 "net_pnl": 0.0,
                 "unrealized_pnl": round((price - lot.entry_price) * lot.quantity - lot.fees, 2),
                 "holding_bars": holding_bars,
-                "holding_minutes": None,
+                "holding_minutes": float(holding_bars * bar_minutes),
             }
         status, raw_exit, exit_stamp, exit_bar = closed
         fill = self.market.fees.sell(raw_exit, lot.quantity)

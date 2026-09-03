@@ -170,8 +170,8 @@ test("backtest ticket is compact and trade controls filter and sort the full res
     if (url.pathname.endsWith(`/backtests/${run.runId}/trades`)) {
       tradeRequests.push(url);
       const rows = url.searchParams.has("symbol") || url.searchParams.has("status") ? [] : [
-        { symbol: "TCS", lotId: "lot-open", status: "OPEN", entryTimestamp: "2026-09-01T09:30:00Z", entryPrice: 100, quantity: 10, targetPrice: 101, unrealizedPnl: 5 },
-        { symbol: "RELIANCE", lotId: "lot-hit", status: "TARGET_HIT", entryTimestamp: "2026-09-01T09:35:00Z", entryPrice: 200, quantity: 5, targetPrice: 202, exitPrice: 202, netPnl: 10 },
+        { symbol: "TCS", lotId: "lot-open", status: "OPEN", entryTimestamp: "2026-09-01T09:30:00Z", entryPrice: 100, quantity: 10, targetPrice: 101, netPnl: 0, unrealizedPnl: -5, holdingBars: 12 },
+        { symbol: "RELIANCE", lotId: "lot-hit", status: "TARGET_HIT", entryTimestamp: "2026-09-01T09:35:00Z", entryPrice: 200, quantity: 5, targetPrice: 202, exitPrice: 202, netPnl: 10, holdingMinutes: 25 },
       ];
       return route.fulfill({ json: { runId: run.runId, total: rows.length, limit: 50, offset: 0, trades: rows } });
     }
@@ -209,6 +209,8 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   expect(headings.at(-1)?.width).toBeGreaterThanOrEqual(100);
   await tradeScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
   await expect(page.getByRole("columnheader", { name: /Holding/ })).toBeInViewport();
+  await expect(page.getByText("Unrealized", { exact: true })).toBeVisible();
+  await expect(page.getByText("12 bars", { exact: true })).toBeVisible();
 
   await expect(page.getByText("OPEN", { exact: true })).toHaveClass(/warn/);
   await page.getByRole("button", { name: /Symbol/ }).click();

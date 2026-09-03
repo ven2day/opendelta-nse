@@ -148,7 +148,7 @@ test("the backtest run ticket uses defaults with one collapsed JSON override", a
   assert.match(source, /aria-label="Filter trades by symbol"/);
   assert.match(source, /aria-label="Filter trades by status"/);
   assert.match(source, /sort: tradeSort, direction: tradeDirection/);
-  assert.match(source, /<SortableHeading label="Net PnL"/);
+  assert.match(source, /<SortableHeading label="P&amp;L"/);
 });
 
 test("OPEN uses the warning colour while completed targets remain green", async () => {
@@ -167,8 +167,10 @@ test("the backtest trade ledger preserves readable outcome columns", async () =>
   ]);
   assert.match(workspace, /quant-table quant-trades-table/);
   assert.equal((workspace.match(/<col className="quant-trade-/g) ?? []).length, 12);
-  assert.match(styles, /\.quant-trades-table\s*\{[^}]*width:\s*1490px;[^}]*min-width:\s*1490px;[^}]*table-layout:\s*fixed;/s);
+  assert.match(styles, /\.quant-trades-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*1490px;[^}]*table-layout:\s*fixed;/s);
   assert.match(styles, /\.quant-trades-table th,[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(workspace, /trade\.status === "OPEN" \? trade\.unrealizedPnl : trade\.netPnl/);
+  assert.match(workspace, /trade\.holdingBars != null/);
 });
 
 test("workspace headers stay compact and the screener declares both markets", async () => {

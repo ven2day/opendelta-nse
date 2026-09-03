@@ -8,12 +8,12 @@ process.env.AUTH_SECRET = "test-secret-that-is-at-least-32-characters-long";
 
 const NAVIGATION = ["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"];
 const ROUTES = [
-  { path: "/", title: "Dashboard", marketSelector: true },
-  { path: "/screener", title: "Screener", marketSelector: true },
-  { path: "/backtest", title: "Backtest", marketSelector: true },
-  { path: "/signals", title: "Signals", marketSelector: true },
-  { path: "/paper-trading", title: "Paper Trading", marketSelector: true },
-  { path: "/settings", title: "Settings", marketSelector: false },
+  { path: "/", title: "Dashboard" },
+  { path: "/screener", title: "Screener" },
+  { path: "/backtest", title: "Backtest" },
+  { path: "/signals", title: "Signals" },
+  { path: "/paper-trading", title: "Paper Trading" },
+  { path: "/settings", title: "Settings" },
 ];
 
 async function loadWorker() {
@@ -50,11 +50,11 @@ function navigationLabels(html) {
 }
 
 function marketSelectorLinks(html) {
-  const selector = html.match(/<nav class="quant-market-tabs" aria-label="Market selector">[\s\S]*?<\/nav>/)?.[0] ?? "";
+  const selector = html.match(/<div class="platform-market-switch"[\s\S]*?<\/div>/)?.[0] ?? "";
   return Array.from(selector.matchAll(/href="([^"]+)"/g), (match) => match[1].replace(/&amp;/g, "&"));
 }
 
-test("every unified route requires login, renders the six-item navigation and its market selector", async () => {
+test("every unified route requires login and renders one topbar market selector", async () => {
   const worker = await loadWorker();
   const cookie = await login(worker);
 
@@ -74,14 +74,9 @@ test("every unified route requires login, renders the six-item navigation and it
     assert.match(html, /Paper research only/);
     assert.doesNotMatch(html, /class="global-header"/, `${route.path} must not embed the legacy header`);
     assert.doesNotMatch(html, /Vento NSE/);
-
-    const links = marketSelectorLinks(html);
-    if (route.marketSelector) {
-      assert.deepEqual(links, [`${route.path}?market=NSE`, `${route.path}?market=CRYPTO`], `${route.path} market selector`);
-      assert.match(html, /aria-label="Market selector"[\s\S]*?class="active"[^>]*href="[^"]*market=NSE"/, `${route.path} defaults to NSE`);
-    } else {
-      assert.equal(links.length, 0, `${route.path} must not render a page market selector`);
-    }
+    assert.deepEqual(marketSelectorLinks(html), [`${route.path}?market=NSE`, `${route.path}?market=CRYPTO`], `${route.path} topbar market selector`);
+    assert.match(html, /aria-label="Active market"[\s\S]*?class="active"[^>]*href="[^"]*market=NSE"/, `${route.path} defaults to NSE`);
+    assert.doesNotMatch(html, /<nav class="quant-market-tabs" aria-label="Market selector">/, `${route.path} must not duplicate the topbar market selector`);
   }
 
   const cryptoDashboard = await fetchFromWorker(worker, "/screener?market=CRYPTO", { headers: { accept: "text/html", cookie } });

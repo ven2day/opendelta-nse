@@ -8,7 +8,7 @@ import { compactValues, schemaDefaults, schemaFromValues, SchemaForm, type Confi
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversesResponse } from "../platform/v2-types";
-import { EmptyState, LoadingState, MarketTabs, Message, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, SymbolTags, WorkspaceHeader } from "../platform/workspace-ui";
+import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, SymbolTags, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
 const ACTIVE_RUN_STATUSES = new Set(["QUEUED", "RUNNING", "PENDING"]);
@@ -176,7 +176,6 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       description="Rank instruments by liquidity, price, volatility and data coverage, review what passed or was rejected, then freeze the list as the universe used by backtests and the signal engine."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshUniverses(); refreshResults(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
-    <MarketTabs market={market} pathname="/screener" />
 
     <section className="quant-kpi-grid">
       <article><span>Latest run</span><strong>{selectedRun?.status ?? "None"}</strong><small>{selectedRun ? `${shortId(selectedRun.runId)} · ${formatDateTime(selectedRun.requestedAt, market)}` : "No screener runs yet"}</small></article>

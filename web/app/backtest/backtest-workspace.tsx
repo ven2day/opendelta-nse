@@ -8,7 +8,7 @@ import { compactValues, pickValues, schemaDefaults, schemaFromValues, SchemaForm
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
 import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversesResponse } from "../platform/v2-types";
-import { EmptyState, LoadingState, MarketTabs, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
 const TRADES_POLL_MS = 6_000;
@@ -174,7 +174,6 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       description="Run any registered strategy against the active universe with a reproducible configuration snapshot. Runs are stored on the platform database and resume-safe."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshRun(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
-    <MarketTabs market={market} pathname="/backtest" />
 
     <Panel icon={<FlaskConical size={17} />} title="New backtest" description="Strategy parameters are generated from the strategy's published schema; execution settings start from the platform risk defaults.">
       {strategies.loading || universes.loading ? <LoadingState label="Loading strategies and universes" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies for this market" description={`No registered strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={submit} noValidate>

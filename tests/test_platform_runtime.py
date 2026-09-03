@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import time
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
 
 from backend.api.backtest_routes import BacktestCreateRequest, BacktestServices, create_backtest_router
+from backend.data.candle_repository import CanonicalCandleRepository
 from backend.data.database import Database, DatabaseUnavailable
 from backend.data.migrate import main as migrate_main
+from backend.markets.timescale_source import TimescaleCandleSource
 from backend.platform_runtime import PlatformRuntime
 from backend.strategies import STRATEGIES
 from test_backtest_engine import SyntheticSource
@@ -126,6 +128,39 @@ class EndToEndBacktestTests(unittest.TestCase):
                 self.assertAlmostEqual(row["netPnl"], round(row["grossPnl"] - row["fees"], 2), places=2)
         self.assertEqual(record["configurationSnapshot"]["ema_fast"], 9)
         self.assertEqual(record["strategyVersion"], strategy.version)
+
+    def test_timescale_source_reads_warmup_for_nse_and_crypto_without_mixing_markets(self) -> None:
+        assert self.runtime.database is not None
+        start = datetime(2026, 8, 28, 10, tzinfo=UTC)
+        statement = """
+            INSERT INTO market_candles (
+                market, provider, instrument_id, symbol, timeframe,
+                open_time, close_time, open, high, low, close, volume, complete
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
+        """
+        for opened in (start - timedelta(minutes=5), start, start + timedelta(minutes=5)):
+            self.runtime.database.execute(
+                statement,
+                ("NSE", "DHAN", "reader-nse", "READERTEST", "5m", opened,
+                 opened + timedelta(minutes=5), 100, 102, 99, 101, 1_000),
+            )
+        self.runtime.database.execute(
+            statement,
+            ("CRYPTO", "OKX", "reader-crypto", "READERTEST", "5m", start,
+             start + timedelta(minutes=5), 200, 203, 198, 202, 2_000),
+        )
+        repository = CanonicalCandleRepository(self.runtime.database)
+        nse = TimescaleCandleSource(repository, market="NSE", provider="DHAN").candles(
+            "READERTEST", "5m", start, start + timedelta(minutes=10), warmup_bars=1
+        )
+        crypto = TimescaleCandleSource(repository, market="CRYPTO", provider="OKX").candles(
+            "READERTEST", "5m", start, start + timedelta(minutes=10), warmup_bars=0
+        )
+
+        self.assertEqual(list(nse.index), [start - timedelta(minutes=5), start, start + timedelta(minutes=5)])
+        self.assertEqual(list(crypto.index), [start])
+        self.assertEqual(list(nse["Close"]), [101.0, 101.0, 101.0])
+        self.assertEqual(list(crypto["Close"]), [202.0])
 
     def test_cancel_is_durable_and_a_cancelled_run_finishes_as_cancelled(self) -> None:
         created = self.api["POST /v2/backtests"](BacktestCreateRequest(market="NSE", strategyId="ema_vwap_strong_buy", symbols=[f"SYM{index:02d}" for index in range(12)], startDate=date(2026, 8, 3), endDate=date(2026, 8, 31)))

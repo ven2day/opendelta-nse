@@ -13,6 +13,7 @@ from backend.api.backtest_routes import BacktestCreateRequest, BacktestServices,
 from backend.api.settings_routes import create_settings_router
 from backend.backtest.engine import BacktestRequest
 from backend.data.database import DatabaseUnavailable
+from backend.data.repositories import BacktestTradeRepository
 from backend.strategies import STRATEGIES
 
 
@@ -43,12 +44,21 @@ class FakeTrades:
     def __init__(self) -> None:
         self.rows: dict[str, list[dict[str, Any]]] = {}
 
-    def list(self, run_id: str, *, symbol: str | None = None, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
-        rows = [row for row in self.rows.get(run_id, []) if symbol is None or row["symbol"] == symbol]
+    def list(self, run_id: str, *, symbol: str | None = None, status: str | None = None, sort_by: str = "entryTimestamp", direction: str = "asc", limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
+        if sort_by not in BacktestTradeRepository.SORT_COLUMNS:
+            raise ValueError(f"Unsupported trade sort column: {sort_by}")
+        rows = [
+            row for row in self.rows.get(run_id, [])
+            if (symbol is None or symbol in row["symbol"]) and (status is None or row.get("status") == status)
+        ]
+        rows.sort(key=lambda row: (row.get(sort_by) is None, row.get(sort_by), row.get("lotId")), reverse=direction == "desc")
         return rows[offset : offset + limit]
 
-    def count(self, run_id: str) -> int:
-        return len(self.rows.get(run_id, []))
+    def count(self, run_id: str, *, symbol: str | None = None, status: str | None = None) -> int:
+        return len([
+            row for row in self.rows.get(run_id, [])
+            if (symbol is None or symbol in row["symbol"]) and (status is None or row.get("status") == status)
+        ])
 
 
 class FakeRunner:
@@ -146,10 +156,21 @@ class BacktestRouteTests(unittest.TestCase):
             self.api["GET /v2/backtests/{run_id}"]("not-a-uuid")
         self.assertEqual(malformed.exception.status_code, 404)
         self.assertTrue(self.api["DELETE /v2/backtests/{run_id}"](run_id)["cancelRequested"])
-        self.trades.rows[run_id] = [{"symbol": "TCS", "lotId": f"TCS-Cycle1-Lot{index}"} for index in range(1, 4)] + [{"symbol": "RELIANCE", "lotId": "RELIANCE-Cycle1-Lot1"}]
+        self.trades.rows[run_id] = [
+            {"symbol": "TCS", "lotId": "TCS-Cycle1-Lot1", "status": "OPEN", "netPnl": 10},
+            {"symbol": "TCS", "lotId": "TCS-Cycle1-Lot2", "status": "TARGET_HIT", "netPnl": 30},
+            {"symbol": "TCS", "lotId": "TCS-Cycle1-Lot3", "status": "OPEN", "netPnl": 20},
+            {"symbol": "RELIANCE", "lotId": "RELIANCE-Cycle1-Lot1", "status": "TARGET_HIT", "netPnl": 40},
+        ]
         page = self.api["GET /v2/backtests/{run_id}/trades"](run_id, symbol="tcs", limit=2, offset=1)
         self.assertEqual([row["lotId"] for row in page["trades"]], ["TCS-Cycle1-Lot2", "TCS-Cycle1-Lot3"])
-        self.assertEqual(page["total"], 4)
+        self.assertEqual(page["total"], 3)
+        filtered = self.api["GET /v2/backtests/{run_id}/trades"](run_id, symbol="cs", status="open", sort="netPnl", direction="desc", limit=50, offset=0)
+        self.assertEqual([row["lotId"] for row in filtered["trades"]], ["TCS-Cycle1-Lot3", "TCS-Cycle1-Lot1"])
+        self.assertEqual(filtered["total"], 2)
+        with self.assertRaises(HTTPException) as invalid_sort:
+            self.api["GET /v2/backtests/{run_id}/trades"](run_id, symbol=None, sort="drop table", limit=50, offset=0)
+        self.assertEqual(invalid_sort.exception.status_code, 422)
 
     def test_routes_fail_closed_without_a_database(self) -> None:
         def unavailable() -> Any:

@@ -144,6 +144,20 @@ test("the backtest run ticket uses defaults with one collapsed JSON override", a
   assert.match(source, /validateConfigValues\(configuration\.execution, executionSchema/);
   assert.doesNotMatch(source, /<SchemaForm/);
   assert.doesNotMatch(source, /Universe symbols/);
+  assert.equal((source.match(/quant-backtest-run-grid/g) ?? []).length, 1, "desktop setup uses one compact control grid");
+  assert.match(source, /aria-label="Filter trades by symbol"/);
+  assert.match(source, /aria-label="Filter trades by status"/);
+  assert.match(source, /sort: tradeSort, direction: tradeDirection/);
+  assert.match(source, /<SortableHeading label="Net PnL"/);
+});
+
+test("OPEN uses the warning colour while completed targets remain green", async () => {
+  const source = await readFile(new URL("../app/platform/format.ts", import.meta.url), "utf8");
+  const successStatuses = source.match(/if \(\[([^\]]+)\]\.includes\(value\)\) return "good"/)?.[1] ?? "";
+  const warningStatuses = source.match(/if \(\[([^\]]+)\]\.includes\(value\)\) return "warn"/)?.[1] ?? "";
+  assert.doesNotMatch(successStatuses, /"OPEN"/);
+  assert.match(successStatuses, /"TARGET_HIT"/);
+  assert.match(warningStatuses, /"OPEN"/);
 });
 
 test("workspace headers stay compact and the screener declares both markets", async () => {

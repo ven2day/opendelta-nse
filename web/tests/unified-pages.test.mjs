@@ -166,9 +166,11 @@ test("the backtest trade ledger preserves readable outcome columns", async () =>
     readFile(new URL("../app/platform/trading-terminal.css", import.meta.url), "utf8"),
   ]);
   assert.match(workspace, /quant-table quant-trades-table/);
-  assert.equal((workspace.match(/<col className="quant-trade-/g) ?? []).length, 12);
-  assert.match(styles, /\.quant-trades-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*1490px;[^}]*table-layout:\s*fixed;/s);
+  assert.equal((workspace.match(/<col className="quant-trade-/g) ?? []).length, 13);
+  assert.match(styles, /\.quant-trades-table\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*1600px;[^}]*table-layout:\s*fixed;/s);
   assert.match(styles, /\.quant-trades-table th,[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(workspace, />Current close<\/th>/);
+  assert.match(workspace, /trade\.status === "OPEN" \? formatNumber\(trade\.lastPrice\) : "—"/);
   assert.match(workspace, /trade\.status === "OPEN" \? trade\.unrealizedPnl : trade\.netPnl/);
   assert.match(workspace, /trade\.holdingBars != null/);
 });

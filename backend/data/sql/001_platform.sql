@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
     slippage double precision NOT NULL DEFAULT 0,
     net_pnl double precision NOT NULL DEFAULT 0,
     unrealized_pnl double precision NOT NULL DEFAULT 0,
+    last_price double precision,
     mae_pct double precision,
     mfe_pct double precision,
     holding_bars integer NOT NULL DEFAULT 0,

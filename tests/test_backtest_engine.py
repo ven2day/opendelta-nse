@@ -139,6 +139,9 @@ class EngineBehaviourTests(unittest.TestCase):
         self.assertGreater(len(open_trades), 0)
         for trade in open_trades:
             self.assertIsInstance(trade["unrealized_pnl"], float)
+            self.assertIsInstance(trade["last_price"], float)
+            expected = round((trade["last_price"] - trade["entry_price"]) * trade["quantity"] - trade["fees"], 2)
+            self.assertEqual(trade["unrealized_pnl"], expected)
             self.assertEqual(trade["holding_minutes"], float(trade["holding_bars"] * 5))
 
     def test_each_strong_buy_lot_is_tracked_and_closed_independently(self) -> None:

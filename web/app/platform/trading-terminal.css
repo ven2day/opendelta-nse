@@ -456,7 +456,7 @@
    columns until their headings and values overlap. */
 .quant-trades-table {
   width: 100%;
-  min-width: 1490px;
+  min-width: 1600px;
   table-layout: fixed;
 }
 .quant-trades-table col.quant-trade-symbol { width: 150px; }

@@ -68,8 +68,8 @@ graph TB
     BT --> DB
     SIG --> DB
     SIG --> PB --> DB
-    DB --> API[/v2 API]
-    API --> UI[Dashboard · Screener · Backtest · Signals · Paper Trading · Settings]
+    DB --> API["v2 API"]
+    API --> UI["Dashboard · Screener · Backtest · Signals · Paper Trading · Settings"]
 ```
 
 The evaluator contract is `Strategy.evaluate(candles, market_context, config) → SignalDecision`

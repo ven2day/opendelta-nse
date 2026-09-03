@@ -178,6 +178,16 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
               <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, search, item)} aria-current={market === item ? "true" : undefined}>{marketLabel(item)}</a>
             ))}
           </div>
+          <nav className="platform-topnav" aria-label="Main navigation">
+            {navigation.map((item) => {
+              const { href, label, icon: Icon, match } = item;
+              return (
+                <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined}>
+                  <Icon size={15} /><span>{label}</span>
+                </a>
+              );
+            })}
+          </nav>
           <div className="platform-live-strip">
             <span className="platform-clock" title="Market clock"><Activity size={14} /><b>{marketClock}</b><small>{market === "NSE" ? "IST" : "UTC"}</small></span>
             <span className="platform-status" data-tone={statusTone(freshness)} title={overviewRefreshTitle}><i />Data <b>{freshnessLabel}</b></span>
@@ -191,16 +201,6 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
           <span className="platform-safety-chip" title="Paper research only · Broker execution disabled">
             <ShieldCheck size={15} /><strong><span>Paper research only</span><i>Paper only</i></strong><small>Broker disabled</small>
           </span>
-          <nav className="platform-topnav" aria-label="Main navigation">
-            {navigation.map((item) => {
-              const { href, label, icon: Icon, match } = item;
-              return (
-                <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined}>
-                  <Icon size={16} /><span>{label}</span>
-                </a>
-              );
-            })}
-          </nav>
         </header>
       </div>
       <div className="platform-content" id="main-content">{children}</div>

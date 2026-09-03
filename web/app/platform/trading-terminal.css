@@ -455,8 +455,8 @@
    make the table scroll inside its panel instead of compressing the outcome
    columns until their headings and values overlap. */
 .quant-trades-table {
-  width: 1490px;
-  min-width: 1490px;
+  width: 100%;
+  min-width: 1600px;
   table-layout: fixed;
 }
 .quant-trades-table col.quant-trade-symbol { width: 150px; }

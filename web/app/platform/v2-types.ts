@@ -156,6 +156,7 @@ export type BacktestTrade = {
   slippage?: number | null;
   netPnl?: number | null;
   unrealizedPnl?: number | null;
+  lastPrice?: number | null;
   maePct?: number | null;
   mfePct?: number | null;
   holdingBars?: number | null;

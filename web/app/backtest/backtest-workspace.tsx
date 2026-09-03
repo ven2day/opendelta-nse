@@ -309,6 +309,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <col className="quant-trade-price" />
             <col className="quant-trade-time" />
             <col className="quant-trade-price" />
+            <col className="quant-trade-price" />
             <col className="quant-trade-pnl" />
             <col className="quant-trade-excursion" />
             <col className="quant-trade-holding" />
@@ -324,17 +325,18 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
               <SortableHeading label="Stop" column="stopPrice" active={tradeSort === "stopPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Exit" column="exitTimestamp" active={tradeSort === "exitTimestamp"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Exit price" column="exitPrice" active={tradeSort === "exitPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
-              <SortableHeading label="Net PnL" column="netPnl" active={tradeSort === "netPnl"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <th className="numeric">Current close</th>
+              <SortableHeading label="P&amp;L" column="netPnl" active={tradeSort === "netPnl"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="MAE / MFE" column="maePct" active={tradeSort === "maePct"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Holding" column="holdingMinutes" active={tradeSort === "holdingMinutes"} direction={tradeDirection} numeric onSort={sortTrades} />
             </tr>
             <tr className="quant-filter-row">
               <th><input aria-label="Filter trades by symbol" type="search" value={tradeSymbolInput} placeholder="Filter…" onChange={(event) => setTradeSymbolInput(event.target.value)} /></th>
               <th><select aria-label="Filter trades by status" value={tradeStatus} onChange={(event) => { setTradeStatus(event.target.value); setTradeOffset(0); }}><option value="">All</option><option value="OPEN">Open</option><option value="TARGET_HIT">Target hit</option><option value="STOPPED">Stopped</option><option value="EXPIRED">Expired</option></select></th>
-              <th colSpan={10}></th>
+              <th colSpan={11}></th>
             </tr>
           </thead>
-          <tbody>{trades.loading ? <tr><td colSpan={12}><LoadingState label="Loading trades" /></td></tr> : trades.error ? <tr><td colSpan={12}><RequestErrorState error={trades.error} retry={trades.reload} /></td></tr> : !trades.data?.trades.length ? <tr><td colSpan={12}><EmptyState title="No trades yet" description={runActive ? "Trades appear as symbols complete." : "This run produced no trades for the selected filter."} /></td></tr> : trades.data.trades.map((trade) => <tr key={trade.lotId}>
+          <tbody>{trades.loading ? <tr><td colSpan={13}><LoadingState label="Loading trades" /></td></tr> : trades.error ? <tr><td colSpan={13}><RequestErrorState error={trades.error} retry={trades.reload} /></td></tr> : !trades.data?.trades.length ? <tr><td colSpan={13}><EmptyState title="No trades yet" description={runActive ? "Trades appear as symbols complete." : "This run produced no trades for the selected filter."} /></td></tr> : trades.data.trades.map((trade) => <tr key={trade.lotId}>
             <td><strong>{trade.symbol}</strong><small>Lot {trade.lotNumber ?? "—"} · {shortId(trade.cycleId)}</small></td>
             <td><StatusBadge tone={tone(trade.status)}>{trade.status}</StatusBadge></td>
             <td>{formatDateTime(trade.entryTimestamp, market)}</td>
@@ -344,9 +346,10 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <td className="numeric">{formatNumber(trade.stopPrice)}</td>
             <td>{formatDateTime(trade.exitTimestamp, market)}</td>
             <td className="numeric">{formatNumber(trade.exitPrice)}</td>
-            <td className="numeric"><PnlValue value={trade.netPnl ?? trade.unrealizedPnl} market={market} /></td>
+            <td className="numeric">{trade.status === "OPEN" ? formatNumber(trade.lastPrice) : "—"}</td>
+            <td className="numeric"><PnlValue value={trade.status === "OPEN" ? trade.unrealizedPnl : trade.netPnl} market={market} /><small>{trade.status === "OPEN" ? "Unrealized" : "Realized"}</small></td>
             <td className="numeric">{formatPercent(trade.maePct)} / {formatPercent(trade.mfePct)}</td>
-            <td className="numeric">{formatMinutes(trade.holdingMinutes)}</td>
+            <td className="numeric">{trade.holdingMinutes != null ? formatMinutes(trade.holdingMinutes) : trade.holdingBars != null ? `${formatInteger(trade.holdingBars)} bars` : "—"}</td>
           </tr>)}</tbody>
         </table></div>
       {!trades.loading && !trades.error && trades.data && <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{total ? `${pageStart}–${pageEnd}` : "0"} of {formatInteger(total)} trades</span></div>}

@@ -376,7 +376,7 @@ class BacktestEngine:
             "mfe_pct": round((lot.highest / lot.entry_price - 1) * 100, 4),
         }
         if closed is None:
-            price = float(last_close or lot.entry_price)
+            price = round(float(last_close or lot.entry_price), 4)
             holding_bars = int((last_bar or lot.entry_bar) - lot.entry_bar)
             return {
                 **base,
@@ -388,8 +388,9 @@ class BacktestEngine:
                 "slippage": round(lot.slippage, 4),
                 "net_pnl": 0.0,
                 "unrealized_pnl": round((price - lot.entry_price) * lot.quantity - lot.fees, 2),
+                "last_price": price,
                 "holding_bars": holding_bars,
-                "holding_minutes": None,
+                "holding_minutes": float(holding_bars * bar_minutes),
             }
         status, raw_exit, exit_stamp, exit_bar = closed
         fill = self.market.fees.sell(raw_exit, lot.quantity)
@@ -409,6 +410,7 @@ class BacktestEngine:
             "slippage": slippage,
             "net_pnl": round(gross - fees, 2),
             "unrealized_pnl": 0.0,
+            "last_price": exit_price,
             "holding_bars": holding_bars,
             "holding_minutes": float(holding_bars * bar_minutes),
         }

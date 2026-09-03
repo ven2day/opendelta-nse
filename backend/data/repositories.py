@@ -128,7 +128,7 @@ class BacktestRunRepository:
 TRADE_COLUMNS = (
     "run_id", "market", "strategy_id", "strategy_version", "symbol", "timeframe", "lot_id", "cycle_id", "lot_number",
     "signal_timestamp", "signal_price", "entry_timestamp", "entry_price", "quantity", "target_price", "stop_price", "expires_at",
-    "exit_timestamp", "exit_price", "status", "gross_pnl", "fees", "slippage", "net_pnl", "unrealized_pnl",
+    "exit_timestamp", "exit_price", "status", "gross_pnl", "fees", "slippage", "net_pnl", "unrealized_pnl", "last_price",
     "mae_pct", "mfe_pct", "holding_bars", "holding_minutes",
 )
 
@@ -161,6 +161,7 @@ def _public_trade(row: Mapping[str, Any]) -> dict[str, Any]:
         "slippage": row["slippage"],
         "netPnl": row["net_pnl"],
         "unrealizedPnl": row["unrealized_pnl"],
+        "lastPrice": row["last_price"],
         "maePct": row["mae_pct"],
         "mfePct": row["mfe_pct"],
         "holdingBars": int(row["holding_bars"]),
@@ -179,7 +180,7 @@ class BacktestTradeRepository:
         "stopPrice": "stop_price",
         "exitTimestamp": "exit_timestamp",
         "exitPrice": "exit_price",
-        "netPnl": "net_pnl",
+        "netPnl": "CASE WHEN status = 'OPEN' THEN unrealized_pnl ELSE net_pnl END",
         "maePct": "mae_pct",
         "mfePct": "mfe_pct",
         "holdingMinutes": "holding_minutes",

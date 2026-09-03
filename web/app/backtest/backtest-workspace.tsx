@@ -1,7 +1,7 @@
 "use client";
 
-import { FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square } from "lucide-react";
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { ArrowDown, ArrowUp, ChevronsUpDown, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, pickValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
@@ -18,6 +18,13 @@ const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 const DEFAULT_LOOKBACK_DAYS = 90;
 const DEFAULT_TIMEFRAME = "5m";
 type Notice = { kind: "success" | "error"; text: string } | null;
+type TradeSort = "symbol" | "status" | "entryTimestamp" | "entryPrice" | "quantity" | "targetPrice" | "stopPrice" | "exitTimestamp" | "exitPrice" | "netPnl" | "maePct" | "holdingMinutes";
+type SortDirection = "asc" | "desc";
+
+function SortableHeading({ label, column, active, direction, numeric, onSort }: { label: string; column: TradeSort; active: boolean; direction: SortDirection; numeric?: boolean; onSort: (column: TradeSort) => void }) {
+  const icon: ReactNode = active ? (direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ChevronsUpDown size={12} />;
+  return <th className={numeric ? "numeric" : undefined} aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}><button type="button" className="quant-sort-button" onClick={() => onSort(column)}>{label}{icon}</button></th>;
+}
 
 /** The only keys the POST /v2/backtests `execution` body accepts, in display order. */
 const EXECUTION_KEYS = ["targetPct", "stopLossPct", "maximumHoldingBars", "initialQuantity", "allowAdditionalBuys", "additionalQuantityPct", "additionalSizingMode", "minimumQuantity", "maximumEntriesPerCycle", "batchSize"] as const;
@@ -114,6 +121,9 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const [cancelling, setCancelling] = useState(false);
   const [tradeSymbolInput, setTradeSymbolInput] = useState("");
   const [tradeSymbol, setTradeSymbol] = useState("");
+  const [tradeStatus, setTradeStatus] = useState("");
+  const [tradeSort, setTradeSort] = useState<TradeSort>("entryTimestamp");
+  const [tradeDirection, setTradeDirection] = useState<SortDirection>("asc");
   const [tradeOffset, setTradeOffset] = useState(0);
 
   const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((strategy) => !strategy.supportedMarkets?.length || strategy.supportedMarkets.includes(market)), [strategies.data, market]);
@@ -143,15 +153,30 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const { refresh: refreshRun } = runDetail;
 
   const tradesRunId = run && run.status !== "QUEUED" ? run.runId : null;
-  const loadTrades = useCallback(() => (tradesRunId ? v2Get<BacktestTradesResponse>(`backtests/${tradesRunId}/trades`, { symbol: tradeSymbol || undefined, limit: TRADES_PAGE_SIZE, offset: tradeOffset }) : Promise.resolve(null)), [tradesRunId, tradeSymbol, tradeOffset]);
+  const loadTrades = useCallback(() => (tradesRunId ? v2Get<BacktestTradesResponse>(`backtests/${tradesRunId}/trades`, { symbol: tradeSymbol || undefined, status: tradeStatus || undefined, sort: tradeSort, direction: tradeDirection, limit: TRADES_PAGE_SIZE, offset: tradeOffset }) : Promise.resolve(null)), [tradesRunId, tradeSymbol, tradeStatus, tradeSort, tradeDirection, tradeOffset]);
   // Polls while the run is active; the policy change on completion triggers one final re-fetch.
   const trades = useV2Resource(loadTrades, runActive ? TRADES_POLL_MS : undefined);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setTradeSymbol(tradeSymbolInput.trim().toUpperCase());
+      setTradeOffset(0);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [tradeSymbolInput]);
 
   const selectRun = (runId: string) => {
     setSelectedRunChoice(runId);
     setTradeOffset(0);
     setTradeSymbol("");
     setTradeSymbolInput("");
+    setTradeStatus("");
+  };
+
+  const sortTrades = (column: TradeSort) => {
+    setTradeDirection((current) => column === tradeSort ? (current === "asc" ? "desc" : "asc") : "asc");
+    setTradeSort(column);
+    setTradeOffset(0);
   };
 
   const submit = async (event: FormEvent) => {
@@ -214,7 +239,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshRun(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
-    <Panel icon={<FlaskConical size={17} />} title="Run backtest" description="Published strategy and risk defaults are applied automatically. Open configuration only when you need a JSON override.">
+    <Panel icon={<FlaskConical size={17} />} title="Run backtest">
       {strategies.loading || universes.loading ? <LoadingState label="Loading strategies and universes" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies for this market" description={`No registered strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={submit} noValidate>
         <div className="quant-panel-body">
           <div className="quant-form-grid quant-backtest-run-grid">
@@ -222,11 +247,11 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframeChoice(event.target.value)}>{timeframes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label><span>Start date</span><input type="date" value={startDate} max={endDate} onChange={(event) => setStartDate(event.target.value)} /></label>
             <label><span>End date</span><input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+            <label className="source"><span>Universe</span><select value={symbolSource} onChange={(event) => setSymbolSource(event.target.value as "universe" | "custom")}><option value="universe">{activeUniverse ? `${activeUniverse.name} · ${activeUniverse.symbols.length} symbols` : "No active universe"}</option><option value="custom">Custom symbol list</option></select></label>
+            <div className="quant-backtest-run-action"><span>Action</span><button type="submit" className="primary" disabled={submitting || config.loading}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button></div>
           </div>
-          <div className="quant-form-grid quant-backtest-source-grid">
-            <label><span>Symbol source</span><select value={symbolSource} onChange={(event) => setSymbolSource(event.target.value as "universe" | "custom")}><option value="universe">{activeUniverse ? `Active universe · ${activeUniverse.name} (${activeUniverse.symbols.length})` : "Active universe (none saved)"}</option><option value="custom">Custom symbol list</option></select>{universes.error && <small>Universes unavailable: {universes.error.message}</small>}</label>
-            {symbolSource === "custom" ? <label><span>Symbols</span><input value={customSymbols} placeholder="RELIANCE, TCS, INFY" onChange={(event) => setCustomSymbols(event.target.value)} /><small>{symbols.length} symbols selected</small></label> : <div className="quant-universe-summary"><div><span>Universe</span><strong>{activeUniverse?.name ?? "No active universe"}</strong><small>{symbols.length ? `${symbols.length} symbols ready` : "Save an active universe before running"}</small></div><a href={market === "CRYPTO" ? "/screener?market=CRYPTO" : "/screener"}>Manage in Screener</a></div>}
-          </div>
+          {universes.error && <p className="quant-inline-note">Universes unavailable: {universes.error.message}</p>}
+          {symbolSource === "custom" && <label className="quant-backtest-custom-symbols"><span>Custom symbols</span><input value={customSymbols} placeholder="RELIANCE, TCS, INFY" onChange={(event) => setCustomSymbols(event.target.value)} /><small>{symbols.length} symbols selected</small></label>}
           <details className="quant-backtest-config">
             <summary><span><SlidersHorizontal size={14} />Strategy configuration</span><StatusBadge tone={hasConfigurationOverride ? "warn" : "neutral"}>{hasConfigurationOverride ? "Custom JSON" : "Defaults"}</StatusBadge></summary>
             <div className="quant-backtest-config-body">
@@ -239,10 +264,6 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             </div>
           </details>
           {notice && <Message kind={notice.kind}>{notice.text}</Message>}
-        </div>
-        <div className="quant-form-actions">
-          <button type="submit" className="primary" disabled={submitting || config.loading}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button>
-          <span>{symbols.length} symbols · {strategy.name} v{strategy.version} · {timeframe} · {startDate} → {endDate}</span>
         </div>
       </form>}
     </Panel>
@@ -270,11 +291,30 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       </>}
     </Panel>
 
-    {tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" description="Lot-level results for the selected run." aside={<form className="quant-toolbar" onSubmit={(event) => { event.preventDefault(); setTradeSymbol(tradeSymbolInput.trim().toUpperCase()); setTradeOffset(0); }}><label><span>Symbol</span><input type="text" value={tradeSymbolInput} placeholder="All symbols" onChange={(event) => setTradeSymbolInput(event.target.value)} /></label><button type="submit">Filter</button></form>}>
-      {trades.loading ? <LoadingState label="Loading trades" /> : trades.error ? <RequestErrorState error={trades.error} retry={trades.reload} /> : !trades.data?.trades.length ? <EmptyState title="No trades yet" description={runActive ? "Trades appear as symbols complete." : "This run produced no trades for the selected filter."} /> : <>
-        <div className="quant-table-scroll tall"><table className="quant-table">
-          <thead><tr><th>Symbol</th><th>Status</th><th>Entry</th><th className="numeric">Entry price</th><th className="numeric">Qty</th><th className="numeric">Target</th><th className="numeric">Stop</th><th>Exit</th><th className="numeric">Exit price</th><th className="numeric">Net PnL</th><th className="numeric">MAE / MFE</th><th className="numeric">Holding</th></tr></thead>
-          <tbody>{trades.data.trades.map((trade) => <tr key={trade.lotId}>
+    {tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" aside={(tradeSymbolInput || tradeStatus) && <button type="button" className="quant-icon-action" onClick={() => { setTradeSymbolInput(""); setTradeStatus(""); setTradeOffset(0); }}><X size={13} />Clear filters</button>}>
+      <div className="quant-table-scroll tall"><table className="quant-table">
+          <thead>
+            <tr className="quant-sort-row">
+              <SortableHeading label="Symbol" column="symbol" active={tradeSort === "symbol"} direction={tradeDirection} onSort={sortTrades} />
+              <SortableHeading label="Status" column="status" active={tradeSort === "status"} direction={tradeDirection} onSort={sortTrades} />
+              <SortableHeading label="Entry" column="entryTimestamp" active={tradeSort === "entryTimestamp"} direction={tradeDirection} onSort={sortTrades} />
+              <SortableHeading label="Entry price" column="entryPrice" active={tradeSort === "entryPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="Qty" column="quantity" active={tradeSort === "quantity"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="Target" column="targetPrice" active={tradeSort === "targetPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="Stop" column="stopPrice" active={tradeSort === "stopPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="Exit" column="exitTimestamp" active={tradeSort === "exitTimestamp"} direction={tradeDirection} onSort={sortTrades} />
+              <SortableHeading label="Exit price" column="exitPrice" active={tradeSort === "exitPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="Net PnL" column="netPnl" active={tradeSort === "netPnl"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="MAE / MFE" column="maePct" active={tradeSort === "maePct"} direction={tradeDirection} numeric onSort={sortTrades} />
+              <SortableHeading label="Holding" column="holdingMinutes" active={tradeSort === "holdingMinutes"} direction={tradeDirection} numeric onSort={sortTrades} />
+            </tr>
+            <tr className="quant-filter-row">
+              <th><input aria-label="Filter trades by symbol" type="search" value={tradeSymbolInput} placeholder="Filter…" onChange={(event) => setTradeSymbolInput(event.target.value)} /></th>
+              <th><select aria-label="Filter trades by status" value={tradeStatus} onChange={(event) => { setTradeStatus(event.target.value); setTradeOffset(0); }}><option value="">All</option><option value="OPEN">Open</option><option value="TARGET_HIT">Target hit</option><option value="STOPPED">Stopped</option><option value="EXPIRED">Expired</option></select></th>
+              <th colSpan={10}></th>
+            </tr>
+          </thead>
+          <tbody>{trades.loading ? <tr><td colSpan={12}><LoadingState label="Loading trades" /></td></tr> : trades.error ? <tr><td colSpan={12}><RequestErrorState error={trades.error} retry={trades.reload} /></td></tr> : !trades.data?.trades.length ? <tr><td colSpan={12}><EmptyState title="No trades yet" description={runActive ? "Trades appear as symbols complete." : "This run produced no trades for the selected filter."} /></td></tr> : trades.data.trades.map((trade) => <tr key={trade.lotId}>
             <td><strong>{trade.symbol}</strong><small>Lot {trade.lotNumber ?? "—"} · {shortId(trade.cycleId)}</small></td>
             <td><StatusBadge tone={tone(trade.status)}>{trade.status}</StatusBadge></td>
             <td>{formatDateTime(trade.entryTimestamp, market)}</td>
@@ -289,8 +329,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <td className="numeric">{formatMinutes(trade.holdingMinutes)}</td>
           </tr>)}</tbody>
         </table></div>
-        <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{pageStart}–{pageEnd} of {formatInteger(total)} trades</span></div>
-      </>}
+      {!trades.loading && !trades.error && trades.data && <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{total ? `${pageStart}–${pageEnd}` : "0"} of {formatInteger(total)} trades</span></div>}
     </Panel>}
 
     <Panel icon={<Gauge size={17} />} title="Recent runs" description={`Latest ${marketLabel(market)} backtests; select one to inspect its progress, metrics and trades.`}>

@@ -153,6 +153,54 @@ test("the market switcher keeps the current page and carries the market into nav
   await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("href", "/signals?market=CRYPTO");
 });
 
+test("backtest ticket is compact and trade controls filter and sort the full result", async ({ page }) => {
+  await page.unroute("**/api/v2/**");
+  const tradeRequests: URL[] = [];
+  const run = {
+    runId: "11111111-1111-4111-8111-111111111111", market: "NSE", strategyId: "ema_vwap_strong_buy", strategyVersion: "1.0.0",
+    timeframe: "5m", symbols: ["TCS", "RELIANCE"], startDate: "2026-06-01", endDate: "2026-09-01", status: "COMPLETE",
+    symbolsTotal: 2, symbolsCompleted: 2, metrics: { totalSignals: 2, completedTrades: 1, targetHits: 1, openTrades: 1, symbolsProcessed: 2, symbolsFailed: 0 },
+    createdAt: "2026-09-01T09:00:00Z", completedAt: "2026-09-01T09:01:00Z",
+  };
+  await page.route("**/api/v2/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/strategies/ema_vwap_strong_buy/config")) return route.fulfill({ json: { strategyId: "ema_vwap_strong_buy", market: "NSE", active: null, effectiveConfiguration: {}, effectiveRiskSettings: {}, all: [] } });
+    if (url.pathname.endsWith("/strategies")) return route.fulfill({ json: { strategies: [{ strategyId: "ema_vwap_strong_buy", name: "Strong Buy", version: "1.0.0", supportedMarkets: ["NSE"], supportedTimeframes: ["5m"], configSchema: {}, defaults: {} }], markets: ["NSE", "CRYPTO"], riskDefaults: {} } });
+    if (url.pathname.endsWith("/screener/universes")) return route.fulfill({ json: { active: { NSE: { universeId: "u1", market: "NSE", name: "Active NSE", symbols: ["TCS", "RELIANCE"], active: true } }, universes: [] } });
+    if (url.pathname.endsWith(`/backtests/${run.runId}/trades`)) {
+      tradeRequests.push(url);
+      const rows = url.searchParams.has("symbol") || url.searchParams.has("status") ? [] : [
+        { symbol: "TCS", lotId: "lot-open", status: "OPEN", entryTimestamp: "2026-09-01T09:30:00Z", entryPrice: 100, quantity: 10, targetPrice: 101, unrealizedPnl: 5 },
+        { symbol: "RELIANCE", lotId: "lot-hit", status: "TARGET_HIT", entryTimestamp: "2026-09-01T09:35:00Z", entryPrice: 200, quantity: 5, targetPrice: 202, exitPrice: 202, netPnl: 10 },
+      ];
+      return route.fulfill({ json: { runId: run.runId, total: rows.length, limit: 50, offset: 0, trades: rows } });
+    }
+    if (url.pathname.endsWith(`/backtests/${run.runId}`)) return route.fulfill({ json: run });
+    if (url.pathname.endsWith("/backtests")) return route.fulfill({ json: { runs: [run] } });
+    return route.fulfill({ status: 404, json: { detail: "Unexpected browser-test route" } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/backtest");
+  await expect(page.getByRole("button", { name: "Run backtest" })).toBeVisible();
+  const controls = page.locator(".quant-backtest-run-grid select, .quant-backtest-run-grid input");
+  await expect(controls).toHaveCount(5);
+  const tops = await controls.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
+
+  await expect(page.getByText("OPEN", { exact: true })).toHaveClass(/warn/);
+  await page.getByRole("button", { name: /Symbol/ }).click();
+  await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("sort")).toBe("symbol");
+  await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("direction")).toBe("asc");
+  await page.getByLabel("Filter trades by symbol").fill("TCS");
+  await page.getByLabel("Filter trades by status").selectOption("OPEN");
+  await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("symbol")).toBe("TCS");
+  await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("status")).toBe("OPEN");
+  await expect(page.getByLabel("Filter trades by symbol")).toHaveValue("TCS");
+  await expect(page.getByLabel("Filter trades by status")).toHaveValue("OPEN");
+  await expect(page.getByText("No trades yet")).toBeVisible();
+});
+
 test("a saved result from a removed strategy is ignored and cannot crash the Backtests page", async ({ page }) => {
   // Strategies removed from the platform (for example the old opening-range watchlist) may
   // still be returned by the history API; their records are filtered out client-side and

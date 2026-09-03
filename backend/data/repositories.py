@@ -169,6 +169,22 @@ def _public_trade(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class BacktestTradeRepository:
+    SORT_COLUMNS = {
+        "symbol": "symbol",
+        "status": "status",
+        "entryTimestamp": "entry_timestamp",
+        "entryPrice": "entry_price",
+        "quantity": "quantity",
+        "targetPrice": "target_price",
+        "stopPrice": "stop_price",
+        "exitTimestamp": "exit_timestamp",
+        "exitPrice": "exit_price",
+        "netPnl": "net_pnl",
+        "maePct": "mae_pct",
+        "mfePct": "mfe_pct",
+        "holdingMinutes": "holding_minutes",
+    }
+
     def __init__(self, database: Database) -> None:
         self.database = database
 
@@ -181,21 +197,52 @@ class BacktestTradeRepository:
             cursor.executemany(query, [tuple(_trade_value(row, column) for column in TRADE_COLUMNS) for row in rows])
         return len(rows)
 
-    def list(self, run_id: uuid.UUID | str, *, symbol: str | None = None, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
+    @classmethod
+    def _query_parts(
+        cls,
+        run_id: uuid.UUID | str,
+        *,
+        symbol: str | None,
+        status: str | None,
+    ) -> tuple[str, list[Any]]:
+        clauses = ["run_id = %s"]
+        parameters: list[Any] = [uuid.UUID(str(run_id))]
         if symbol:
-            rows = self.database.fetch_all(
-                "SELECT * FROM backtest_trades WHERE run_id = %s AND symbol = %s ORDER BY entry_timestamp, lot_id LIMIT %s OFFSET %s",
-                (uuid.UUID(str(run_id)), symbol, limit, offset),
-            )
-        else:
-            rows = self.database.fetch_all(
-                "SELECT * FROM backtest_trades WHERE run_id = %s ORDER BY entry_timestamp, lot_id LIMIT %s OFFSET %s",
-                (uuid.UUID(str(run_id)), limit, offset),
-            )
+            clauses.append("symbol ILIKE %s")
+            parameters.append(f"%{symbol}%")
+        if status:
+            clauses.append("status = %s")
+            parameters.append(status)
+        return " AND ".join(clauses), parameters
+
+    def list(
+        self,
+        run_id: uuid.UUID | str,
+        *,
+        symbol: str | None = None,
+        status: str | None = None,
+        sort_by: str = "entryTimestamp",
+        direction: str = "asc",
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        try:
+            sort_column = self.SORT_COLUMNS[sort_by]
+        except KeyError as error:
+            raise ValueError(f"Unsupported trade sort column: {sort_by}") from error
+        direction_key = direction.strip().lower()
+        if direction_key not in {"asc", "desc"}:
+            raise ValueError("Trade sort direction must be asc or desc")
+        where, parameters = self._query_parts(run_id, symbol=symbol, status=status)
+        rows = self.database.fetch_all(
+            f"SELECT * FROM backtest_trades WHERE {where} ORDER BY {sort_column} {direction_key.upper()} NULLS LAST, lot_id ASC LIMIT %s OFFSET %s",
+            (*parameters, limit, offset),
+        )
         return [_public_trade(row) for row in rows]
 
-    def count(self, run_id: uuid.UUID | str) -> int:
-        row = self.database.fetch_one("SELECT count(*) AS total FROM backtest_trades WHERE run_id = %s", (uuid.UUID(str(run_id)),))
+    def count(self, run_id: uuid.UUID | str, *, symbol: str | None = None, status: str | None = None) -> int:
+        where, parameters = self._query_parts(run_id, symbol=symbol, status=status)
+        row = self.database.fetch_one(f"SELECT count(*) AS total FROM backtest_trades WHERE {where}", parameters)
         return int(row["total"]) if row else 0
 
 

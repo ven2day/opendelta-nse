@@ -502,9 +502,31 @@
 .quant-form-actions > span,
 .quant-inline-note { color: var(--od-muted); font-size: 12px; }
 
-/* Backtests use a dense run ticket; the full configuration is an opt-in JSON override. */
-.quant-backtest-run-grid { grid-template-columns: minmax(220px, 1.6fr) minmax(90px, .55fr) minmax(150px, .8fr) minmax(150px, .8fr); }
-.quant-backtest-source-grid { grid-template-columns: minmax(260px, .75fr) minmax(320px, 2fr); }
+/* Backtests use one dense run ticket; the full configuration is an opt-in JSON override. */
+.quant-backtest-run-grid { grid-template-columns: minmax(190px, 2fr) minmax(80px, .65fr) repeat(2, minmax(135px, 1fr)) minmax(210px, 1.6fr) minmax(120px, .9fr); align-items: end; }
+.quant-backtest-run-action { display: grid; min-width: 0; gap: 5px; }
+.quant-backtest-run-action > span,
+.quant-backtest-custom-symbols > span { color: var(--od-muted); font-size: 12px; font-weight: 750; text-transform: uppercase; }
+.quant-backtest-run-action button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--od-accent);
+  border-radius: 6px;
+  padding: 7px 11px;
+  color: var(--od-accent-contrast);
+  background: var(--od-accent);
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.quant-backtest-run-action button:hover { filter: brightness(1.08); }
+.quant-backtest-run-action button:disabled { cursor: not-allowed; opacity: .55; }
+.quant-backtest-custom-symbols { display: grid; gap: 5px; margin-top: 10px; }
+.quant-backtest-custom-symbols input { min-height: 40px; border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 9px; color: var(--od-text); background: var(--od-surface-raised); font-size: 14px; }
+.quant-backtest-custom-symbols small { color: var(--od-faint); font-size: 12px; }
 .quant-screener-run-grid { grid-template-columns: minmax(150px, .75fr) minmax(140px, .65fr) minmax(190px, 1fr) minmax(240px, 1.4fr); }
 .quant-universe-summary {
   display: flex;
@@ -535,11 +557,49 @@
 .quant-backtest-config-actions { display: flex; gap: 8px; }
 .quant-backtest-config-actions button { border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); cursor: pointer; }
 
+@media (max-width: 1180px) {
+  .quant-backtest-run-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 @media (max-width: 800px) {
   .quant-backtest-run-grid,
-  .quant-backtest-source-grid,
   .quant-screener-run-grid { grid-template-columns: 1fr; }
 }
+
+/* Server-backed table sorting and filters; headers stay usable while scrolling. */
+.quant-table .quant-sort-button {
+  display: inline-flex;
+  width: 100%;
+  min-height: 24px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 5px;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-transform: inherit;
+}
+.quant-table th.numeric .quant-sort-button { justify-content: flex-end; }
+.quant-table .quant-sort-button:hover { color: var(--od-text); background: transparent; }
+.quant-filter-row th { top: 42px; padding: 5px 7px 7px; }
+.quant-filter-row input,
+.quant-filter-row select {
+  width: 100%;
+  min-width: 88px;
+  min-height: 30px;
+  border: 1px solid var(--od-border);
+  border-radius: 5px;
+  padding: 4px 7px;
+  color: var(--od-text);
+  background: var(--od-surface);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+}
+.quant-filter-row input:focus,
+.quant-filter-row select:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
 
 /* Trading semantics: green/red are reserved for outcomes. */
 .quant-badge,

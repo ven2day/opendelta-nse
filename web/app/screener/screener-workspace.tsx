@@ -225,6 +225,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
     </section>
 
     <div className="quant-screener-layout">
+    <div className="quant-screener-sidebar">
     <Panel icon={<ScanSearch size={17} />} title="Run screener">
       {filters.loading ? <LoadingState label="Loading filter defaults" /> : filters.error ? <RequestErrorState error={filters.error} retry={filters.reload} /> : <form onSubmit={runScreener} noValidate>
         <div className="quant-panel-body">
@@ -253,6 +254,26 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
         </div>
       </form>}
     </Panel>
+
+    <Panel icon={<Save size={17} />} title="Save as universe" description="Freeze the selected run for backtests and signals.">
+      <form onSubmit={saveUniverse} noValidate>
+        <div className="quant-panel-body">
+          <div className="quant-form-grid">
+            <label><span>Universe name</span><input type="text" required value={universeName} onChange={(event) => setUniverseName(event.target.value)} placeholder={`${marketLabel(market)} liquid universe`} /></label>
+            <label><span>Maximum symbols</span><input type="number" min={1} step={1} inputMode="numeric" value={universeLimit} placeholder="All passing" onChange={(event) => setUniverseLimit(event.target.value)} /><small>Empty keeps every passing symbol</small></label>
+            <label><span>Manual includes</span><input type="text" value={includesText} onChange={(event) => setIncludesText(event.target.value)} placeholder="SYMBOL, SYMBOL" /></label>
+            <label><span>Manual excludes</span><input type="text" value={excludesText} onChange={(event) => setExcludesText(event.target.value)} placeholder="SYMBOL, SYMBOL" /></label>
+            <label className="checkbox"><input type="checkbox" checked={activateUniverse} onChange={(event) => setActivateUniverse(event.target.checked)} /><span>Activate for {marketLabel(market)}</span></label>
+          </div>
+          {universeNotice && <Message kind={universeNotice.kind}>{universeNotice.text}</Message>}
+        </div>
+        <div className="quant-form-actions">
+          <button type="submit" className="primary" disabled={savingUniverse || !selectedRunId || !universeName.trim() || isActive(selectedRun?.status)}><Save size={15} />{savingUniverse ? "Saving…" : "Save universe"}</button>
+          <span>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} passed` : "Select a completed run"}</span>
+        </div>
+      </form>
+    </Panel>
+    </div>
 
     <Panel icon={<ListChecks size={17} />} title="Results" description="Passed symbols carry their rank and metrics; rejected symbols show the first failing rule." aside={<div className="quant-toolbar">
       {runs.data && runs.data.runs.length > 0 && <label><span>Run</span><select value={selectedRunId ?? ""} onChange={(event) => setSelectedRunChoice(event.target.value)}>{runs.data.runs.map((run) => <option key={run.runId} value={run.runId}>{shortId(run.runId)} · {run.status} · {formatDateTime(run.requestedAt, market)}</option>)}</select></label>}
@@ -287,25 +308,6 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       </table></div> : <EmptyState title="Nothing rejected" description="Every screened symbol passed the filters." />)}
     </Panel>
     </div>
-
-    <Panel icon={<Save size={17} />} title="Save as universe" description="Freeze the selected run as a named universe. Manual includes and excludes are applied on top of the ranked list.">
-      <form onSubmit={saveUniverse} noValidate>
-        <div className="quant-panel-body">
-          <div className="quant-form-grid">
-            <label><span>Universe name</span><input type="text" required value={universeName} onChange={(event) => setUniverseName(event.target.value)} placeholder={`${marketLabel(market)} liquid universe`} /></label>
-            <label><span>Maximum symbols</span><input type="number" min={1} step={1} inputMode="numeric" value={universeLimit} placeholder="All passing" onChange={(event) => setUniverseLimit(event.target.value)} /><small>Leave empty to keep every passing symbol</small></label>
-            <label><span>Manual includes</span><input type="text" value={includesText} onChange={(event) => setIncludesText(event.target.value)} placeholder="SYMBOL, SYMBOL" /></label>
-            <label><span>Manual excludes</span><input type="text" value={excludesText} onChange={(event) => setExcludesText(event.target.value)} placeholder="SYMBOL, SYMBOL" /></label>
-            <label className="checkbox"><input type="checkbox" checked={activateUniverse} onChange={(event) => setActivateUniverse(event.target.checked)} /><span>Activate immediately for {marketLabel(market)}</span></label>
-          </div>
-          {universeNotice && <Message kind={universeNotice.kind}>{universeNotice.text}</Message>}
-        </div>
-        <div className="quant-form-actions">
-          <button type="submit" className="primary" disabled={savingUniverse || !selectedRunId || !universeName.trim() || isActive(selectedRun?.status)}><Save size={15} />{savingUniverse ? "Saving…" : "Save universe"}</button>
-          <span>{selectedRun ? `From run ${shortId(selectedRun.runId)} (${formatInteger(selectedRun.symbolsPassed)} passed)` : "Select a completed run first"}</span>
-        </div>
-      </form>
-    </Panel>
 
     <Panel icon={<Layers size={17} />} title="Saved universes" description="The active universe is the default symbol source for backtests and the live signal engine." aside={activeUniverse && <StatusBadge tone="good">Active: {activeUniverse.name}</StatusBadge>}>
       {universes.loading ? <LoadingState label="Loading universes" /> : universes.error ? <RequestErrorState error={universes.error} retry={universes.reload} /> : !universes.data?.universes.length ? <EmptyState title="No saved universes" description="Save a screener run above to create the first universe." /> : <div className="quant-table-scroll"><table className="quant-table">

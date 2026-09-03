@@ -92,7 +92,7 @@ def market_spec(market: str) -> MarketSpec:
             "INR",
             NseFeeModel(),
             nse_session_is_open,
-            {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "1d": 375},
+            {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 375},
             daily_session_close=MARKET_CLOSE,
         )
     return MarketSpec("CRYPTO", timezone, "USDT", CryptoFeeModel(), crypto_session_is_open, {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440})

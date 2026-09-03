@@ -133,3 +133,13 @@ test("the unified navigation and proxy are wired exactly once", async () => {
   assert.match(client, /export async function v2Post</);
   assert.match(client, /export async function v2Delete</);
 });
+
+test("the backtest run ticket uses defaults with one collapsed JSON override", async () => {
+  const source = await readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /<details className="quant-backtest-config">/);
+  assert.doesNotMatch(source, /<details className="quant-backtest-config" open/);
+  assert.match(source, /aria-label="Backtest configuration JSON"/);
+  assert.match(source, /hasConfigurationOverride \? "Custom JSON" : "Defaults"/);
+  assert.doesNotMatch(source, /<SchemaForm/);
+  assert.doesNotMatch(source, /Universe symbols/);
+});

@@ -4,7 +4,7 @@ import { FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, 
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
-import { compactValues, pickValues, schemaDefaults, schemaFromValues, SchemaForm, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
+import { compactValues, pickValues, schemaDefaults, schemaFromValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
 import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversesResponse } from "../platform/v2-types";
@@ -46,6 +46,35 @@ function parseSymbols(text: string): string[] {
   return Array.from(new Set(text.split(/[\s,;]+/).map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)));
 }
 
+type BacktestConfiguration = { strategy: ConfigValues; execution: ConfigValues };
+
+function isObject(value: unknown): value is ConfigValues {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function formatConfigurationJson(configuration: ConfigValues, execution: ConfigValues): string {
+  return JSON.stringify({ strategy: compactValues(configuration), execution: pickValues(compactValues(execution), EXECUTION_KEYS) }, null, 2);
+}
+
+/** Accept one explicit JSON envelope; defaults are used when the editor has not been changed. */
+function parseConfigurationJson(text: string): BacktestConfiguration {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Strategy configuration is not valid JSON.");
+  }
+  if (!isObject(parsed)) throw new Error("Strategy configuration must be a JSON object.");
+  const unknownKeys = Object.keys(parsed).filter((key) => key !== "strategy" && key !== "execution");
+  if (unknownKeys.length) throw new Error(`Unknown configuration section: ${unknownKeys.join(", ")}. Use only strategy and execution.`);
+  if (parsed.strategy !== undefined && !isObject(parsed.strategy)) throw new Error("strategy must be a JSON object.");
+  if (parsed.execution !== undefined && !isObject(parsed.execution)) throw new Error("execution must be a JSON object.");
+  return {
+    strategy: (parsed.strategy as ConfigValues | undefined) ?? {},
+    execution: (parsed.execution as ConfigValues | undefined) ?? {},
+  };
+}
+
 function isActive(status: string | undefined): boolean {
   return Boolean(status && ACTIVE_STATUSES.has(status.toUpperCase()));
 }
@@ -75,8 +104,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const [customSymbols, setCustomSymbols] = useState("");
   const [startDate, setStartDate] = useState(() => isoDate(new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 86_400_000)));
   const [endDate, setEndDate] = useState(() => isoDate(new Date()));
-  const [configEdits, setConfigEdits] = useState<Record<string, ConfigValues>>({});
-  const [executionEdits, setExecutionEdits] = useState<Record<string, ConfigValues>>({});
+  const [configurationJsonEdits, setConfigurationJsonEdits] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [selectedRunChoice, setSelectedRunChoice] = useState<string | null>(null);
@@ -92,9 +120,12 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const config = useV2Resource(loadConfig);
 
   const configKey = `${market}:${strategyId ?? ""}`;
-  const configuration = strategy ? (configEdits[configKey] ?? schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults)) : {};
+  const configuration = strategy ? schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults) : {};
   const executionSchema = useMemo(() => executionSchemaFrom(strategies.data), [strategies.data]);
-  const execution = executionEdits[configKey] ?? schemaDefaults(executionSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
+  const execution = schemaDefaults(executionSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
+  const defaultConfigurationJson = formatConfigurationJson(configuration, execution);
+  const configurationJson = configurationJsonEdits[configKey] ?? defaultConfigurationJson;
+  const hasConfigurationOverride = configurationJsonEdits[configKey] !== undefined;
   const timeframes = strategy?.supportedTimeframes?.length ? strategy.supportedTimeframes : [DEFAULT_TIMEFRAME];
   const timeframe = timeframeChoice && timeframes.includes(timeframeChoice) ? timeframeChoice : timeframes.includes(DEFAULT_TIMEFRAME) ? DEFAULT_TIMEFRAME : timeframes[0];
   const activeUniverse = universes.data?.active?.[market] ?? universes.data?.universes.find((universe) => universe.active) ?? null;
@@ -128,6 +159,12 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     try {
       if (!symbols.length) throw new Error(symbolSource === "custom" ? "Enter at least one symbol." : "No active universe; save one in the Screener or enter symbols manually.");
       if (!startDate || !endDate || startDate > endDate) throw new Error("Choose a start date on or before the end date.");
+      const defaults = { strategy: compactValues(configuration), execution: pickValues(compactValues(execution), EXECUTION_KEYS) };
+      const overrides = hasConfigurationOverride ? parseConfigurationJson(configurationJson) : { strategy: {}, execution: {} };
+      const resolvedConfiguration = {
+        strategy: { ...defaults.strategy, ...overrides.strategy },
+        execution: { ...defaults.execution, ...overrides.execution },
+      };
       const created = await v2Post<BacktestRun>("backtests", {
         market,
         strategyId: strategy.strategyId,
@@ -135,8 +172,8 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
         timeframe,
         startDate,
         endDate,
-        configuration: compactValues(configuration),
-        execution: pickValues(compactValues(execution), EXECUTION_KEYS),
+        configuration: compactValues(resolvedConfiguration.strategy),
+        execution: pickValues(compactValues(resolvedConfiguration.execution), EXECUTION_KEYS),
       });
       setNotice({ kind: "success", text: `Backtest ${shortId(created.runId)} queued for ${symbols.length} symbols.` });
       selectRun(created.runId);
@@ -175,27 +212,35 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshRun(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
-    <Panel icon={<FlaskConical size={17} />} title="New backtest" description="Strategy parameters are generated from the strategy's published schema; execution settings start from the platform risk defaults.">
+    <Panel icon={<FlaskConical size={17} />} title="Run backtest" description="Published strategy and risk defaults are applied automatically. Open configuration only when you need a JSON override.">
       {strategies.loading || universes.loading ? <LoadingState label="Loading strategies and universes" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies for this market" description={`No registered strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={submit} noValidate>
         <div className="quant-panel-body">
-          <div className="quant-form-grid">
-            <label><span>Strategy</span><select value={strategy.strategyId} onChange={(event) => setStrategyChoice(event.target.value)}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select><small>{strategy.supportedMarkets.join(", ")}</small></label>
+          <div className="quant-form-grid quant-backtest-run-grid">
+            <label className="strategy"><span>Strategy</span><select value={strategy.strategyId} onChange={(event) => setStrategyChoice(event.target.value)}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select></label>
             <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframeChoice(event.target.value)}>{timeframes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label><span>Start date</span><input type="date" value={startDate} max={endDate} onChange={(event) => setStartDate(event.target.value)} /></label>
             <label><span>End date</span><input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label>
-            <label><span>Symbol source</span><select value={symbolSource} onChange={(event) => setSymbolSource(event.target.value as "universe" | "custom")}><option value="universe">{activeUniverse ? `Active universe · ${activeUniverse.name} (${activeUniverse.symbols.length})` : "Active universe (none saved)"}</option><option value="custom">Custom symbol list</option></select>{universes.error && <small>Universes unavailable: {universes.error.message}</small>}</label>
-            <label className="span-2"><span>{symbolSource === "custom" ? "Symbols" : "Universe symbols"}</span>{symbolSource === "custom" ? <textarea value={customSymbols} placeholder="SYMBOL, SYMBOL, …" onChange={(event) => setCustomSymbols(event.target.value)} /> : <textarea value={symbols.join(", ")} readOnly placeholder="Save an active universe in the Screener" />}<small>{symbols.length} symbols selected</small></label>
           </div>
-          <h3 className="quant-subheading"><SlidersHorizontal size={14} />Strategy configuration{config.data?.active ? ` · active config "${config.data.active.name}"` : ""}</h3>
-          {config.loading ? <LoadingState label="Loading active configuration" /> : <SchemaForm schema={strategy.configSchema} values={configuration} disabled={submitting} onChange={(next) => setConfigEdits((current) => ({ ...current, [configKey]: next }))} />}
-          <h3 className="quant-subheading"><Gauge size={14} />Execution settings</h3>
-          <SchemaForm schema={executionSchema} values={execution} disabled={submitting} onChange={(next) => setExecutionEdits((current) => ({ ...current, [configKey]: next }))} />
+          <div className="quant-form-grid quant-backtest-source-grid">
+            <label><span>Symbol source</span><select value={symbolSource} onChange={(event) => setSymbolSource(event.target.value as "universe" | "custom")}><option value="universe">{activeUniverse ? `Active universe · ${activeUniverse.name} (${activeUniverse.symbols.length})` : "Active universe (none saved)"}</option><option value="custom">Custom symbol list</option></select>{universes.error && <small>Universes unavailable: {universes.error.message}</small>}</label>
+            {symbolSource === "custom" ? <label><span>Symbols</span><input value={customSymbols} placeholder="RELIANCE, TCS, INFY" onChange={(event) => setCustomSymbols(event.target.value)} /><small>{symbols.length} symbols selected</small></label> : <div className="quant-universe-summary"><div><span>Universe</span><strong>{activeUniverse?.name ?? "No active universe"}</strong><small>{symbols.length ? `${symbols.length} symbols ready` : "Save an active universe before running"}</small></div><a href={market === "CRYPTO" ? "/screener?market=CRYPTO" : "/screener"}>Manage in Screener</a></div>}
+          </div>
+          <details className="quant-backtest-config">
+            <summary><span><SlidersHorizontal size={14} />Strategy configuration</span><StatusBadge tone={hasConfigurationOverride ? "warn" : "neutral"}>{hasConfigurationOverride ? "Custom JSON" : "Defaults"}</StatusBadge></summary>
+            <div className="quant-backtest-config-body">
+              <div><strong>{config.data?.active ? `Active configuration: ${config.data.active.name}` : "Published defaults"}</strong><p>Edit only when this run needs different strategy or execution values. The exact JSON is stored with the result.</p></div>
+              {config.loading ? <LoadingState label="Loading strategy defaults" /> : <label><span>JSON override</span><textarea aria-label="Backtest configuration JSON" spellCheck={false} value={configurationJson} disabled={submitting} onChange={(event) => setConfigurationJsonEdits((current) => ({ ...current, [configKey]: event.target.value }))} /></label>}
+              <div className="quant-backtest-config-actions">
+                <button type="button" onClick={() => { try { const parsed = parseConfigurationJson(configurationJson); setConfigurationJsonEdits((current) => ({ ...current, [configKey]: JSON.stringify(parsed, null, 2) })); setNotice(null); } catch (reason) { setNotice({ kind: "error", text: errorMessage(reason, "Invalid strategy configuration") }); } }}>Format JSON</button>
+                <button type="button" onClick={() => setConfigurationJsonEdits((current) => { const next = { ...current }; delete next[configKey]; return next; })}>Use defaults</button>
+              </div>
+            </div>
+          </details>
           {notice && <Message kind={notice.kind}>{notice.text}</Message>}
         </div>
         <div className="quant-form-actions">
-          <button type="submit" className="primary" disabled={submitting}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button>
-          <button type="button" onClick={() => { setConfigEdits((current) => ({ ...current, [configKey]: schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults) })); setExecutionEdits((current) => ({ ...current, [configKey]: schemaDefaults(executionSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults) })); }}>Reset to defaults</button>
-          <span>{strategy.name} v{strategy.version} · {timeframe} · {startDate} → {endDate}</span>
+          <button type="submit" className="primary" disabled={submitting || config.loading}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button>
+          <span>{symbols.length} symbols · {strategy.name} v{strategy.version} · {timeframe} · {startDate} → {endDate}</span>
         </div>
       </form>}
     </Panel>

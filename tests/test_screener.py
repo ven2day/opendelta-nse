@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from backend.api.screener_routes import SaveUniverseRequest, ScreenerRunRequest, ScreenerServices, create_screener_router
 from backend.data.database import Database
 from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository
-from backend.markets.base import market_spec
+from backend.markets.base import CandleBatch, market_spec
 from backend.screener import ScreenerEngine, ScreenerFilters, rank_symbols
 from backend.screener.engine import apply_manual_selection, symbol_metrics
 from test_backtest_routes import endpoints
@@ -44,6 +44,23 @@ class CatalogueSource:
         frame[["Open", "High", "Low", "Close"]] *= profile["price"]
         frame["Volume"] *= profile["volume"]
         return frame
+
+
+class BatchCatalogueSource(CatalogueSource):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches: list[list[str]] = []
+
+    def candles_many(self, symbols: list[str], timeframe: str, start: datetime, end: datetime, *, warmup_bars: int) -> CandleBatch:
+        self.batches.append(list(symbols))
+        frames: dict[str, pd.DataFrame] = {}
+        errors: dict[str, Exception] = {}
+        for symbol in symbols:
+            try:
+                frames[symbol] = super().candles(symbol, timeframe, start, end, warmup_bars=warmup_bars)
+            except Exception as error:
+                errors[symbol] = error
+        return CandleBatch(frames=frames, errors=errors)
 
 
 def engine() -> ScreenerEngine:
@@ -119,6 +136,27 @@ class EngineTests(unittest.TestCase):
         event.set()
         outcome = engine().run("run-4", SYMBOLS, ScreenerFilters(), cancel_event=event)
         self.assertEqual(outcome.rows, [])
+
+    def test_batch_source_is_bounded_and_preserves_per_symbol_results(self) -> None:
+        source = BatchCatalogueSource()
+        batch_engine = ScreenerEngine(
+            market=market_spec("NSE"),
+            source=source,
+            batch_size=2,
+            clock=lambda: datetime(2026, 9, 1, 12, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo),
+        )
+        outcome = batch_engine.run("batch-run", SYMBOLS, ScreenerFilters(minimum_sessions=5))
+
+        self.assertEqual(source.batches, [["CHEAP", "THIN"], ["BLUE", "MID"], ["SPARSE", "MISSING"]])
+        self.assertEqual(len(outcome.rows), len(SYMBOLS))
+        self.assertEqual([item["symbol"] for item in outcome.failed], ["MISSING"])
+        self.assertEqual(next(row for row in outcome.rows if row["symbol"] == "MISSING")["rejection_reason"], "CANDLE_DATA_UNAVAILABLE")
+
+    def test_batch_size_is_bounded(self) -> None:
+        with self.assertRaises(ValueError):
+            ScreenerEngine(market=market_spec("NSE"), source=CatalogueSource(), batch_size=0)
+        with self.assertRaises(ValueError):
+            ScreenerEngine(market=market_spec("NSE"), source=CatalogueSource(), batch_size=251)
 
 
 class FakeRuns:
@@ -270,3 +308,13 @@ class ScreenerDatabaseTests(unittest.TestCase):
         self.assertEqual(universes.active("NSE")["universeId"], universe["universeId"])
         self.assertIsNone(universes.active("CRYPTO"))
         self.assertEqual(runs.list("NSE")[0]["runId"], record["runId"])
+
+    def test_restart_recovery_marks_running_screener_runs_failed(self) -> None:
+        runs = ScreenerRunRepository(self.database)
+        stale = runs.create(market="NSE", filters={}, symbols_total=751)
+        self.assertEqual(runs.recover_interrupted(), 1)
+        recovered = runs.get(stale["runId"])
+        self.assertEqual(recovered["status"], "FAILED")
+        self.assertEqual(recovered["error"], "Interrupted by a service restart")
+        self.assertIsNotNone(recovered["completedAt"])
+        self.assertEqual(runs.recover_interrupted(), 0)

@@ -11,6 +11,7 @@ from backend.data.candle_repository import (
     CanonicalCandleRepository,
 )
 from backend.data.timescale import CanonicalCandle
+from backend.markets.base import CandleBatch
 from backend.markets.timescale_source import (
     FallbackCandleSource,
     TimescaleCandleSource,
@@ -53,6 +54,25 @@ class FakeRepository:
         return self.rows
 
 
+class FakeBatchRepository(FakeRepository):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.batch_reads = 0
+
+    def resolve_streams(self, **_: object):
+        return {
+            "HDFCBANK": CandleStream("DHAN", "1333"),
+            "TCS": CandleStream("DHAN", "11536"),
+        }, {"AMBIGUOUS": CandleStreamAmbiguous("ambiguous")}
+
+    def candles_many(self, **_: object):
+        self.batch_reads += 1
+        return {
+            "HDFCBANK": [canonical(START)],
+            "TCS": [],
+        }
+
+
 class FrameSource:
     def __init__(self, frame: pd.DataFrame | None = None, error: Exception | None = None) -> None:
         self.frame = frame if frame is not None else pd.DataFrame()
@@ -64,6 +84,17 @@ class FrameSource:
         if self.error:
             raise self.error
         return self.frame
+
+
+class BatchFrameSource(FrameSource):
+    def __init__(self, batch: CandleBatch) -> None:
+        super().__init__()
+        self.batch = batch
+        self.batch_calls = 0
+
+    def candles_many(self, *_: object, **__: object) -> CandleBatch:
+        self.batch_calls += 1
+        return self.batch
 
 
 def test_timescale_source_returns_ordered_ohlcv_and_requests_exact_warmup() -> None:
@@ -92,6 +123,19 @@ def test_timescale_source_returns_contract_compatible_empty_frame() -> None:
     assert list(frame.columns) == ["Open", "High", "Low", "Close", "Volume", "Complete"]
 
 
+def test_timescale_source_reads_a_batch_and_keeps_symbol_errors_isolated() -> None:
+    repository = FakeBatchRepository()
+    source = TimescaleCandleSource(repository, market="NSE", provider="DHAN")  # type: ignore[arg-type]
+
+    batch = source.candles_many(["HDFCBANK", "TCS", "MISSING", "AMBIGUOUS"], "5m", START, END, warmup_bars=0)
+
+    assert repository.batch_reads == 1
+    assert list(batch.frames["HDFCBANK"]["Close"]) == [101]
+    assert batch.frames["TCS"].empty
+    assert batch.frames["MISSING"].empty
+    assert isinstance(batch.errors["AMBIGUOUS"], CandleStreamAmbiguous)
+
+
 def test_explicit_fallback_mode_uses_legacy_for_empty_or_failed_primary() -> None:
     expected = pd.DataFrame({"Close": [101.0]})
     legacy = FrameSource(expected)
@@ -102,6 +146,28 @@ def test_explicit_fallback_mode_uses_legacy_for_empty_or_failed_primary() -> Non
     failed_router = FallbackCandleSource(FrameSource(error=OSError("down")), legacy)
     assert failed_router.candles("AAA", "5m", START, END, warmup_bars=0) is expected
     assert legacy.calls == 2
+
+
+def test_batch_fallback_only_fetches_missing_symbols_and_never_hides_ambiguity() -> None:
+    stored = pd.DataFrame({"Close": [101.0]})
+    fetched = pd.DataFrame({"Close": [202.0]})
+    primary = BatchFrameSource(
+        CandleBatch(
+            frames={"STORED": stored, "MISSING": pd.DataFrame()},
+            errors={"AMBIGUOUS": CandleStreamAmbiguous("ambiguous")},
+        )
+    )
+    legacy = FrameSource(fetched)
+
+    batch = FallbackCandleSource(primary, legacy).candles_many(
+        ["STORED", "MISSING", "AMBIGUOUS"], "5m", START, END, warmup_bars=0
+    )
+
+    assert primary.batch_calls == 1
+    assert batch.frames["STORED"] is stored
+    assert batch.frames["MISSING"] is fetched
+    assert isinstance(batch.errors["AMBIGUOUS"], CandleStreamAmbiguous)
+    assert legacy.calls == 1
 
 
 def test_ambiguous_stream_never_silently_falls_back() -> None:

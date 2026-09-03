@@ -97,6 +97,7 @@ is unique per `(run_id, lot_id)`.
 |---|---|
 | `MARKET_DATA_DATABASE_URL` | PostgreSQL URL; without it every `/v2/*` route answers 503 |
 | `PLATFORM_CANDLE_READ_MODE` | shared engine source: `legacy` (default), `timescale-fallback`, or strict `timescale` |
+| `SCREENER_CANDLE_BATCH_SIZE` | symbols read per TimescaleDB screener batch (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup (otherwise explicit) |
 | `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start the NSE live-signal worker (session-aware Dhan polling) |
 | `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start the Crypto live-signal worker (24/7) |

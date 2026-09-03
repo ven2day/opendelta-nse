@@ -19,6 +19,12 @@ Use the same mode for Screener, Backtest and Signals so every engine evaluates
 the same candle history. Never use fallback mode to certify backtest
 reproducibility because a run could contain mixed storage sources.
 
+The Screener reads canonical candles in bounded batches rather than issuing one
+database request per symbol. `SCREENER_CANDLE_BATCH_SIZE` defaults to `50` and
+accepts `1` through `250`; keep the default unless production measurements show
+a better balance. Batch and total elapsed times are written to application logs.
+Unfinished in-process screener runs are marked `FAILED` during service startup.
+
 ## Bootstrap
 
 1. Install the private database service with

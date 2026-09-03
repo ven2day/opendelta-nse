@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable, Sequence
@@ -13,7 +14,7 @@ import pandas as pd
 
 from backend.core import indicators
 from backend.core.models import normalize_candles
-from backend.markets.base import CandleSource, MarketSpec
+from backend.markets.base import CandleBatch, CandleSource, MarketSpec
 from backend.screener.filters import ScreenerFilters
 from backend.screener.ranking import rank_symbols
 
@@ -67,10 +68,13 @@ def symbol_metrics(candles: pd.DataFrame, *, timezone: str, timeframe: str, mark
 
 
 class ScreenerEngine:
-    def __init__(self, *, market: MarketSpec, source: CandleSource, timeframe: str = "5m", clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(self, *, market: MarketSpec, source: CandleSource, timeframe: str = "5m", batch_size: int = 50, clock: Callable[[], datetime] | None = None) -> None:
+        if not 1 <= batch_size <= 250:
+            raise ValueError("Screener batch_size must be between 1 and 250")
         self.market = market
         self.source = source
         self.timeframe = timeframe
+        self.batch_size = batch_size
         self.clock = clock or (lambda: datetime.now(tz=_zone(market.timezone)))
 
     def run(self, run_id: str, symbols: Sequence[str], filters: ScreenerFilters, *, progress: Callable[[int, int], None] | None = None, cancel_event: threading.Event | None = None) -> ScreenerOutcome:
@@ -79,24 +83,62 @@ class ScreenerEngine:
         start = now - timedelta(days=filters.lookback_days * (2 if self.market.market == "NSE" else 1) + 1)
         outcome = ScreenerOutcome(run_id=run_id, market=self.market.market, filters=filters)
         unique = list(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
-        for index, symbol in enumerate(unique):
-            if cancel_event is not None and cancel_event.is_set():
-                break
-            try:
-                candles = self.source.candles(symbol, self.timeframe, start, now, warmup_bars=0)
-                metrics = symbol_metrics(candles, timezone=self.market.timezone, timeframe=self.timeframe, market=self.market.market)
-                del candles
-                reason = filters.evaluate(metrics)
-                outcome.rows.append({"symbol": symbol, "passed": reason is None, "rank": None, "score": None, "rejection_reason": reason, "metrics": metrics})
-            except Exception as error:  # noqa: BLE001 - a bad symbol is a recorded rejection, not a failed run
-                message = str(error)[:240]
-                outcome.failed.append({"symbol": symbol, "message": message})
-                outcome.rows.append({"symbol": symbol, "passed": False, "rank": None, "score": None, "rejection_reason": "CANDLE_DATA_UNAVAILABLE", "metrics": {"error": message}})
-            if progress is not None:
-                progress(index + 1, len(unique))
+        started = time.perf_counter()
+        batch_reader = getattr(self.source, "candles_many", None)
+        if not callable(batch_reader):
+            for index, symbol in enumerate(unique):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                self._evaluate_symbol(outcome, symbol, self._read_one(symbol, start, now))
+                if progress is not None:
+                    progress(index + 1, len(unique))
+        else:
+            completed = 0
+            for offset in range(0, len(unique), self.batch_size):
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+                symbols_batch = unique[offset : offset + self.batch_size]
+                batch_started = time.perf_counter()
+                try:
+                    batch: CandleBatch = batch_reader(symbols_batch, self.timeframe, start, now, warmup_bars=0)
+                except Exception as error:  # isolate an unexpected batch failure to its symbols
+                    batch = CandleBatch(frames={}, errors={symbol: error for symbol in symbols_batch})
+                for symbol in symbols_batch:
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    self._evaluate_symbol(outcome, symbol, batch.errors.get(symbol) or batch.frames.get(symbol, pd.DataFrame()))
+                    completed += 1
+                    if progress is not None:
+                        progress(completed, len(unique))
+                logger.info("Screener %s read/scored batch %s-%s of %s in %.3fs", run_id, offset + 1, min(offset + len(symbols_batch), len(unique)), len(unique), time.perf_counter() - batch_started)
+                del batch
         ranked = {row["symbol"]: row for row in rank_symbols(outcome.rows, filters.rank_by, filters.maximum_symbols)}
         outcome.rows = [ranked.get(row["symbol"], row) for row in outcome.rows]
+        logger.info("Screener %s completed %s symbols in %.3fs (%s failed)", run_id, len(outcome.rows), time.perf_counter() - started, len(outcome.failed))
         return outcome
+
+    def _read_one(self, symbol: str, start: datetime, end: datetime) -> pd.DataFrame | Exception:
+        try:
+            return self.source.candles(symbol, self.timeframe, start, end, warmup_bars=0)
+        except Exception as error:  # a bad symbol is recorded, not fatal to the run
+            return error
+
+    def _evaluate_symbol(self, outcome: ScreenerOutcome, symbol: str, candles_or_error: pd.DataFrame | Exception) -> None:
+        if isinstance(candles_or_error, Exception):
+            message = str(candles_or_error)[:240]
+            outcome.failed.append({"symbol": symbol, "message": message})
+            outcome.rows.append({"symbol": symbol, "passed": False, "rank": None, "score": None, "rejection_reason": "CANDLE_DATA_UNAVAILABLE", "metrics": {"error": message}})
+            return
+        try:
+            metrics = symbol_metrics(candles_or_error, timezone=self.market.timezone, timeframe=self.timeframe, market=self.market.market)
+            reason = outcome.filters.evaluate(metrics)
+            outcome.rows.append({"symbol": symbol, "passed": reason is None, "rank": None, "score": None, "rejection_reason": reason, "metrics": metrics})
+        except Exception as error:  # metric failure remains isolated to the symbol
+            message = str(error)[:240]
+            outcome.failed.append({"symbol": symbol, "message": message})
+            outcome.rows.append({"symbol": symbol, "passed": False, "rank": None, "score": None, "rejection_reason": "CANDLE_DATA_UNAVAILABLE", "metrics": {"error": message}})
+
+        del candles_or_error
 
 
 def apply_manual_selection(symbols: Sequence[str], *, includes: Sequence[str], excludes: Sequence[str]) -> list[str]:

@@ -106,6 +106,9 @@ class PlatformRuntime:
             interrupted = self.runner().recover()
             if interrupted:
                 logger.warning("Marked %s stale backtest run(s) INTERRUPTED after restart", interrupted)
+            stale_screens = ScreenerRunRepository(self.require_database()).recover_interrupted()
+            if stale_screens:
+                logger.warning("Marked %s stale screener run(s) FAILED after restart", stale_screens)
             self._start_signal_workers()
         except Exception as error:
             logger.error("Unified platform database is unavailable; v2 routes will fail closed: %s", error)
@@ -223,7 +226,13 @@ class PlatformRuntime:
 
     def screener_engine(self, market: str) -> ScreenerEngine:
         spec = market_spec(market)
-        return ScreenerEngine(market=spec, source=self.candle_sources[spec.market](), timeframe=LIVE_TIMEFRAME, clock=self.clock)
+        return ScreenerEngine(
+            market=spec,
+            source=self.candle_sources[spec.market](),
+            timeframe=LIVE_TIMEFRAME,
+            batch_size=int(os.environ.get("SCREENER_CANDLE_BATCH_SIZE", "50")),
+            clock=self.clock,
+        )
 
     def symbol_catalogue(self, market: str) -> list[str]:
         provider = self.symbol_catalogues.get(market.strip().upper())

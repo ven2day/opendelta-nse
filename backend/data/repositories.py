@@ -535,6 +535,13 @@ class ScreenerRunRepository:
         )
         return self.get(run_id)
 
+    def recover_interrupted(self) -> int:
+        """Fail unfinished in-process runs after a service restart."""
+        return self.database.execute(
+            "UPDATE screener_runs SET status = 'FAILED', error = COALESCE(error, 'Interrupted by a service restart'), completed_at = %s WHERE status = 'RUNNING'",
+            (_now(),),
+        )
+
 
 def _public_screener_result(row: Mapping[str, Any]) -> dict[str, Any]:
     return {

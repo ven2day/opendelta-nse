@@ -180,6 +180,7 @@ opendelta-nse/
 | --- | --- |
 | `MARKET_DATA_DATABASE_URL` | PostgreSQL/TimescaleDB for candles and the platform tables |
 | `PLATFORM_CANDLE_READ_MODE` | Shared engine reader: `legacy`, `timescale-fallback`, or strict `timescale` |
+| `SCREENER_CANDLE_BATCH_SIZE` | Bounded TimescaleDB screener batch size (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE` | `true` to migrate at startup; otherwise `python -m backend.data.migrate` |
 | `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
 | `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |

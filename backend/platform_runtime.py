@@ -217,6 +217,10 @@ class PlatformRuntime:
                 raise ValueError(f"{binding.strategy_id} does not support {spec.market}")
             if binding.timeframe not in strategy.supported_timeframes:
                 raise ValueError(f"{binding.strategy_id} does not support the {binding.timeframe} timeframe")
+            if spec.market == "NSE" and binding.timeframe == "4h":
+                raise ValueError(
+                    "NSE 4h is currently backtest-only; live use requires session-aligned handling of the shortened closing bar"
+                )
         return bindings
 
     @staticmethod

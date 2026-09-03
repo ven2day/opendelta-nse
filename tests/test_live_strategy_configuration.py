@@ -66,6 +66,14 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not support"):
                 runtime.live_bindings("NSE")
 
+        with patch.dict(
+            "os.environ",
+            {"NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"4h"}]'},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "backtest-only"):
+                runtime.live_bindings("NSE")
+
     def test_runtime_starts_every_configured_binding_independently(self) -> None:
         runtime = PlatformRuntime(database=None, candle_sources={})
         started: list[tuple[str, str]] = []

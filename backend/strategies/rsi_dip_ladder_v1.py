@@ -44,7 +44,7 @@ class RsiDipLadderV1:
     name = STRATEGY_NAME
     version = STRATEGY_VERSION
     supported_markets = ("NSE",)
-    supported_timeframes = ("5m", "15m", "30m", "1h", "1d")
+    supported_timeframes = ("5m", "15m", "30m", "1h", "4h", "1d")
     config_schema = CONFIG_SCHEMA
 
     def resolve(self, config: Mapping[str, Any] | None) -> dict[str, Any]:

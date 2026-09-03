@@ -141,6 +141,10 @@ next executable session bar and then updates open-signal state, unrealized P/L,
 dip-ladder entries, FIFO targets and exits throughout the session. A restart
 cannot replay a candle whose open predates creation of the pending instruction.
 
+`rsi_dip_ladder_v1` also exposes `4h` for NSE backtests. It is intentionally
+rejected as a live binding until the shortened 13:15–15:30 closing bar is
+aggregated and completed with exchange-session semantics.
+
 The legacy NSE live-signal engine and legacy pages keep running unchanged
 until the v2 workers are switched on and the legacy routes are retired.
 

@@ -292,8 +292,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     </Panel>
 
     {tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" aside={(tradeSymbolInput || tradeStatus) && <button type="button" className="quant-icon-action" onClick={() => { setTradeSymbolInput(""); setTradeStatus(""); setTradeOffset(0); }}><X size={13} />Clear filters</button>}>
-      {trades.loading ? <LoadingState label="Loading trades" /> : trades.error ? <RequestErrorState error={trades.error} retry={trades.reload} /> : !trades.data?.trades.length ? <EmptyState title="No trades yet" description={runActive ? "Trades appear as symbols complete." : "This run produced no trades for the selected filter."} /> : <>
-        <div className="quant-table-scroll tall"><table className="quant-table">
+      <div className="quant-table-scroll tall"><table className="quant-table">
           <thead>
             <tr className="quant-sort-row">
               <SortableHeading label="Symbol" column="symbol" active={tradeSort === "symbol"} direction={tradeDirection} onSort={sortTrades} />
@@ -315,7 +314,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
               <th colSpan={10}></th>
             </tr>
           </thead>
-          <tbody>{trades.data.trades.map((trade) => <tr key={trade.lotId}>
+          <tbody>{trades.loading ? <tr><td colSpan={12}><LoadingState label="Loading trades" /></td></tr> : trades.error ? <tr><td colSpan={12}><RequestErrorState error={trades.error} retry={trades.reload} /></td></tr> : !trades.data?.trades.length ? <tr><td colSpan={12}><EmptyState title="No trades yet" description={runActive ? "Trades appear as symbols complete." : "This run produced no trades for the selected filter."} /></td></tr> : trades.data.trades.map((trade) => <tr key={trade.lotId}>
             <td><strong>{trade.symbol}</strong><small>Lot {trade.lotNumber ?? "—"} · {shortId(trade.cycleId)}</small></td>
             <td><StatusBadge tone={tone(trade.status)}>{trade.status}</StatusBadge></td>
             <td>{formatDateTime(trade.entryTimestamp, market)}</td>
@@ -330,8 +329,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <td className="numeric">{formatMinutes(trade.holdingMinutes)}</td>
           </tr>)}</tbody>
         </table></div>
-        <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{pageStart}–{pageEnd} of {formatInteger(total)} trades</span></div>
-      </>}
+      {!trades.loading && !trades.error && trades.data && <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{total ? `${pageStart}–${pageEnd}` : "0"} of {formatInteger(total)} trades</span></div>}
     </Panel>}
 
     <Panel icon={<Gauge size={17} />} title="Recent runs" description={`Latest ${marketLabel(market)} backtests; select one to inspect its progress, metrics and trades.`}>

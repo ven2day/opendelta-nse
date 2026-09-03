@@ -169,10 +169,11 @@ test("backtest ticket is compact and trade controls filter and sort the full res
     if (url.pathname.endsWith("/screener/universes")) return route.fulfill({ json: { active: { NSE: { universeId: "u1", market: "NSE", name: "Active NSE", symbols: ["TCS", "RELIANCE"], active: true } }, universes: [] } });
     if (url.pathname.endsWith(`/backtests/${run.runId}/trades`)) {
       tradeRequests.push(url);
-      return route.fulfill({ json: { runId: run.runId, total: 2, limit: 50, offset: 0, trades: [
+      const rows = url.searchParams.has("symbol") || url.searchParams.has("status") ? [] : [
         { symbol: "TCS", lotId: "lot-open", status: "OPEN", entryTimestamp: "2026-09-01T09:30:00Z", entryPrice: 100, quantity: 10, targetPrice: 101, unrealizedPnl: 5 },
         { symbol: "RELIANCE", lotId: "lot-hit", status: "TARGET_HIT", entryTimestamp: "2026-09-01T09:35:00Z", entryPrice: 200, quantity: 5, targetPrice: 202, exitPrice: 202, netPnl: 10 },
-      ] } });
+      ];
+      return route.fulfill({ json: { runId: run.runId, total: rows.length, limit: 50, offset: 0, trades: rows } });
     }
     if (url.pathname.endsWith(`/backtests/${run.runId}`)) return route.fulfill({ json: run });
     if (url.pathname.endsWith("/backtests")) return route.fulfill({ json: { runs: [run] } });
@@ -195,6 +196,9 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   await page.getByLabel("Filter trades by status").selectOption("OPEN");
   await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("symbol")).toBe("TCS");
   await expect.poll(() => tradeRequests.at(-1)?.searchParams.get("status")).toBe("OPEN");
+  await expect(page.getByLabel("Filter trades by symbol")).toHaveValue("TCS");
+  await expect(page.getByLabel("Filter trades by status")).toHaveValue("OPEN");
+  await expect(page.getByText("No trades yet")).toBeVisible();
 });
 
 test("a saved result from a removed strategy is ignored and cannot crash the Backtests page", async ({ page }) => {

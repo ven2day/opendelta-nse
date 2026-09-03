@@ -33,7 +33,6 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
     <WorkspaceHeader
       eyebrow={`${marketLabel(market)} dashboard`}
       title={`${marketLabel(market)} trading dashboard`}
-      description="One view of market data health, the screener universe, recent backtests, the live signal engine and the paper account. Every number here is research or paper only."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button></div>}
     />
     {loading ? <LoadingState label="Loading dashboard" /> : error ? <RequestErrorState error={error} retry={reload} /> : data && <>

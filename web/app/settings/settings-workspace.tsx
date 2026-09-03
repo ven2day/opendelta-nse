@@ -80,7 +80,6 @@ export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMa
     <WorkspaceHeader
       eyebrow="Configuration"
       title="Platform settings"
-      description="Strategy parameters and risk settings per market are versioned on the platform database. Credentials, provider secrets and executable code stay outside the UI."
       actions={<div className="quant-header-actions"><StatusBadge tone="good">Orders disabled</StatusBadge><StatusBadge>Environment managed</StatusBadge></div>}
     />
 

@@ -502,6 +502,45 @@
 .quant-form-actions > span,
 .quant-inline-note { color: var(--od-muted); font-size: 12px; }
 
+/* Backtests use a dense run ticket; the full configuration is an opt-in JSON override. */
+.quant-backtest-run-grid { grid-template-columns: minmax(220px, 1.6fr) minmax(90px, .55fr) minmax(150px, .8fr) minmax(150px, .8fr); }
+.quant-backtest-source-grid { grid-template-columns: minmax(260px, .75fr) minmax(320px, 2fr); }
+.quant-screener-run-grid { grid-template-columns: minmax(150px, .75fr) minmax(140px, .65fr) minmax(190px, 1fr) minmax(240px, 1.4fr); }
+.quant-universe-summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--od-border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: var(--od-surface-raised);
+}
+.quant-universe-summary > div { display: flex; min-width: 0; align-items: baseline; gap: 9px; }
+.quant-universe-summary span { color: var(--od-faint); font-size: 11px; text-transform: uppercase; }
+.quant-universe-summary strong { overflow: hidden; color: var(--od-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-universe-summary small { color: var(--od-muted); font-size: 12px; }
+.quant-universe-summary a { flex: none; color: var(--od-accent); font-size: 12px; font-weight: 700; text-decoration: none; }
+.quant-backtest-config { overflow: hidden; border: 1px solid var(--od-border); border-radius: 7px; background: var(--od-surface-raised); }
+.quant-backtest-config > summary { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 11px; color: var(--od-text); cursor: pointer; }
+.quant-backtest-config > summary > span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; }
+.quant-backtest-config > summary svg { color: var(--od-accent); }
+.quant-backtest-config-body { display: grid; gap: 10px; border-top: 1px solid var(--od-border); padding: 12px; background: var(--od-surface); }
+.quant-backtest-config-body p { margin: 3px 0 0; color: var(--od-muted); font-size: 12px; }
+.quant-backtest-config-body label { display: grid; gap: 6px; }
+.quant-backtest-config-body label > span { color: var(--od-muted); font-size: 11px; font-weight: 750; text-transform: uppercase; }
+.quant-backtest-config-body textarea { min-height: 320px; border: 1px solid var(--od-border); border-radius: 6px; padding: 11px; color: var(--od-text); background: var(--od-canvas); font: 12px/1.55 var(--font-jetbrains-mono), monospace; resize: vertical; }
+.quant-backtest-config-body textarea:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
+.quant-backtest-config-actions { display: flex; gap: 8px; }
+.quant-backtest-config-actions button { border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); cursor: pointer; }
+
+@media (max-width: 800px) {
+  .quant-backtest-run-grid,
+  .quant-backtest-source-grid,
+  .quant-screener-run-grid { grid-template-columns: 1fr; }
+}
+
 /* Trading semantics: green/red are reserved for outcomes. */
 .quant-badge,
 .quant-tag {
@@ -722,6 +761,9 @@
   .quant-header-actions { width: 100%; flex-wrap: wrap; }
   .quant-header-actions button { flex: 1; }
   .quant-screener-layout > .quant-panel:first-child .quant-form-grid { grid-template-columns: 1fr; }
+  .quant-backtest-run-grid, .quant-backtest-source-grid { grid-template-columns: 1fr; }
+  .quant-universe-summary { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .quant-universe-summary > div { align-items: flex-start; flex-direction: column; gap: 2px; }
   .quant-table th { font-size: 11px; }
   .quant-table td { font-size: 12px; }
 }

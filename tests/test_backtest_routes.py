@@ -113,6 +113,21 @@ class BacktestRouteTests(unittest.TestCase):
         self.assertEqual(submitted.execution.stop_loss_pct, 1.0)
         self.assertEqual(submitted.configuration, record["configurationSnapshot"])
 
+    def test_create_resolves_built_in_universe_to_an_immutable_symbol_snapshot(self) -> None:
+        record = self._create(symbols=[], universePresetId="nifty_top_20")
+        self.assertEqual(len(record["symbols"]), 20)
+        self.assertIn("RELIANCE", record["symbols"])
+        self.assertEqual(self.runner.submitted[0].symbols, record["symbols"])
+
+        for overrides in (
+            {"symbols": ["TCS"], "universePresetId": "nifty_50"},
+            {"market": "CRYPTO", "symbols": [], "universePresetId": "nifty_50"},
+            {"symbols": [], "universePresetId": "unknown"},
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                self._create(**overrides)
+            self.assertEqual(caught.exception.status_code, 422)
+
     def test_create_rejects_unknown_strategy_market_timeframe_config_and_dates(self) -> None:
         for overrides in (
             {"strategyId": "nope"},

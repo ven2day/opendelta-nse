@@ -34,7 +34,8 @@ configured or its schema is behind (`python -m backend.data.migrate`).
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/v2/screener/filters` | Filter defaults, `rankBy` keys, markets. |
-| POST | `/v2/screener/runs` | Body `{market, filters?, symbols?}`; omit `symbols` to screen the market's full catalogue. Returns 202 `{runId, status: RUNNING, …}`; poll. |
+| GET | `/v2/screener/presets?market=` | Backend-owned, dated symbol presets. NSE currently provides `nifty_50` and `nifty_top_20`; Crypto returns an empty list. |
+| POST | `/v2/screener/runs` | Body `{market, filters?, symbols?, presetId?}`; use either `presetId` or `symbols`, or omit both to screen the market's full catalogue. Returns 202 `{runId, status: RUNNING, …}`; poll. |
 | GET | `/v2/screener/runs?market=&limit=` | Recent runs. |
 | GET | `/v2/screener/runs/{id}` | Run status, counts, filters. |
 | GET | `/v2/screener/runs/{id}/results?passed=` | `results[{symbol, passed, rank, score, rejectionReason, metrics}]`; every symbol is recorded with a pass or a reason (`PRICE_BELOW_MINIMUM`, `LIQUIDITY_BELOW_MINIMUM`, `INSUFFICIENT_CANDLE_COVERAGE`, `CANDLE_DATA_UNAVAILABLE`, `RANKED_OUT_BY_MAXIMUM_SYMBOLS`, …). |
@@ -48,7 +49,7 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| POST | `/v2/backtests` | Body `{market, strategyId, symbols, timeframe, startDate, endDate, configuration, execution}` → 202 run record; the run executes as a background job. |
+| POST | `/v2/backtests` | Body `{market, strategyId, symbols?, universePresetId?, timeframe, startDate, endDate, configuration, execution}` → 202 run record; use either `symbols` or `universePresetId`. The server resolves a preset and stores its exact symbol snapshot before the background job starts. |
 | GET | `/v2/backtests?market=&limit=` | Recent runs. |
 | GET | `/v2/backtests/{id}` | Status (`QUEUED, RUNNING, COMPLETE, FAILED, CANCELLED, INTERRUPTED`), `symbolsCompleted/symbolsTotal`, `currentSymbol`, `failedSymbols`, `metrics`, `configurationSnapshot`, `strategyVersion`. |
 | DELETE | `/v2/backtests/{id}` | Durable cancel request; honoured between symbols and every 500 bars. |

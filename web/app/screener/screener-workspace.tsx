@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversesResponse } from "../platform/v2-types";
+import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, SymbolTags, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
@@ -57,15 +57,17 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const loadFilters = useCallback(() => v2Get<ScreenerFiltersResponse>("screener/filters"), []);
   const loadRuns = useCallback(() => v2Get<{ runs: ScreenerRun[] }>("screener/runs", { market, limit: 10 }), [market]);
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
+  const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
   const filters = useV2Resource(loadFilters);
   const runs = useV2Resource(loadRuns);
   const universes = useV2Resource(loadUniverses);
+  const presets = useV2Resource(loadPresets);
   const { refresh: refreshRuns } = runs;
   const { refresh: refreshUniverses } = universes;
 
   const [rankChoice, setRankChoice] = useState<string | null>(null);
   const [resultLimitChoice, setResultLimitChoice] = useState<string | null>(null);
-  const [symbolSource, setSymbolSource] = useState<"market" | "custom">("market");
+  const [symbolSource, setSymbolSource] = useState("market");
   const [symbolsText, setSymbolsText] = useState("");
   const [filterJsonEdits, setFilterJsonEdits] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
   const [submitting, setSubmitting] = useState(false);
@@ -89,6 +91,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const resultLimit = resultLimitChoice ?? (typeof defaultMaximum === "number" ? String(defaultMaximum) : "all");
   const filterJson = filterJsonEdits[market];
   const hasFilterOverride = filterJson.trim() !== "" && filterJson.trim() !== "{}";
+  const selectedPreset = presets.data?.presets.find((preset) => preset.presetId === symbolSource) ?? null;
+  const effectiveSymbolSource = symbolSource === "market" || symbolSource === "custom" || selectedPreset ? symbolSource : "market";
 
   const selectedRunId = selectedRunChoice ?? runs.data?.runs[0]?.runId ?? null;
   const loadResults = useCallback(async () => {
@@ -137,8 +141,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
     setSubmitting(true);
     setRunNotice(null);
     try {
-      const symbols = symbolSource === "custom" ? parseSymbols(symbolsText) : [];
-      if (symbolSource === "custom" && !symbols.length) throw new Error("Enter at least one symbol or use the full market.");
+      const symbols = effectiveSymbolSource === "custom" ? parseSymbols(symbolsText) : [];
+      if (effectiveSymbolSource === "custom" && !symbols.length) throw new Error("Enter at least one symbol or use a ready-made universe.");
       const overrides = hasFilterOverride ? parseFilterOverrides(filterJson) : {};
       if (overrides.rankBy !== undefined && !(filters.data?.rankBy ?? []).includes(String(overrides.rankBy))) throw new Error(`filters.rankBy must be one of: ${(filters.data?.rankBy ?? []).join(", ")}.`);
       const body = {
@@ -149,6 +153,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
           maximumSymbols: resultLimit === "all" ? null : Number(resultLimit),
           ...overrides,
         },
+        ...(selectedPreset ? { presetId: selectedPreset.presetId } : {}),
         ...(symbols.length ? { symbols } : {}),
       };
       const run = await v2Post<ScreenerRun>("screener/runs", body);
@@ -226,8 +231,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
           <div className="quant-form-grid quant-screener-run-grid">
             <label><span>Rank by</span><select value={rankBy} disabled={busy} onChange={(event) => setRankChoice(event.target.value)}>{(filters.data?.rankBy ?? []).map((option) => <option key={option} value={option}>{humanize(option)}</option>)}</select></label>
             <label><span>Keep results</span><select value={resultLimit} disabled={busy} onChange={(event) => setResultLimitChoice(event.target.value)}><option value="all">All passing</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="300">Top 300</option>{typeof defaultMaximum === "number" && ![50, 100, 300].includes(defaultMaximum) && <option value={String(defaultMaximum)}>Default ({defaultMaximum})</option>}</select></label>
-            <label><span>Symbols</span><select value={symbolSource} disabled={busy} onChange={(event) => setSymbolSource(event.target.value as "market" | "custom")}><option value="market">Full {marketLabel(market)} market</option><option value="custom">Custom list</option></select></label>
-            {symbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => setSymbolsText(event.target.value)} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
+            <label><span>Starting universe</span><select value={effectiveSymbolSource} disabled={busy} onChange={(event) => setSymbolSource(event.target.value)}><option value="market">Full {marketLabel(market)} market</option>{(presets.data?.presets ?? []).map((preset) => <option key={preset.presetId} value={preset.presetId}>{preset.name} ({preset.symbols.length})</option>)}<option value="custom">Custom list</option></select>{presets.error && <small>Ready-made universes unavailable: {presets.error.message}</small>}{selectedPreset && <small>Official snapshot · {selectedPreset.symbols.length} symbols · as of {selectedPreset.asOf}</small>}</label>
+            {effectiveSymbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => setSymbolsText(event.target.value)} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
           </div>
           <details className="quant-backtest-config">
             <summary><span><SlidersHorizontal size={14} />Screener configuration</span><StatusBadge tone={hasFilterOverride ? "warn" : "neutral"}>{hasFilterOverride ? "Custom JSON" : "Defaults"}</StatusBadge></summary>
@@ -244,7 +249,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
         </div>
         <div className="quant-form-actions">
           <button type="submit" className="primary" disabled={busy}>{pollingRunId ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{pollingRunId ? "Screening…" : "Run screener"}</button>
-          <span>{pollingRun && pollingRunId ? `Run ${shortId(pollingRun.runId)} · ${pollingRun.status} · ${formatInteger(pollingRun.symbolsTotal)} symbols` : `${marketLabel(market)} · ${humanize(rankBy)} · ${resultLimit === "all" ? "all passing" : `top ${resultLimit}`}`}</span>
+          <span>{pollingRun && pollingRunId ? `Run ${shortId(pollingRun.runId)} · ${pollingRun.status} · ${formatInteger(pollingRun.symbolsTotal)} symbols` : `${selectedPreset?.name ?? (effectiveSymbolSource === "custom" ? `${parseSymbols(symbolsText).length} custom symbols` : `Full ${marketLabel(market)} market`)} · ${humanize(rankBy)} · ${resultLimit === "all" ? "all passing" : `top ${resultLimit}`}`}</span>
         </div>
       </form>}
     </Panel>

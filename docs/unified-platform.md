@@ -112,7 +112,7 @@ until the v2 workers are switched on and the legacy routes are retired.
 
 - `GET /v2/dashboard?market=` — everything the Dashboard shows, per section
 - `GET /v2/strategies?market=`, `GET|POST /v2/strategies/{id}/config`
-- `GET /v2/screener/filters`, `POST /v2/screener/runs`, `GET /v2/screener/runs[/{id}[/results]]`,
+- `GET /v2/screener/filters`, `GET /v2/screener/presets`, `POST /v2/screener/runs`, `GET /v2/screener/runs[/{id}[/results]]`,
   `POST /v2/screener/universes`, `GET /v2/screener/universes`, `POST /v2/screener/universes/{id}/activate`
 - `POST|GET /v2/backtests`, `GET|DELETE /v2/backtests/{id}`, `GET /v2/backtests/{id}/trades`
 - `GET /v2/signals`, `GET /v2/signals/health`

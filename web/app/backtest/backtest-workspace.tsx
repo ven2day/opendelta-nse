@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, pickValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
-import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversesResponse } from "../platform/v2-types";
+import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
@@ -102,15 +102,17 @@ function progressPct(run: BacktestRun | null): number {
 export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
+  const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
   const loadRuns = useCallback(() => v2Get<BacktestRunsResponse>("backtests", { market, limit: 20 }), [market]);
   const strategies = useV2Resource(loadStrategies);
   const universes = useV2Resource(loadUniverses);
+  const presets = useV2Resource(loadPresets);
   const runs = useV2Resource(loadRuns, RUNS_REFRESH_MS);
   const { refresh: refreshRuns } = runs;
 
   const [strategyChoice, setStrategyChoice] = useState<string | null>(null);
   const [timeframeChoice, setTimeframeChoice] = useState<string | null>(null);
-  const [symbolSource, setSymbolSource] = useState<"universe" | "custom">("universe");
+  const [symbolSource, setSymbolSource] = useState("universe");
   const [customSymbols, setCustomSymbols] = useState("");
   const [startDate, setStartDate] = useState(() => isoDate(new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 86_400_000)));
   const [endDate, setEndDate] = useState(() => isoDate(new Date()));
@@ -142,7 +144,9 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const timeframes = strategy?.supportedTimeframes?.length ? strategy.supportedTimeframes : [DEFAULT_TIMEFRAME];
   const timeframe = timeframeChoice && timeframes.includes(timeframeChoice) ? timeframeChoice : timeframes.includes(DEFAULT_TIMEFRAME) ? DEFAULT_TIMEFRAME : timeframes[0];
   const activeUniverse = universes.data?.active?.[market] ?? universes.data?.universes.find((universe) => universe.active) ?? null;
-  const symbols = symbolSource === "custom" ? parseSymbols(customSymbols) : activeUniverse?.symbols ?? [];
+  const selectedPreset = presets.data?.presets.find((preset) => preset.presetId === symbolSource) ?? null;
+  const effectiveSymbolSource = symbolSource === "universe" || symbolSource === "custom" || selectedPreset ? symbolSource : "universe";
+  const symbols = selectedPreset?.symbols ?? (effectiveSymbolSource === "custom" ? parseSymbols(customSymbols) : activeUniverse?.symbols ?? []);
 
   const selectedRunId = selectedRunChoice ?? runs.data?.runs[0]?.runId ?? null;
   const listedRun = runs.data?.runs.find((run) => run.runId === selectedRunId) ?? null;
@@ -185,7 +189,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     setSubmitting(true);
     setNotice(null);
     try {
-      if (!symbols.length) throw new Error(symbolSource === "custom" ? "Enter at least one symbol." : "No active universe; save one in the Screener or enter symbols manually.");
+      if (!symbols.length) throw new Error(effectiveSymbolSource === "custom" ? "Enter at least one symbol." : "No active universe; choose a ready-made universe or save one in the Screener.");
       if (!startDate || !endDate || startDate > endDate) throw new Error("Choose a start date on or before the end date.");
       const defaults = { strategy: compactValues(configuration), execution: pickValues(compactValues(execution), EXECUTION_KEYS) };
       const overrides = hasConfigurationOverride ? parseConfigurationJson(configurationJson, strategy.configSchema, executionSchema) : { strategy: {}, execution: {} };
@@ -196,7 +200,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       const created = await v2Post<BacktestRun>("backtests", {
         market,
         strategyId: strategy.strategyId,
-        symbols,
+        ...(selectedPreset ? { universePresetId: selectedPreset.presetId } : { symbols }),
         timeframe,
         startDate,
         endDate,
@@ -247,11 +251,13 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframeChoice(event.target.value)}>{timeframes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label><span>Start date</span><input type="date" value={startDate} max={endDate} onChange={(event) => setStartDate(event.target.value)} /></label>
             <label><span>End date</span><input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label>
-            <label className="source"><span>Universe</span><select value={symbolSource} onChange={(event) => setSymbolSource(event.target.value as "universe" | "custom")}><option value="universe">{activeUniverse ? `${activeUniverse.name} · ${activeUniverse.symbols.length} symbols` : "No active universe"}</option><option value="custom">Custom symbol list</option></select></label>
+            <label className="source"><span>Universe</span><select value={effectiveSymbolSource} onChange={(event) => setSymbolSource(event.target.value)}><option value="universe">{activeUniverse ? `${activeUniverse.name} · ${activeUniverse.symbols.length} symbols` : "No active universe"}</option>{(presets.data?.presets ?? []).map((preset) => <option key={preset.presetId} value={preset.presetId}>{preset.name} · {preset.symbols.length} symbols</option>)}<option value="custom">Custom symbol list</option></select></label>
             <div className="quant-backtest-run-action"><span>Action</span><button type="submit" className="primary" disabled={submitting || config.loading}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button></div>
           </div>
-          {universes.error && <p className="quant-inline-note">Universes unavailable: {universes.error.message}</p>}
-          {symbolSource === "custom" && <label className="quant-backtest-custom-symbols"><span>Custom symbols</span><input value={customSymbols} placeholder="RELIANCE, TCS, INFY" onChange={(event) => setCustomSymbols(event.target.value)} /><small>{symbols.length} symbols selected</small></label>}
+          {universes.error && <p className="quant-inline-note">Saved universes unavailable: {universes.error.message}</p>}
+          {presets.error && <p className="quant-inline-note">Ready-made universes unavailable: {presets.error.message}</p>}
+          {selectedPreset && <p className="quant-inline-note">{selectedPreset.name} · official snapshot {selectedPreset.asOf} · {selectedPreset.symbols.length} symbols</p>}
+          {effectiveSymbolSource === "custom" && <label className="quant-backtest-custom-symbols"><span>Custom symbols</span><input value={customSymbols} placeholder="RELIANCE, TCS, INFY" onChange={(event) => setCustomSymbols(event.target.value)} /><small>{symbols.length} symbols selected</small></label>}
           <details className="quant-backtest-config">
             <summary><span><SlidersHorizontal size={14} />Strategy configuration</span><StatusBadge tone={hasConfigurationOverride ? "warn" : "neutral"}>{hasConfigurationOverride ? "Custom JSON" : "Defaults"}</StatusBadge></summary>
             <div className="quant-backtest-config-body">

@@ -191,3 +191,18 @@ test("the screener uses a compact run ticket with partial JSON overrides", async
   assert.doesNotMatch(source, /<SchemaForm/);
   assert.doesNotMatch(source, /Keep all passing symbols/);
 });
+
+test("screener and backtest use backend-owned ready-made NIFTY universes", async () => {
+  const [screener, backtest, types] = await Promise.all([
+    readFile(new URL("../app/screener/screener-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(screener, /v2Get<UniversePresetsResponse>\("screener\/presets"/);
+  assert.match(screener, /presetId: selectedPreset\.presetId/);
+  assert.match(backtest, /universePresetId: selectedPreset\.presetId/);
+  assert.match(backtest, /official snapshot/);
+  assert.match(types, /export type UniversePreset/);
+  assert.doesNotMatch(screener, /const NIFTY_?50|const NIFTY_TOP_?20/);
+  assert.doesNotMatch(backtest, /const NIFTY_?50|const NIFTY_TOP_?20/);
+});

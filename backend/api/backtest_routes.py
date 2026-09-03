@@ -13,6 +13,7 @@ from backend.backtest.jobs import BacktestJobRunner
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import BacktestRunRepository, BacktestTradeRepository
+from backend.data.universe_presets import get_universe_preset
 from backend.strategies.registry import StrategyRegistry
 
 MAX_SYMBOLS = 2_000
@@ -21,7 +22,8 @@ MAX_SYMBOLS = 2_000
 class BacktestCreateRequest(BaseModel):
     market: str = Field(pattern="^(NSE|CRYPTO)$")
     strategyId: str = Field(min_length=1, max_length=80)
-    symbols: list[str] = Field(min_length=1, max_length=MAX_SYMBOLS)
+    symbols: list[str] = Field(default_factory=list, max_length=MAX_SYMBOLS)
+    universePresetId: str | None = Field(default=None, min_length=1, max_length=80)
     timeframe: str = Field(default="5m", min_length=1, max_length=8)
     startDate: date
     endDate: date
@@ -78,7 +80,16 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=422, detail=f"{strategy.strategy_id} does not support the {request.timeframe} timeframe")
         if request.endDate < request.startDate:
             raise HTTPException(status_code=422, detail="endDate must not be before startDate")
-        symbols = sorted({symbol.strip().upper() for symbol in request.symbols if symbol.strip()})
+        if request.universePresetId is not None and request.symbols:
+            raise HTTPException(status_code=422, detail="Use either universePresetId or symbols, not both")
+        if request.universePresetId is not None:
+            try:
+                requested_symbols = get_universe_preset(request.universePresetId, request.market).symbols
+            except KeyError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        else:
+            requested_symbols = request.symbols
+        symbols = sorted({symbol.strip().upper() for symbol in requested_symbols if symbol.strip()})
         if not symbols:
             raise HTTPException(status_code=422, detail="At least one symbol is required")
         try:

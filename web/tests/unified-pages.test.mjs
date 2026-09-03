@@ -173,6 +173,12 @@ test("the backtest trade ledger preserves readable outcome columns", async () =>
   assert.match(workspace, /trade\.status === "OPEN" \? formatNumber\(trade\.lastPrice\) : "—"/);
   assert.match(workspace, /trade\.status === "OPEN" \? trade\.unrealizedPnl : trade\.netPnl/);
   assert.match(workspace, /trade\.holdingBars != null/);
+  assert.match(workspace, /"FIFO net target"/);
+});
+
+test("NSE paper positions identify the executable FIFO net target", async () => {
+  const workspace = await readFile(new URL("../app/paper-trading/paper-workspace.tsx", import.meta.url), "utf8");
+  assert.match(workspace, /"FIFO net target"/);
 });
 
 test("workspace headers stay compact and the screener declares both markets", async () => {

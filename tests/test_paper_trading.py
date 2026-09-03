@@ -99,9 +99,9 @@ class MemoryLots:
         cycles = max((int(r["cycleId"].rsplit("Cycle", 1)[1]) for r in lots), default=0)
         return cycles, sum(1 for r in lots if r["status"] == "OPEN")
 
-    def mark(self, lot_id, *, last_price, cost_basis_price, fifo_allocations, entry_fees, unrealized_pnl, mae_pct, mfe_pct):
+    def mark(self, lot_id, *, last_price, cost_basis_price, fifo_allocations, target_price, entry_fees, unrealized_pnl, mae_pct, mfe_pct):
         if self.rows[lot_id]["status"] == "OPEN":
-            self.rows[lot_id].update(lastPrice=last_price, costBasisPrice=cost_basis_price, fifoAllocations=list(fifo_allocations), fees=entry_fees, unrealizedPnl=unrealized_pnl, maePct=mae_pct, mfePct=mfe_pct)
+            self.rows[lot_id].update(lastPrice=last_price, costBasisPrice=cost_basis_price, fifoAllocations=list(fifo_allocations), targetPrice=target_price, fees=entry_fees, unrealizedPnl=unrealized_pnl, maePct=mae_pct, mfePct=mfe_pct)
 
     def close(self, lot_id, *, status, exit_timestamp, exit_price, cost_basis_price, fifo_allocations, realized_pnl, fees):
         row = self.rows[lot_id]
@@ -193,6 +193,13 @@ def make_broker(repositories: PaperRepositories | None = None, *, market: str = 
     return PaperBroker(market=market_spec(market), repositories=repositories or memory_repositories(), policy=policy or ExecutionPolicy(), timeframe="5m", clock=lambda: datetime(2026, 9, 1, 12, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo), starting_balance=balance)
 
 
+def fifo_target_return_pct(lot: dict[str, Any]) -> float:
+    entry_fees = sum(float(item["fees"]) for item in lot["fifoAllocations"])
+    acquisition_cost = float(lot["costBasisPrice"]) * float(lot["quantity"]) + entry_fees
+    fill = NseFeeModel().sell(float(lot["targetPrice"]), float(lot["quantity"]))
+    return (fill.price * float(lot["quantity"]) - fill.fees - acquisition_cost) / acquisition_cost * 100
+
+
 class SizingAndCostTests(unittest.TestCase):
     def test_fixed_quantity_and_fixed_capital_sizing(self) -> None:
         fixed = ExecutionPolicy(initial_quantity=100, additional_quantity_pct=50)
@@ -217,8 +224,8 @@ class SizingAndCostTests(unittest.TestCase):
         self.assertAlmostEqual(lot["entryPrice"], round(buy.price, 4))
         self.assertAlmostEqual(lot["fees"], round(buy.fees, 4))
         self.assertAlmostEqual(broker.account["cashBalance"], 1_000_000.0 - Accounting.entry_cost(buy.price, 100, buy.fees))
-        self.assertAlmostEqual(lot["targetPrice"], round(lot["entryPrice"] * 1.01, 4))
-        row, stamp = candle(10, open_=101.0, high=101.5, low=100.5, close=101.2)
+        self.assertGreaterEqual(fifo_target_return_pct(lot), 1.0)
+        row, stamp = candle(10, open_=lot["targetPrice"], high=lot["targetPrice"] + 0.01, low=100.5, close=lot["targetPrice"])
         [closed] = broker.on_completed_candle("TCS", row, stamp)
         sell = fees.sell(lot["targetPrice"], 100)
         self.assertEqual(closed["status"], "TARGET_HIT")
@@ -240,12 +247,18 @@ class OrderAndLotTests(unittest.TestCase):
         broker.on_completed_candle("M&M", next_bar, next_stamp)
         second = max(broker.positions(), key=lambda lot: lot["lotNumber"])
 
-        exit_bar, exit_stamp = candle(15, open_=float(second["targetPrice"]), high=float(second["targetPrice"]) + 1, low=float(second["targetPrice"]) - 2, close=float(second["targetPrice"]))
+        original_second_target = round(float(second["entryPrice"]) * 1.05, 4)
+        self.assertGreater(float(second["targetPrice"]), original_second_target)
+        premature, premature_stamp = candle(15, open_=original_second_target, high=original_second_target, low=original_second_target - 2, close=original_second_target)
+        self.assertEqual(broker.on_completed_candle("M&M", premature, premature_stamp), [])
+        second = max(broker.positions(), key=lambda lot: lot["lotNumber"])
+        exit_bar, exit_stamp = candle(20, open_=float(second["targetPrice"]), high=float(second["targetPrice"]) + 1, low=float(second["targetPrice"]) - 2, close=float(second["targetPrice"]))
         [closed] = broker.on_completed_candle("M&M", exit_bar, exit_stamp)
 
         expected_fifo_cost = (float(first["entryPrice"]) * 5 + float(second["entryPrice"]) * 5) / 10
         self.assertEqual((closed["lotNumber"], closed["quantity"]), (2, 10))
         self.assertAlmostEqual(closed["costBasisPrice"], expected_fifo_cost, places=4)
+        self.assertGreaterEqual(closed["realizedPnl"] / (closed["costBasisPrice"] * closed["quantity"] + sum(item["fees"] for item in closed["fifoAllocations"])) * 100, 5)
         self.assertEqual(
             [(allocation["lotId"], allocation["quantity"]) for allocation in closed["fifoAllocations"]],
             [(first["lotId"], 5), (second["lotId"], 5)],
@@ -258,7 +271,7 @@ class OrderAndLotTests(unittest.TestCase):
         reborn = make_broker(broker.repositories)
         [recovered] = reborn.positions()
         self.assertAlmostEqual(recovered["costBasisPrice"], second["entryPrice"], places=4)
-        closed_after_restart = reborn.close_lot_manually(recovered["lotId"], price=float(first["targetPrice"]), timestamp=exit_stamp + timedelta(minutes=5))
+        closed_after_restart = reborn.close_lot_manually(recovered["lotId"], price=float(recovered["targetPrice"]), timestamp=exit_stamp + timedelta(minutes=5))
         self.assertAlmostEqual(closed_after_restart["costBasisPrice"], second["entryPrice"], places=4)
         self.assertEqual(reborn.positions(), [])
 
@@ -280,7 +293,7 @@ class OrderAndLotTests(unittest.TestCase):
         self.assertEqual(pd.Timestamp(lots[1]["entryTimestamp"]), pd.Timestamp(following_stamp))
         self.assertEqual(repositories.pending.rows, {})
 
-    def test_rsi_dip_ladder_uses_frozen_price_band_dip_gate_and_independent_targets_after_restart(self) -> None:
+    def test_rsi_dip_ladder_uses_frozen_price_band_dip_gate_and_fifo_targets_after_restart(self) -> None:
         repositories = memory_repositories()
         broker = make_broker(repositories)
         first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))
@@ -303,7 +316,7 @@ class OrderAndLotTests(unittest.TestCase):
         broker.on_completed_candle("M&M", row, stamp)
         third = max(broker.positions(), key=lambda lot: lot["lotNumber"])
         self.assertEqual([second["quantity"], third["quantity"]], [10, 25])
-        self.assertTrue(all(lot["targetPrice"] == round(lot["entryPrice"] * 1.05, 4) for lot in (first, second, third)))
+        self.assertTrue(all(fifo_target_return_pct(lot) >= 5 for lot in broker.positions()))
 
         row, stamp = candle(30, open_=2800.0, high=float(third["targetPrice"]) + 1, low=2790.0, close=2800.0)
         closed = broker.on_completed_candle("M&M", row, stamp)
@@ -338,15 +351,21 @@ class OrderAndLotTests(unittest.TestCase):
         self.assertEqual([lot["quantity"] for lot in (first, second, third)], [100, 50, 25])
         self.assertEqual({lot["cycleId"] for lot in (first, second, third)}, {"TCS-Cycle1"})
         self.assertLess(first["targetPrice"], second["targetPrice"])
-        row, stamp = candle(15, open_=101.0, high=101.5, low=100.8, close=101.2)  # only lot 1's target is reached
+        first = min(broker.positions(), key=lambda lot: lot["lotNumber"])
+        row, stamp = candle(15, open_=first["targetPrice"], high=first["targetPrice"] + 0.01, low=100.8, close=first["targetPrice"])
         closed = broker.on_completed_candle("TCS", row, stamp)
         self.assertEqual([lot["lotNumber"] for lot in closed], [1])
         self.assertEqual(sorted(lot["lotNumber"] for lot in broker.positions()), [2, 3])
-        row, stamp = candle(20, open_=109.0, high=110.0, low=108.5, close=109.5)  # lots 2 and 3 both close
+        second = min(broker.positions(), key=lambda lot: lot["lotNumber"])
+        row, stamp = candle(20, open_=second["targetPrice"], high=second["targetPrice"] + 20, low=108.5, close=second["targetPrice"])
         closed = broker.on_completed_candle("TCS", row, stamp)
-        self.assertEqual(sorted(lot["lotNumber"] for lot in closed), [2, 3])
+        self.assertEqual([lot["lotNumber"] for lot in closed], [2])
+        [third] = broker.positions()
+        row, stamp = candle(25, open_=third["targetPrice"], high=third["targetPrice"] + 0.01, low=third["targetPrice"] - 1, close=third["targetPrice"])
+        closed = broker.on_completed_candle("TCS", row, stamp)
+        self.assertEqual([lot["lotNumber"] for lot in closed], [3])
         self.assertEqual(broker.positions(), [])
-        fourth = broker.on_signal(signal(price=110.0, minute=25))
+        fourth = broker.on_signal(signal(price=110.0, minute=30))
         self.assertEqual((fourth["cycleId"], fourth["lotNumber"], fourth["quantity"]), ("TCS-Cycle2", 1, 100))
 
     def test_stop_loss_expiry_and_rejections(self) -> None:
@@ -409,7 +428,8 @@ class AccountTests(unittest.TestCase):
         reborn = make_broker(repositories)  # a new process rebuilding from storage
         self.assertEqual(sorted(lot["symbol"] for lot in reborn.positions()), ["INFY", "TCS"])
         self.assertAlmostEqual(reborn.account["cashBalance"], cash_before)
-        row, stamp = candle(10, open_=101.0, high=101.5, low=100.5, close=101.2)
+        [tcs] = [lot for lot in reborn.positions() if lot["symbol"] == "TCS"]
+        row, stamp = candle(10, open_=tcs["targetPrice"], high=tcs["targetPrice"] + 0.01, low=100.5, close=tcs["targetPrice"])
         [closed] = reborn.on_completed_candle("TCS", row, stamp)
         self.assertEqual((closed["symbol"], closed["status"]), ("TCS", "TARGET_HIT"))
         self.assertEqual([lot["symbol"] for lot in reborn.positions()], ["INFY"])

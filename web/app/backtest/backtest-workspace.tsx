@@ -298,7 +298,21 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     </Panel>
 
     {tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" aside={(tradeSymbolInput || tradeStatus) && <button type="button" className="quant-icon-action" onClick={() => { setTradeSymbolInput(""); setTradeStatus(""); setTradeOffset(0); }}><X size={13} />Clear filters</button>}>
-      <div className="quant-table-scroll tall"><table className="quant-table">
+      <div className="quant-table-scroll tall quant-trades-scroll"><table className="quant-table quant-trades-table">
+          <colgroup>
+            <col className="quant-trade-symbol" />
+            <col className="quant-trade-status" />
+            <col className="quant-trade-time" />
+            <col className="quant-trade-price" />
+            <col className="quant-trade-quantity" />
+            <col className="quant-trade-price" />
+            <col className="quant-trade-price" />
+            <col className="quant-trade-time" />
+            <col className="quant-trade-price" />
+            <col className="quant-trade-pnl" />
+            <col className="quant-trade-excursion" />
+            <col className="quant-trade-holding" />
+          </colgroup>
           <thead>
             <tr className="quant-sort-row">
               <SortableHeading label="Symbol" column="symbol" active={tradeSort === "symbol"} direction={tradeDirection} onSort={sortTrades} />

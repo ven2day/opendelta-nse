@@ -160,6 +160,17 @@ test("OPEN uses the warning colour while completed targets remain green", async 
   assert.match(warningStatuses, /"OPEN"/);
 });
 
+test("the backtest trade ledger preserves readable outcome columns", async () => {
+  const [workspace, styles] = await Promise.all([
+    readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/trading-terminal.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /quant-table quant-trades-table/);
+  assert.equal((workspace.match(/<col className="quant-trade-/g) ?? []).length, 12);
+  assert.match(styles, /\.quant-trades-table\s*\{[^}]*width:\s*1490px;[^}]*min-width:\s*1490px;[^}]*table-layout:\s*fixed;/s);
+  assert.match(styles, /\.quant-trades-table th,[\s\S]*?white-space:\s*nowrap;/);
+});
+
 test("workspace headers stay compact and the screener declares both markets", async () => {
   const paths = [
     "../app/dashboard-workspace.tsx",

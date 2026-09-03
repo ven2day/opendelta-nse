@@ -451,6 +451,30 @@
 .quant-table th.numeric { font-family: var(--font-jetbrains-mono), monospace; font-variant-numeric: tabular-nums; }
 .quant-table-scroll.tall { max-height: 620px; }
 
+/* Keep the twelve-column backtest ledger readable. The explicit column widths
+   make the table scroll inside its panel instead of compressing the outcome
+   columns until their headings and values overlap. */
+.quant-trades-table {
+  width: 1490px;
+  min-width: 1490px;
+  table-layout: fixed;
+}
+.quant-trades-table col.quant-trade-symbol { width: 150px; }
+.quant-trades-table col.quant-trade-status { width: 115px; }
+.quant-trades-table col.quant-trade-time { width: 145px; }
+.quant-trades-table col.quant-trade-price { width: 110px; }
+.quant-trades-table col.quant-trade-quantity { width: 75px; }
+.quant-trades-table col.quant-trade-pnl { width: 135px; }
+.quant-trades-table col.quant-trade-excursion { width: 145px; }
+.quant-trades-table col.quant-trade-holding { width: 105px; }
+.quant-trades-table th,
+.quant-trades-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quant-trades-scroll { overscroll-behavior-x: contain; }
+
 /* Forms and filters */
 .quant-form-grid label > span,
 .quant-toolbar label > span,

@@ -505,6 +505,7 @@
 /* Backtests use a dense run ticket; the full configuration is an opt-in JSON override. */
 .quant-backtest-run-grid { grid-template-columns: minmax(220px, 1.6fr) minmax(90px, .55fr) minmax(150px, .8fr) minmax(150px, .8fr); }
 .quant-backtest-source-grid { grid-template-columns: minmax(260px, .75fr) minmax(320px, 2fr); }
+.quant-screener-run-grid { grid-template-columns: minmax(150px, .75fr) minmax(140px, .65fr) minmax(190px, 1fr) minmax(240px, 1.4fr); }
 .quant-universe-summary {
   display: flex;
   min-height: 40px;
@@ -533,6 +534,12 @@
 .quant-backtest-config-body textarea:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
 .quant-backtest-config-actions { display: flex; gap: 8px; }
 .quant-backtest-config-actions button { border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); cursor: pointer; }
+
+@media (max-width: 800px) {
+  .quant-backtest-run-grid,
+  .quant-backtest-source-grid,
+  .quant-screener-run-grid { grid-template-columns: 1fr; }
+}
 
 /* Trading semantics: green/red are reserved for outcomes. */
 .quant-badge,

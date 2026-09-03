@@ -1,10 +1,10 @@
 "use client";
 
-import { Layers, ListChecks, LoaderCircle, Play, RefreshCw, Save, ScanSearch } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Layers, ListChecks, LoaderCircle, Play, RefreshCw, Save, ScanSearch, SlidersHorizontal } from "lucide-react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { formatDateTime, formatInteger, formatNumber, formatPercent, humanize, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
-import { compactValues, schemaDefaults, schemaFromValues, SchemaForm, type ConfigValues } from "../platform/schema-form";
+import { compactValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversesResponse } from "../platform/v2-types";
@@ -13,6 +13,37 @@ import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, RequestErrorS
 const RUN_POLL_MS = 2_000;
 const ACTIVE_RUN_STATUSES = new Set(["QUEUED", "RUNNING", "PENDING"]);
 type Notice = { kind: "success" | "error"; text: string } | null;
+
+const FILTER_SCHEMA: ConfigSchema = {
+  lookbackDays: { type: "integer", minimum: 1 },
+  minimumPrice: { type: "number", minimum: 0 },
+  maximumPrice: { type: "number", minimum: 0 },
+  minimumAverageTradedValue: { type: "number", minimum: 0 },
+  minimumAverageVolume: { type: "number", minimum: 0 },
+  minimumVolatilityPct: { type: "number", minimum: 0 },
+  maximumVolatilityPct: { type: "number", minimum: 0 },
+  minimumCandleCoverage: { type: "number", minimum: 0, maximum: 1 },
+  minimumSessions: { type: "integer", minimum: 1 },
+  rankBy: { type: "string" },
+  maximumSymbols: { type: "integer", minimum: 1 },
+};
+
+function isObject(value: unknown): value is ConfigValues {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseFilterOverrides(text: string): ConfigValues {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Screener configuration is not valid JSON.");
+  }
+  if (!isObject(parsed)) throw new Error("Screener configuration must be a JSON object.");
+  const overrides = compactValues(parsed);
+  validateConfigValues(overrides, FILTER_SCHEMA, "filters");
+  return overrides;
+}
 
 function parseSymbols(text: string): string[] {
   return Array.from(new Set(text.split(/[\s,;]+/).map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)));
@@ -32,10 +63,11 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const { refresh: refreshRuns } = runs;
   const { refresh: refreshUniverses } = universes;
 
-  const [filterEdits, setFilterEdits] = useState<ConfigValues>({});
-  const [allPassingChoice, setAllPassingChoice] = useState<boolean | null>(null);
-  const [maximumSymbolsEdit, setMaximumSymbolsEdit] = useState<string | null>(null);
+  const [rankChoice, setRankChoice] = useState<string | null>(null);
+  const [resultLimitChoice, setResultLimitChoice] = useState<string | null>(null);
+  const [symbolSource, setSymbolSource] = useState<"market" | "custom">("market");
   const [symbolsText, setSymbolsText] = useState("");
+  const [filterJsonEdits, setFilterJsonEdits] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
   const [submitting, setSubmitting] = useState(false);
   const [runNotice, setRunNotice] = useState<Notice>(null);
   const [pollingRunId, setPollingRunId] = useState<string | null>(null);
@@ -51,16 +83,12 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const [universeNotice, setUniverseNotice] = useState<Notice>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
 
-  const filterSchema = useMemo(() => {
-    const schema = schemaFromValues(filters.data?.defaults ?? {});
-    if (schema.rankBy && filters.data?.rankBy?.length) schema.rankBy = { ...schema.rankBy, enum: filters.data.rankBy };
-    delete schema.maximumSymbols;
-    return schema;
-  }, [filters.data]);
-  const filterValues = useMemo(() => ({ ...schemaDefaults(filterSchema, filters.data?.defaults), ...filterEdits }), [filterSchema, filters.data, filterEdits]);
+  const defaultFilters = filters.data?.defaults ?? {};
   const defaultMaximum = filters.data?.defaults.maximumSymbols;
-  const allPassing = allPassingChoice ?? (defaultMaximum === null || defaultMaximum === undefined);
-  const maximumSymbols = maximumSymbolsEdit ?? (typeof defaultMaximum === "number" ? String(defaultMaximum) : "");
+  const rankBy = rankChoice ?? String(defaultFilters.rankBy ?? filters.data?.rankBy?.[0] ?? "liquidity");
+  const resultLimit = resultLimitChoice ?? (typeof defaultMaximum === "number" ? String(defaultMaximum) : "all");
+  const filterJson = filterJsonEdits[market];
+  const hasFilterOverride = filterJson.trim() !== "" && filterJson.trim() !== "{}";
 
   const selectedRunId = selectedRunChoice ?? runs.data?.runs[0]?.runId ?? null;
   const loadResults = useCallback(async () => {
@@ -109,10 +137,18 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
     setSubmitting(true);
     setRunNotice(null);
     try {
-      const symbols = parseSymbols(symbolsText);
+      const symbols = symbolSource === "custom" ? parseSymbols(symbolsText) : [];
+      if (symbolSource === "custom" && !symbols.length) throw new Error("Enter at least one symbol or use the full market.");
+      const overrides = hasFilterOverride ? parseFilterOverrides(filterJson) : {};
+      if (overrides.rankBy !== undefined && !(filters.data?.rankBy ?? []).includes(String(overrides.rankBy))) throw new Error(`filters.rankBy must be one of: ${(filters.data?.rankBy ?? []).join(", ")}.`);
       const body = {
         market,
-        filters: { ...compactValues(filterValues), maximumSymbols: allPassing ? null : Number(maximumSymbols) },
+        filters: {
+          ...compactValues(defaultFilters),
+          rankBy,
+          maximumSymbols: resultLimit === "all" ? null : Number(resultLimit),
+          ...overrides,
+        },
         ...(symbols.length ? { symbols } : {}),
       };
       const run = await v2Post<ScreenerRun>("screener/runs", body);
@@ -171,9 +207,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
 
   return <main className="quant-workspace">
     <WorkspaceHeader
-      eyebrow={`${marketLabel(market)} screener`}
+      eyebrow={`NSE & Crypto screener · viewing ${marketLabel(market)}`}
       title="Universe screener"
-      description="Rank instruments by liquidity, price, volatility and data coverage, review what passed or was rejected, then freeze the list as the universe used by backtests and the signal engine."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshUniverses(); refreshResults(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
@@ -181,24 +216,35 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       <article><span>Latest run</span><strong>{selectedRun?.status ?? "None"}</strong><small>{selectedRun ? `${shortId(selectedRun.runId)} · ${formatDateTime(selectedRun.requestedAt, market)}` : "No screener runs yet"}</small></article>
       <article><span>Passed / total</span><strong>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} / ${formatInteger(selectedRun.symbolsTotal)}` : "—"}</strong><small>Symbols in the selected run</small></article>
       <article><span>Active universe</span><strong>{activeUniverse?.name ?? "None"}</strong><small>{activeUniverse ? `${activeUniverse.symbols.length} symbols` : "Save a run to create one"}</small></article>
-      <article><span>Saved universes</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>{marketLabel(market)} only</small></article>
+      <article><span>Saved universes</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>NSE & Crypto supported · viewing {marketLabel(market)}</small></article>
     </section>
 
     <div className="quant-screener-layout">
-    <Panel icon={<ScanSearch size={17} />} title="Screen filters" description="Defaults come from the platform; choose a maximum symbol count or keep every passing symbol.">
+    <Panel icon={<ScanSearch size={17} />} title="Run screener">
       {filters.loading ? <LoadingState label="Loading filter defaults" /> : filters.error ? <RequestErrorState error={filters.error} retry={filters.reload} /> : <form onSubmit={runScreener} noValidate>
         <div className="quant-panel-body">
-          <SchemaForm schema={filterSchema} values={filterValues} onChange={setFilterEdits} disabled={busy} />
-          <div className="quant-form-grid">
-            <label className="checkbox"><input type="checkbox" checked={allPassing} disabled={busy} onChange={(event) => setAllPassingChoice(event.target.checked)} /><span>Keep all passing symbols</span></label>
-            <label><span>Maximum symbols</span><input type="number" min={1} step={1} inputMode="numeric" value={allPassing ? "" : maximumSymbols} disabled={busy || allPassing} placeholder={allPassing ? "All passing" : ""} onChange={(event) => setMaximumSymbolsEdit(event.target.value)} /><small>Top-ranked symbols kept after filtering</small></label>
-            <label className="span-2"><span>Symbols override (optional)</span><textarea value={symbolsText} disabled={busy} placeholder="Leave empty to screen the full instrument master, or paste symbols separated by commas or new lines." onChange={(event) => setSymbolsText(event.target.value)} /></label>
+          <div className="quant-form-grid quant-screener-run-grid">
+            <label><span>Rank by</span><select value={rankBy} disabled={busy} onChange={(event) => setRankChoice(event.target.value)}>{(filters.data?.rankBy ?? []).map((option) => <option key={option} value={option}>{humanize(option)}</option>)}</select></label>
+            <label><span>Keep results</span><select value={resultLimit} disabled={busy} onChange={(event) => setResultLimitChoice(event.target.value)}><option value="all">All passing</option><option value="50">Top 50</option><option value="100">Top 100</option><option value="300">Top 300</option>{typeof defaultMaximum === "number" && ![50, 100, 300].includes(defaultMaximum) && <option value={String(defaultMaximum)}>Default ({defaultMaximum})</option>}</select></label>
+            <label><span>Symbols</span><select value={symbolSource} disabled={busy} onChange={(event) => setSymbolSource(event.target.value as "market" | "custom")}><option value="market">Full {marketLabel(market)} market</option><option value="custom">Custom list</option></select></label>
+            {symbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => setSymbolsText(event.target.value)} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
           </div>
+          <details className="quant-backtest-config">
+            <summary><span><SlidersHorizontal size={14} />Screener configuration</span><StatusBadge tone={hasFilterOverride ? "warn" : "neutral"}>{hasFilterOverride ? "Custom JSON" : "Defaults"}</StatusBadge></summary>
+            <div className="quant-backtest-config-body">
+              <div><strong>Platform defaults</strong><p>Add only the filters you want to override. The options above are applied automatically.</p></div>
+              <label><span>JSON override</span><textarea aria-label="Screener configuration JSON" spellCheck={false} value={filterJson} disabled={busy} placeholder={'{\n  "minimumPrice": 500,\n  "maximumPrice": 2000\n}'} onChange={(event) => setFilterJsonEdits((current) => ({ ...current, [market]: event.target.value }))} /></label>
+              <div className="quant-backtest-config-actions">
+                <button type="button" onClick={() => { try { const parsed = parseFilterOverrides(filterJson || "{}"); setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(parsed, null, 2) })); setRunNotice(null); } catch (reason) { setRunNotice({ kind: "error", text: errorMessage(reason, "Invalid screener configuration") }); } }}>Format JSON</button>
+                <button type="button" onClick={() => setFilterJsonEdits((current) => ({ ...current, [market]: "" }))}>Use defaults</button>
+              </div>
+            </div>
+          </details>
           {runNotice && <Message kind={runNotice.kind}>{runNotice.text}</Message>}
         </div>
         <div className="quant-form-actions">
           <button type="submit" className="primary" disabled={busy}>{pollingRunId ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{pollingRunId ? "Screening…" : "Run screener"}</button>
-          <span>{pollingRun && pollingRunId ? `Run ${shortId(pollingRun.runId)} · ${pollingRun.status} · ${formatInteger(pollingRun.symbolsTotal)} symbols` : `Rank by ${String(filterValues.rankBy ?? "score")}`}</span>
+          <span>{pollingRun && pollingRunId ? `Run ${shortId(pollingRun.runId)} · ${pollingRun.status} · ${formatInteger(pollingRun.symbolsTotal)} symbols` : `${marketLabel(market)} · ${humanize(rankBy)} · ${resultLimit === "all" ? "all passing" : `top ${resultLimit}`}`}</span>
         </div>
       </form>}
     </Panel>

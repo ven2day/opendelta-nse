@@ -76,5 +76,5 @@ test("the six workspaces use the shared terminal primitives", async () => {
   assert.match(styles, /\.platform-frame \.quant-form-actions button\.primary/);
   assert.match(styles, /\.quant-dashboard-grid/);
   assert.match(styles, /\.quant-screener-layout/);
-  assert.match(signals, /Gold is a fresh strong buy/);
+  assert.match(signals, /STRONG_BUY: "blue", HOLDING: "orange", TARGET_HIT: "green", EXITED: "red", EXPIRED: "red"/);
 });

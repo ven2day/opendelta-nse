@@ -34,7 +34,6 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
     <WorkspaceHeader
       eyebrow={`${marketLabel(market)} signals`}
       title="Live signals"
-      description="Completed-candle signals from the unified engine. Gold is a fresh strong buy, orange is holding, green hit its target, and red exited or expired. Refreshes every 15 seconds."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { health.refresh(); signals.refresh(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 

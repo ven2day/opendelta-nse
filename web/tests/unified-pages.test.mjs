@@ -140,6 +140,40 @@ test("the backtest run ticket uses defaults with one collapsed JSON override", a
   assert.doesNotMatch(source, /<details className="quant-backtest-config" open/);
   assert.match(source, /aria-label="Backtest configuration JSON"/);
   assert.match(source, /hasConfigurationOverride \? "Custom JSON" : "Defaults"/);
+  assert.match(source, /validateConfigValues\(configuration\.strategy, strategySchema/);
+  assert.match(source, /validateConfigValues\(configuration\.execution, executionSchema/);
   assert.doesNotMatch(source, /<SchemaForm/);
   assert.doesNotMatch(source, /Universe symbols/);
+});
+
+test("workspace headers stay compact and the screener declares both markets", async () => {
+  const paths = [
+    "../app/dashboard-workspace.tsx",
+    "../app/screener/screener-workspace.tsx",
+    "../app/backtest/backtest-workspace.tsx",
+    "../app/signals/signals-workspace.tsx",
+    "../app/paper-trading/paper-workspace.tsx",
+    "../app/settings/settings-workspace.tsx",
+  ];
+  const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), "utf8")));
+  for (const [index, source] of sources.entries()) {
+    const header = source.match(/<WorkspaceHeader[\s\S]*?\/>/)?.[0] ?? "";
+    assert.ok(header, `${paths[index]} must use WorkspaceHeader`);
+    assert.doesNotMatch(header, /\sdescription=/, `${paths[index]} must not add a page-header description`);
+  }
+  assert.match(sources[1], /NSE & Crypto screener/);
+  assert.match(sources[1], /NSE & Crypto supported/);
+  assert.doesNotMatch(sources[1], /Crypto only/);
+});
+
+test("the screener uses a compact run ticket with partial JSON overrides", async () => {
+  const source = await readFile(new URL("../app/screener/screener-workspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /<details className="quant-backtest-config">/);
+  assert.doesNotMatch(source, /<details className="quant-backtest-config" open/);
+  assert.match(source, /aria-label="Screener configuration JSON"/);
+  assert.match(source, /hasFilterOverride \? "Custom JSON" : "Defaults"/);
+  assert.match(source, /validateConfigValues\(overrides, FILTER_SCHEMA/);
+  assert.match(source, /Full \{marketLabel\(market\)\} market/);
+  assert.doesNotMatch(source, /<SchemaForm/);
+  assert.doesNotMatch(source, /Keep all passing symbols/);
 });

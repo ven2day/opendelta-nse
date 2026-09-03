@@ -15,6 +15,24 @@ export type SchemaField = {
 export type ConfigSchema = Record<string, SchemaField>;
 export type ConfigValues = Record<string, unknown>;
 
+/** Rejects unknown keys and values that do not match a published configuration schema. */
+export function validateConfigValues(values: ConfigValues, schema: ConfigSchema, label = "Configuration"): void {
+  const unknownKeys = Object.keys(values).filter((key) => !(key in schema));
+  if (unknownKeys.length) throw new Error(`${label} contains unknown setting${unknownKeys.length === 1 ? "" : "s"}: ${unknownKeys.join(", ")}.`);
+  for (const [key, value] of Object.entries(values)) {
+    const field = schema[key];
+    const validType = field.type === "integer"
+      ? typeof value === "number" && Number.isInteger(value)
+      : field.type === "number"
+        ? typeof value === "number" && Number.isFinite(value)
+        : typeof value === field.type;
+    if (!validType) throw new Error(`${label}.${key} must be ${field.type === "integer" ? "an integer" : `a ${field.type}`}.`);
+    if (field.enum && !field.enum.some((option) => option === value)) throw new Error(`${label}.${key} must be one of: ${field.enum.join(", ")}.`);
+    if (typeof value === "number" && field.minimum !== undefined && value < field.minimum) throw new Error(`${label}.${key} must be at least ${field.minimum}.`);
+    if (typeof value === "number" && field.maximum !== undefined && value > field.maximum) throw new Error(`${label}.${key} must be at most ${field.maximum}.`);
+  }
+}
+
 /** Builds the initial values for a schema: explicit overrides first, then the strategy defaults, then field defaults. */
 export function schemaDefaults(schema: ConfigSchema, ...overrides: Array<ConfigValues | null | undefined>): ConfigValues {
   const values: ConfigValues = {};

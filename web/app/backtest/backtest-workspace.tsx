@@ -4,7 +4,7 @@ import { FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, 
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
-import { compactValues, pickValues, schemaDefaults, schemaFromValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
+import { compactValues, pickValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
 import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversesResponse } from "../platform/v2-types";
@@ -57,7 +57,7 @@ function formatConfigurationJson(configuration: ConfigValues, execution: ConfigV
 }
 
 /** Accept one explicit JSON envelope; defaults are used when the editor has not been changed. */
-function parseConfigurationJson(text: string): BacktestConfiguration {
+function parseConfigurationJson(text: string, strategySchema: ConfigSchema, executionSchema: ConfigSchema): BacktestConfiguration {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -69,10 +69,13 @@ function parseConfigurationJson(text: string): BacktestConfiguration {
   if (unknownKeys.length) throw new Error(`Unknown configuration section: ${unknownKeys.join(", ")}. Use only strategy and execution.`);
   if (parsed.strategy !== undefined && !isObject(parsed.strategy)) throw new Error("strategy must be a JSON object.");
   if (parsed.execution !== undefined && !isObject(parsed.execution)) throw new Error("execution must be a JSON object.");
-  return {
+  const configuration = {
     strategy: (parsed.strategy as ConfigValues | undefined) ?? {},
     execution: (parsed.execution as ConfigValues | undefined) ?? {},
   };
+  validateConfigValues(configuration.strategy, strategySchema, "strategy");
+  validateConfigValues(configuration.execution, executionSchema, "execution");
+  return configuration;
 }
 
 function isActive(status: string | undefined): boolean {
@@ -160,7 +163,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       if (!symbols.length) throw new Error(symbolSource === "custom" ? "Enter at least one symbol." : "No active universe; save one in the Screener or enter symbols manually.");
       if (!startDate || !endDate || startDate > endDate) throw new Error("Choose a start date on or before the end date.");
       const defaults = { strategy: compactValues(configuration), execution: pickValues(compactValues(execution), EXECUTION_KEYS) };
-      const overrides = hasConfigurationOverride ? parseConfigurationJson(configurationJson) : { strategy: {}, execution: {} };
+      const overrides = hasConfigurationOverride ? parseConfigurationJson(configurationJson, strategy.configSchema, executionSchema) : { strategy: {}, execution: {} };
       const resolvedConfiguration = {
         strategy: { ...defaults.strategy, ...overrides.strategy },
         execution: { ...defaults.execution, ...overrides.execution },
@@ -208,7 +211,6 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     <WorkspaceHeader
       eyebrow={`${marketLabel(market)} backtest`}
       title="Strategy backtest"
-      description="Run any registered strategy against the active universe with a reproducible configuration snapshot. Runs are stored on the platform database and resume-safe."
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshRun(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
@@ -231,7 +233,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
               <div><strong>{config.data?.active ? `Active configuration: ${config.data.active.name}` : "Published defaults"}</strong><p>Edit only when this run needs different strategy or execution values. The exact JSON is stored with the result.</p></div>
               {config.loading ? <LoadingState label="Loading strategy defaults" /> : <label><span>JSON override</span><textarea aria-label="Backtest configuration JSON" spellCheck={false} value={configurationJson} disabled={submitting} onChange={(event) => setConfigurationJsonEdits((current) => ({ ...current, [configKey]: event.target.value }))} /></label>}
               <div className="quant-backtest-config-actions">
-                <button type="button" onClick={() => { try { const parsed = parseConfigurationJson(configurationJson); setConfigurationJsonEdits((current) => ({ ...current, [configKey]: JSON.stringify(parsed, null, 2) })); setNotice(null); } catch (reason) { setNotice({ kind: "error", text: errorMessage(reason, "Invalid strategy configuration") }); } }}>Format JSON</button>
+                <button type="button" onClick={() => { try { const parsed = parseConfigurationJson(configurationJson, strategy.configSchema, executionSchema); setConfigurationJsonEdits((current) => ({ ...current, [configKey]: JSON.stringify(parsed, null, 2) })); setNotice(null); } catch (reason) { setNotice({ kind: "error", text: errorMessage(reason, "Invalid strategy configuration") }); } }}>Format JSON</button>
                 <button type="button" onClick={() => setConfigurationJsonEdits((current) => { const next = { ...current }; delete next[configKey]; return next; })}>Use defaults</button>
               </div>
             </div>

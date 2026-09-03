@@ -81,7 +81,6 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
     <WorkspaceHeader
       eyebrow={`${marketLabel(market)} paper trading`}
       title="Paper account"
-      description={`Simulated ${currency} account driven by the signal engine. Fills, fees and slippage are modelled; nothing here reaches a broker.`}
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button></div>}
     />
 

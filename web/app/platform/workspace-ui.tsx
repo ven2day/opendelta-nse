@@ -4,8 +4,8 @@ import { formatSignedMoney } from "./format";
 import type { PlatformMarket } from "./platform-client";
 import { isPlatformUnconfigured } from "./v2-client";
 
-export function WorkspaceHeader({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
-  return <header className="quant-workspace-header"><div><span>{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{actions}</header>;
+export function WorkspaceHeader({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description?: string; actions?: ReactNode }) {
+  return <header className="quant-workspace-header"><div><span>{eyebrow}</span><h1>{title}</h1>{description && <p>{description}</p>}</div>{actions}</header>;
 }
 
 export function LoadingState({ label = "Loading current platform state" }: { label?: string }) {

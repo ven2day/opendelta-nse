@@ -122,12 +122,13 @@ class EngineBehaviourTests(unittest.TestCase):
         for trade in hits:
             sell = fees.sell(trade["target_price"], trade["quantity"])
             self.assertAlmostEqual(trade["exit_price"], round(sell.price, 4))
-            expected_gross = (sell.price - trade["entry_price"]) * trade["quantity"]
+            expected_gross = (trade["exit_price"] - trade["cost_basis_price"]) * trade["quantity"]
             self.assertAlmostEqual(trade["gross_pnl"], round(expected_gross, 2), places=2)
             self.assertGreater(trade["fees"], sell.fees)  # entry fees + exit fees
             self.assertAlmostEqual(trade["net_pnl"], round(trade["gross_pnl"] - trade["fees"], 2), places=2)
             self.assertGreaterEqual(trade["mfe_pct"], 0.0)
             self.assertLessEqual(trade["mae_pct"], 0.0)
+        self.assertTrue(any(trade["cost_basis_price"] != trade["entry_price"] for trade in hits))
 
     def test_lot_ids_are_unique_and_statuses_are_well_formed(self) -> None:
         lot_ids = [trade["lot_id"] for trade in self.trades]
@@ -140,7 +141,7 @@ class EngineBehaviourTests(unittest.TestCase):
         for trade in open_trades:
             self.assertIsInstance(trade["unrealized_pnl"], float)
             self.assertIsInstance(trade["last_price"], float)
-            expected = round((trade["last_price"] - trade["entry_price"]) * trade["quantity"] - trade["fees"], 2)
+            expected = round((trade["last_price"] - trade["cost_basis_price"]) * trade["quantity"] - trade["fees"], 2)
             self.assertEqual(trade["unrealized_pnl"], expected)
             self.assertEqual(trade["holding_minutes"], float(trade["holding_bars"] * 5))
 

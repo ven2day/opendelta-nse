@@ -79,6 +79,12 @@ lot at the following candle open without requiring another RSI signal. The
 engines enforce the finite quantity array and capital ceiling and retain an
 independent target for every lot.
 
+For NSE/CNC, those targets are sell instructions rather than broker-selectable
+inventory lots. Dhan accepts a symbol and quantity, then matches the sale to the
+oldest available shares using FIFO. Backtest and Paper Trading therefore retain
+the tranche entry that triggered the sale while calculating realized P/L from
+the FIFO cost basis and recalculating the remaining holding cost after the sale.
+
 ## Database
 
 The platform tables live in the existing PostgreSQL/TimescaleDB instance

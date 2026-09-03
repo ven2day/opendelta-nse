@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
+from backend.core.fifo import FifoInventory
 from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperPendingEntryRepository, PaperTradeRepository
 from backend.markets.base import MarketSpec
 from backend.paper_trading.accounting import Accounting
@@ -64,6 +65,7 @@ class PaperBroker:
             starting_balance=starting_balance if starting_balance is not None else DEFAULT_STARTING_BALANCES[market.market],
             risk_settings=self.policy.public(),
         )
+        self._inventories = self._load_fifo_inventories()
         self.portfolio = self._rebuild_portfolio()
         self.rejected = 0
         self.filled = 0
@@ -76,6 +78,7 @@ class PaperBroker:
             if account is None:
                 raise RuntimeError(f"Paper account for {self.market.market} disappeared")
             self.account = account
+            self._inventories = self._load_fifo_inventories()
             self.portfolio = self._rebuild_portfolio()
             return self.portfolio
 
@@ -91,6 +94,7 @@ class PaperBroker:
         with self._lock:
             self.repositories.pending.clear(self.account["accountId"])
             self.account = self.repositories.accounts.reset(self.market.market, starting_balance=starting_balance, risk_settings=self.policy.public())
+            self._inventories = {}
             self.portfolio = Portfolio.rebuild(self.account, [])
             return self.account
 
@@ -141,7 +145,7 @@ class PaperBroker:
         quantity = ladder.quantity(entry_number, first_entry_price) if ladder else self.policy.lot_quantity(entry_number, reference_price)
         fill = self.policy.buy(self.market.fees, reference_price, quantity)
         if ladder is not None:
-            current_open_capital = sum(float(lot["entryPrice"]) * float(lot["quantity"]) for lot in open_lots)
+            current_open_capital = self._fifo_inventory(symbol).cost if self.market.market == "NSE" else sum(float(lot["entryPrice"]) * float(lot["quantity"]) for lot in open_lots)
             if not ladder.within_capital(current_open_capital, fill.price, quantity):
                 return self._reject(signal, reference_price, "MAXIMUM_POSITION_CAPITAL")
         cost = Accounting.entry_cost(fill.price, quantity, fill.fees)
@@ -167,6 +171,8 @@ class PaperBroker:
             unrealized_pnl=Accounting.unrealized_pnl(round(fill.price, 4), round(fill.price, 4), quantity, fill.fees), configuration_snapshot=snapshot,
         )
         self.repositories.trades.insert(account_id=account_id, lot_id=lot["lotId"], market=self.market.market, symbol=symbol, side="BUY", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason=signal.get("entryReason", "SIGNAL_ENTRY"), executed_at=entry_time)
+        if self.market.market == "NSE":
+            self._fifo_inventory(symbol).add(lot["lotId"], entry_time, round(fill.price, 4), quantity, round(fill.fees, 4))
         self.account["cashBalance"] = self.repositories.accounts.adjust_cash(account_id, -cost)
         self.portfolio.add_lot(lot)
         self.filled += 1
@@ -199,6 +205,7 @@ class PaperBroker:
                     deferred.append(signal)
             if deferred:
                 self.portfolio.pending_entries[symbol] = deferred
+            survivors: dict[str, tuple[float, float]] = {}
             for lot in self.portfolio.lots_for(symbol):
                 if pd.Timestamp(lot["entryTimestamp"]) >= pd.Timestamp(stamp):
                     continue
@@ -213,9 +220,8 @@ class PaperBroker:
                 elif expires is not None and pd.Timestamp(stamp) >= pd.Timestamp(expires):
                     closed.append(self._close_lot(lot, "EXPIRED", close, stamp, mae, mfe))
                 else:
-                    unrealized = Accounting.unrealized_pnl(entry_price, close, float(lot["quantity"]), float(lot.get("fees") or 0.0))
-                    self.repositories.lots.mark(lot["lotId"], last_price=close, unrealized_pnl=unrealized, mae_pct=mae, mfe_pct=mfe)
-                    self.portfolio.replace_lot({**lot, "lastPrice": close, "unrealizedPnl": unrealized, "maePct": mae, "mfePct": mfe})
+                    survivors[lot["lotId"]] = (mae, mfe)
+            self._mark_open_lots(symbol, close, survivors)
             self._queue_ladder_entry(symbol, close, stamp)
         return closed
 
@@ -271,20 +277,61 @@ class PaperBroker:
                 raise KeyError(f"Open paper lot {lot_id} was not found")
             stamp = timestamp or self.clock()
             mae, mfe = Accounting.excursions(float(lot["entryPrice"]), price, price, lot.get("maePct"), lot.get("mfePct"))
-            return self._close_lot(lot, "CLOSED", price, stamp, mae, mfe)
+            closed = self._close_lot(lot, "CLOSED", price, stamp, mae, mfe)
+            self._mark_open_lots(lot["symbol"], price, {})
+            return closed
 
     def _close_lot(self, lot: Mapping[str, Any], status: str, raw_price: float, stamp: datetime, mae: float, mfe: float) -> dict[str, Any]:
         quantity = float(lot["quantity"])
         fill = self.policy.sell(self.market.fees, raw_price, quantity)
-        entry_fees = float(lot.get("fees") or 0.0)
+        if self.market.market == "NSE":
+            matched = self._fifo_inventory(lot["symbol"]).preview_allocations([quantity])[0]
+            cost_basis_price = round(matched.cost_basis_price, 4)
+            entry_fees = matched.entry_fees
+            fifo_allocations = _public_fifo_allocations(matched.allocations)
+        else:
+            cost_basis_price = float(lot["entryPrice"])
+            entry_fees = float(lot.get("fees") or 0.0)
+            fifo_allocations = [{"lotId": lot["lotId"], "quantity": quantity, "entryPrice": cost_basis_price, "fees": entry_fees}]
         total_fees = round(entry_fees + fill.fees, 4)
-        realized = Accounting.realized_pnl(float(lot["entryPrice"]), round(fill.price, 4), quantity, total_fees)
-        self.repositories.lots.mark(lot["lotId"], last_price=raw_price, unrealized_pnl=0.0, mae_pct=mae, mfe_pct=mfe)
-        updated = self.repositories.lots.close(lot["lotId"], status=status, exit_timestamp=stamp, exit_price=round(fill.price, 4), realized_pnl=realized, fees=total_fees)
+        realized = Accounting.realized_pnl(cost_basis_price, round(fill.price, 4), quantity, total_fees)
+        self.repositories.lots.mark(lot["lotId"], last_price=raw_price, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, entry_fees=entry_fees, unrealized_pnl=0.0, mae_pct=mae, mfe_pct=mfe)
+        updated = self.repositories.lots.close(lot["lotId"], status=status, exit_timestamp=stamp, exit_price=round(fill.price, 4), cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, realized_pnl=realized, fees=total_fees)
         self.repositories.trades.insert(account_id=self.account["accountId"], lot_id=lot["lotId"], market=self.market.market, symbol=lot["symbol"], side="SELL", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason=status, executed_at=stamp)
+        if self.market.market == "NSE":
+            self._fifo_inventory(lot["symbol"]).consume(quantity)
         self.account["cashBalance"] = self.repositories.accounts.adjust_cash(self.account["accountId"], Accounting.exit_proceeds(fill.price, quantity, fill.fees))
         self.portfolio.remove_lot(lot["lotId"], lot["symbol"])
         return updated
+
+    def _fifo_inventory(self, symbol: str) -> FifoInventory:
+        return self._inventories.setdefault(symbol, FifoInventory())
+
+    def _load_fifo_inventories(self) -> dict[str, FifoInventory]:
+        inventories: dict[str, FifoInventory] = {}
+        if self.market.market != "NSE":
+            return inventories
+        for trade in self.repositories.trades.chronological(self.account["accountId"]):
+            inventory = inventories.setdefault(trade["symbol"], FifoInventory())
+            if trade["side"] == "BUY":
+                inventory.add(trade["lotId"], pd.Timestamp(trade["executedAt"]).to_pydatetime(), float(trade["price"]), float(trade["quantity"]), float(trade.get("fees") or 0.0))
+            else:
+                inventory.consume(float(trade["quantity"]))
+        return inventories
+
+    def _mark_open_lots(self, symbol: str, close: float, excursions: Mapping[str, tuple[float, float]]) -> None:
+        lots = sorted(self.portfolio.lots_for(symbol), key=lambda item: (item["entryTimestamp"], item["lotNumber"]))
+        if not lots:
+            return
+        matches = self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"]) for lot in lots]) if self.market.market == "NSE" else [None] * len(lots)
+        for lot, matched in zip(lots, matches):
+            cost_basis_price = round(matched.cost_basis_price, 4) if matched is not None else float(lot["entryPrice"])
+            entry_fees = matched.entry_fees if matched is not None else float(lot.get("fees") or 0.0)
+            fifo_allocations = _public_fifo_allocations(matched.allocations) if matched is not None else [{"lotId": lot["lotId"], "quantity": float(lot["quantity"]), "entryPrice": cost_basis_price, "fees": entry_fees}]
+            mae, mfe = excursions.get(lot["lotId"], (float(lot.get("maePct") or 0.0), float(lot.get("mfePct") or 0.0)))
+            unrealized = Accounting.unrealized_pnl(cost_basis_price, close, float(lot["quantity"]), entry_fees)
+            self.repositories.lots.mark(lot["lotId"], last_price=close, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, entry_fees=entry_fees, unrealized_pnl=unrealized, mae_pct=mae, mfe_pct=mfe)
+            self.portfolio.replace_lot({**lot, "lastPrice": close, "costBasisPrice": cost_basis_price, "fifoAllocations": fifo_allocations, "unrealizedPnl": unrealized, "maePct": mae, "mfePct": mfe})
 
     # ---- views ----------------------------------------------------------------------------
 
@@ -298,3 +345,10 @@ class PaperBroker:
     def positions(self) -> list[dict[str, Any]]:
         with self._lock:
             return sorted(self.portfolio.all_open(), key=lambda lot: (lot["symbol"], lot["entryTimestamp"], lot["lotNumber"]))
+
+
+def _public_fifo_allocations(allocations) -> list[dict[str, Any]]:
+    return [
+        {"lotId": item.acquisition_id, "quantity": item.quantity, "entryPrice": item.price, "fees": round(item.fees, 4)}
+        for item in allocations
+    ]

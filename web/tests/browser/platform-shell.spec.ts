@@ -214,7 +214,8 @@ test("desktop hamburger fully hides, restores, and remembers the sidebar", async
   await page.getByRole("button", { name: "Toggle navigation" }).click();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-navigation-open", "true");
   await expect.poll(() => page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThanOrEqual(0);
-  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeGreaterThanOrEqual(247);
+  const sidebarWidth = await page.locator(".platform-sidebar").evaluate((element) => element.getBoundingClientRect().width);
+  await expect.poll(() => page.locator(".platform-content").evaluate((element) => Number.parseFloat(getComputedStyle(element).marginLeft))).toBeGreaterThanOrEqual(sidebarWidth - 1);
 });
 
 test("legacy screener session values remain inside the table", async ({ page }) => {

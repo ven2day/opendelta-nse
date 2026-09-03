@@ -91,6 +91,11 @@ class PaperBroker:
         if signal.get("market") != self.market.market or signal.get("signalType") != "BUY":
             return None
         with self._lock:
+            open_lots = self.portfolio.lots_for(signal["symbol"])
+            if open_lots and PriceBandLadder.from_config(open_lots[0].get("configurationSnapshot")) is not None:
+                # The initial RSI signal starts the cycle. Further entries are
+                # driven only by completed-candle dip thresholds below.
+                return None
             if self.policy.price_model == "NEXT_OPEN":
                 self.portfolio.pending_entries.setdefault(signal["symbol"], []).append(dict(signal))
                 return None
@@ -107,7 +112,7 @@ class PaperBroker:
             return self._reject(signal, reference_price, "ADDITIONAL_BUYS_DISABLED")
         if open_lots:
             cycle_id = open_lots[0]["cycleId"]
-            cycle_lots = [lot for lot in self.repositories.lots.list(account_id, limit=5_000) if lot["symbol"] == symbol and lot["cycleId"] == cycle_id]
+            cycle_lots = self.repositories.lots.cycle(account_id, symbol, cycle_id)
             entry_number = max(int(lot["lotNumber"]) for lot in cycle_lots)
             cycle_number = int(cycle_id.rsplit("Cycle", 1)[1])
         else:
@@ -151,7 +156,7 @@ class PaperBroker:
             quantity=quantity, target_price=target, stop_price=stop, expires_at=expires, fees=round(fill.fees, 4),
             unrealized_pnl=Accounting.unrealized_pnl(round(fill.price, 4), round(fill.price, 4), quantity, fill.fees), configuration_snapshot=snapshot,
         )
-        self.repositories.trades.insert(account_id=account_id, lot_id=lot["lotId"], market=self.market.market, symbol=symbol, side="BUY", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason="SIGNAL_ENTRY", executed_at=entry_time)
+        self.repositories.trades.insert(account_id=account_id, lot_id=lot["lotId"], market=self.market.market, symbol=symbol, side="BUY", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason=signal.get("entryReason", "SIGNAL_ENTRY"), executed_at=entry_time)
         self.account["cashBalance"] = self.repositories.accounts.adjust_cash(account_id, -cost)
         self.portfolio.add_lot(lot)
         self.filled += 1
@@ -194,7 +199,42 @@ class PaperBroker:
                     unrealized = Accounting.unrealized_pnl(entry_price, close, float(lot["quantity"]), float(lot.get("fees") or 0.0))
                     self.repositories.lots.mark(lot["lotId"], last_price=close, unrealized_pnl=unrealized, mae_pct=mae, mfe_pct=mfe)
                     self.portfolio.replace_lot({**lot, "lastPrice": close, "unrealizedPnl": unrealized, "maePct": mae, "mfePct": mfe})
+            self._queue_ladder_entry(symbol, close, stamp)
         return closed
+
+    def _queue_ladder_entry(self, symbol: str, close: float, stamp: datetime) -> None:
+        open_lots = self.portfolio.lots_for(symbol)
+        if not open_lots or self.portfolio.pending_entries.get(symbol) or not self.policy.allow_additional_buys:
+            return
+        cycle_id = open_lots[0]["cycleId"]
+        cycle_lots = self.repositories.lots.cycle(self.account["accountId"], symbol, cycle_id)
+        if not cycle_lots:
+            return
+        first = min(cycle_lots, key=lambda lot: int(lot["lotNumber"]))
+        latest = max(cycle_lots, key=lambda lot: int(lot["lotNumber"]))
+        snapshot = first.get("configurationSnapshot") or {}
+        ladder = PriceBandLadder.from_config(snapshot)
+        if ladder is None:
+            return
+        maximum_entries = min(self.policy.maximum_entries_per_cycle, ladder.maximum_entries)
+        if int(latest["lotNumber"]) >= maximum_entries or not ladder.additional_entry_allowed(close, float(latest["entryPrice"])):
+            return
+        target_pct = float(snapshot["target_pct"])
+        self.portfolio.pending_entries.setdefault(symbol, []).append({
+            "signalId": None,
+            "market": self.market.market,
+            "strategyId": first["strategyId"],
+            "strategyVersion": first["strategyVersion"],
+            "symbol": symbol,
+            "timeframe": self.timeframe,
+            "candleTimestamp": stamp.isoformat(),
+            "signalType": "BUY",
+            "signalPrice": close,
+            "targetPrice": round(close * (1 + target_pct / 100), 4),
+            "stopPrice": None,
+            "configurationSnapshot": snapshot,
+            "entryReason": "LADDER_DIP_ENTRY",
+        })
 
     def close_lot_manually(self, lot_id: str, *, price: float, timestamp: datetime | None = None) -> dict[str, Any]:
         with self._lock:

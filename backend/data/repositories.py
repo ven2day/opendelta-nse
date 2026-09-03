@@ -831,6 +831,13 @@ class PaperLotRepository:
             rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND status = 'OPEN' ORDER BY symbol, entry_timestamp, lot_number", (uuid.UUID(str(account_id)),))
         return [_public_lot(row) for row in rows]
 
+    def cycle(self, account_id: uuid.UUID | str, symbol: str, cycle_id: str) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all(
+            "SELECT * FROM paper_lots WHERE account_id = %s AND symbol = %s AND cycle_id = %s ORDER BY lot_number",
+            (uuid.UUID(str(account_id)), symbol, cycle_id),
+        )
+        return [_public_lot(row) for row in rows]
+
     def list(self, account_id: uuid.UUID | str, *, status: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         if status:
             rows = self.database.fetch_all("SELECT * FROM paper_lots WHERE account_id = %s AND status = %s ORDER BY entry_timestamp DESC LIMIT %s", (uuid.UUID(str(account_id)), status, limit))

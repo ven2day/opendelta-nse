@@ -72,9 +72,12 @@ Every backtest run, signal and paper lot stores `strategy_id`,
 
 `RSI_DIP_LADDER_V1` also publishes a standard price-band lot policy in that
 snapshot. Backtest and PaperBroker both use `backend/strategies/lot_policy.py`
-to freeze the band from the first fill, require each later fill to be at least
-the configured percentage below the previous fill, enforce the finite quantity
-array and capital ceiling, and retain an independent target for every lot.
+to freeze the band from the first fill. The initial lot requires the strategy's
+RSI-recovery signal; while that cycle remains open, each completed-candle close
+at least the configured percentage below the previous fill schedules the next
+lot at the following candle open without requiring another RSI signal. The
+engines enforce the finite quantity array and capital ceiling and retain an
+independent target for every lot.
 
 ## Database
 

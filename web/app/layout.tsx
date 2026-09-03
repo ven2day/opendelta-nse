@@ -3,6 +3,7 @@ import { JetBrains_Mono, Manrope } from "next/font/google";
 import { headers } from "next/headers";
 import { PlatformChrome } from "./platform/platform-chrome";
 import "./globals.css";
+import "./platform/trading-terminal.css";
 
 const manrope = Manrope({
   variable: "--font-manrope",

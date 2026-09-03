@@ -29,7 +29,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const freshness = data?.marketData.data?.dataFreshness ?? null;
   const universe = data?.screener.data?.activeUniverse ?? null;
 
-  return <main className="quant-workspace">
+  return <main className="quant-workspace quant-dashboard-workspace">
     <WorkspaceHeader
       eyebrow={`${marketLabel(market)} dashboard`}
       title={`${marketLabel(market)} trading dashboard`}
@@ -45,6 +45,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
         <article><span>Active universe</span><strong>{universe?.name ?? "None"}</strong><small>{universe ? `${universe.symbols.length} symbols` : "Run the screener to build one"}</small></article>
       </section>
 
+      <div className="quant-dashboard-grid">
       <Panel icon={<Database size={17} />} title="Market data" description="Freshness and ingestion job state for this market." aside={<StatusBadge tone={tone(freshness?.status)}>{freshness?.status ?? "unknown"}</StatusBadge>}>
         <SectionBody section={data.marketData}>{(section) => <dl className="quant-facts">
           <div><dt>Freshness</dt><dd>{section.dataFreshness?.status ?? "—"}</dd></div>
@@ -70,6 +71,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
           {section.activeUniverse && <div className="quant-panel-body"><SymbolTags symbols={section.activeUniverse.symbols} /></div>}
         </>}</SectionBody>
       </Panel>
+      </div>
 
       <Panel icon={<Gauge size={17} />} title="Recent backtests" description="Database-backed incremental runs for this market." aside={<a className="quant-action-link" href={`/backtest${query}`}>Open backtest</a>}>
         <SectionBody section={data.backtests}>{(section) => section.recent.length ? <div className="quant-table-scroll"><table className="quant-table">
@@ -127,10 +129,5 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
         </>}</SectionBody>
       </Panel>
     </>}
-    <div className="quant-link-grid">
-      <a href={`/screener${query}`}><strong>Screener</strong><span>Filter the instrument universe and save it for backtests and signals.</span></a>
-      <a href={`/backtest${query}`}><strong>Backtest</strong><span>Run any registered strategy against the active universe.</span></a>
-      <a href={`/paper-trading${query}`}><strong>Paper trading</strong><span>Review the simulated account, lots, orders and fills.</span></a>
-    </div>
   </main>;
 }

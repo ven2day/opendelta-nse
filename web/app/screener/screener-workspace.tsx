@@ -185,6 +185,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       <article><span>Saved universes</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>{marketLabel(market)} only</small></article>
     </section>
 
+    <div className="quant-screener-layout">
     <Panel icon={<ScanSearch size={17} />} title="Screen filters" description="Defaults come from the platform; choose a maximum symbol count or keep every passing symbol.">
       {filters.loading ? <LoadingState label="Loading filter defaults" /> : filters.error ? <RequestErrorState error={filters.error} retry={filters.reload} /> : <form onSubmit={runScreener} noValidate>
         <div className="quant-panel-body">
@@ -235,6 +236,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
         </tr>)}</tbody>
       </table></div> : <EmptyState title="Nothing rejected" description="Every screened symbol passed the filters." />)}
     </Panel>
+    </div>
 
     <Panel icon={<Save size={17} />} title="Save as universe" description="Freeze the selected run as a named universe. Manual includes and excludes are applied on top of the ranked list.">
       <form onSubmit={saveUniverse} noValidate>

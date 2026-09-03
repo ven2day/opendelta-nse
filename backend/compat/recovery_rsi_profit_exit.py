@@ -8,19 +8,18 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from main import IST
-from recovery_backtest import (
+from backend.collector import IST
+from backend.compat.recovery_backtest import (
     RecoveryConfig,
-    calculate_wilder_rma,
+    calculate_recovery_indicators,
     simulate_recovery_symbol,
 )
 
-DYNAMIC_EXIT_VERSION = "recovery-dynamic-exits-1.0.0"
-ExitModel = Literal["FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"]
-PositionSizing = Literal["FIXED_QUANTITY", "RISK_BUDGET"]
-ExitStatus = Literal[
-    "TARGET_EXIT",
-    "TARGET_GAP",
+RSI_PROFIT_EXIT_VERSION = "recovery-rsi-profit-risk-control-1.0.0"
+RsiExitExecution = Literal["SIGNAL_CLOSE", "NEXT_BAR_OPEN"]
+RsiProfitExitStatus = Literal[
+    "RSI_PROFIT_EXIT",
+    "RSI_OVERBOUGHT_PROFIT_EXIT",
     "STOP_EXIT",
     "STOP_GAP",
     "TIME_EXIT",
@@ -29,60 +28,48 @@ ExitStatus = Literal[
 
 
 @dataclass(frozen=True)
-class DynamicExitConfig:
-    exit_model: ExitModel = "ATR_DYNAMIC_TP_SL"
-    fixed_take_profit_pct: float = 0.51
-    fixed_stop_loss_pct: float = 1.0
-    atr_length: int = 14
-    stop_atr_multiplier: float = 1.25
-    reward_risk_ratio: float = 1.5
-    minimum_stop_pct: float = 0.75
-    maximum_stop_pct: float = 3.0
+class RsiProfitExitConfig:
+    minimum_profit_pct: float = 0.5
+    profit_exit_rsi: float = 50.0
+    upper_rsi_level: float = 70.0
+    stop_loss_pct: float = 1.5
+    exit_execution_model: RsiExitExecution = "SIGNAL_CLOSE"
     max_holding_sessions: int = 5
     max_open_lots_per_symbol: int = 1
-    position_sizing: PositionSizing = "FIXED_QUANTITY"
     quantity_per_trade: int = 50
-    rupee_risk_budget: float = 2_500.0
-    maximum_quantity: int = 10_000
-    maximum_capital_per_position: float = 1_000_000.0
 
     def __post_init__(self) -> None:
-        if self.exit_model not in {"FIXED_TP_SL", "ATR_DYNAMIC_TP_SL"}:
-            raise ValueError("Unsupported dynamic exit model")
-        if self.fixed_take_profit_pct <= 0 or self.fixed_stop_loss_pct <= 0:
-            raise ValueError("Fixed take-profit and stop-loss percentages must be positive")
-        if self.atr_length <= 0:
-            raise ValueError("ATR length must be positive")
-        if self.stop_atr_multiplier <= 0 or self.reward_risk_ratio <= 0:
-            raise ValueError("ATR multiplier and reward-to-risk ratio must be positive")
-        if self.minimum_stop_pct <= 0 or self.maximum_stop_pct < self.minimum_stop_pct:
-            raise ValueError("Stop bounds must be positive and maximum stop must be at least minimum stop")
-        if self.max_holding_sessions <= 0 or self.max_open_lots_per_symbol <= 0:
-            raise ValueError("Holding sessions and maximum open lots must be positive")
-        if self.quantity_per_trade <= 0 or self.maximum_quantity <= 0:
-            raise ValueError("Quantity limits must be positive whole shares")
-        if self.rupee_risk_budget <= 0 or self.maximum_capital_per_position <= 0:
-            raise ValueError("Risk budget and maximum capital must be positive")
+        if self.minimum_profit_pct <= 0:
+            raise ValueError("Minimum profit percentage must be positive")
+        if not 0 <= self.profit_exit_rsi <= 100:
+            raise ValueError("Profit-exit RSI must be between 0 and 100")
+        if not 0 <= self.upper_rsi_level <= 100:
+            raise ValueError("Upper RSI level must be between 0 and 100")
+        if self.upper_rsi_level < self.profit_exit_rsi:
+            raise ValueError("Upper RSI level cannot be below the profit-exit RSI")
+        if self.stop_loss_pct <= 0 or self.stop_loss_pct >= 100:
+            raise ValueError("Hard stop-loss percentage must be greater than 0 and below 100")
+        if self.exit_execution_model not in {"SIGNAL_CLOSE", "NEXT_BAR_OPEN"}:
+            raise ValueError("Unsupported RSI exit execution model")
+        if self.max_holding_sessions <= 0:
+            raise ValueError("Maximum holding sessions must be positive")
+        if self.max_open_lots_per_symbol <= 0:
+            raise ValueError("Maximum open lots per symbol must be positive")
+        if self.quantity_per_trade <= 0:
+            raise ValueError("Quantity must be a positive whole number")
 
     def public_parameters(self) -> dict[str, Any]:
         return {
             "enabled": True,
-            "exitModel": self.exit_model,
-            "fixedTakeProfitPct": self.fixed_take_profit_pct,
-            "fixedStopLossPct": self.fixed_stop_loss_pct,
-            "atrLength": self.atr_length,
-            "atrTimeframe": "SELECTED_STRATEGY_TIMEFRAME",
-            "stopAtrMultiplier": self.stop_atr_multiplier,
-            "rewardRiskRatio": self.reward_risk_ratio,
-            "minimumStopPct": self.minimum_stop_pct,
-            "maximumStopPct": self.maximum_stop_pct,
+            "exitModel": "RSI_PROFIT_RISK_CONTROL",
+            "minimumProfitPct": self.minimum_profit_pct,
+            "profitExitRsi": self.profit_exit_rsi,
+            "upperRsiLevel": self.upper_rsi_level,
+            "hardStopLossPct": self.stop_loss_pct,
+            "rsiExitExecutionModel": self.exit_execution_model,
             "maxHoldingTradingDays": self.max_holding_sessions,
             "maxOpenLotsPerSymbol": self.max_open_lots_per_symbol,
-            "positionSizing": self.position_sizing,
             "quantityPerTrade": self.quantity_per_trade,
-            "rupeeRiskBudget": self.rupee_risk_budget,
-            "maximumQuantity": self.maximum_quantity,
-            "maximumCapitalPerPosition": self.maximum_capital_per_position,
             "timeExit": "NEXT_TRADING_SESSION_OPEN",
         }
 
@@ -104,21 +91,6 @@ def _iso(value: Any | None) -> str | None:
     return _timestamp(value).isoformat() if value is not None else None
 
 
-def calculate_wilder_atr(candles: pd.DataFrame, length: int = 14) -> pd.Series:
-    """Causal Wilder ATR using the completed candle and its previous close."""
-    if length <= 0:
-        raise ValueError("ATR length must be positive")
-    high = pd.to_numeric(candles["High"], errors="coerce").astype(float)
-    low = pd.to_numeric(candles["Low"], errors="coerce").astype(float)
-    close = pd.to_numeric(candles["Close"], errors="coerce").astype(float)
-    previous_close = close.shift(1)
-    true_range = pd.concat(
-        (high - low, (high - previous_close).abs(), (low - previous_close).abs()),
-        axis=1,
-    ).max(axis=1)
-    return calculate_wilder_rma(true_range, length)
-
-
 def _entry_cost(entry_price: float, quantity: int, config: RecoveryConfig) -> tuple[float, float]:
     turnover = entry_price * quantity
     return (
@@ -135,58 +107,27 @@ def _exit_cost(exit_price: float, quantity: int, config: RecoveryConfig) -> tupl
     )
 
 
-def _quantity_for(
-    entry_price: float,
-    stop_price: float,
-    config: DynamicExitConfig,
-) -> int:
-    if config.position_sizing == "FIXED_QUANTITY":
-        quantity = config.quantity_per_trade
-    else:
-        risk_per_share = entry_price - stop_price
-        if risk_per_share <= 0:
-            raise ValueError("Risk per share must be positive")
-        quantity = math.floor(config.rupee_risk_budget / risk_per_share)
-    capital_limit_quantity = math.floor(config.maximum_capital_per_position / entry_price)
-    quantity = min(quantity, config.maximum_quantity, capital_limit_quantity)
-    if quantity <= 0:
-        raise ValueError("Position sizing produced zero shares; increase risk/capital limits")
-    return int(quantity)
-
-
 def _new_position(
     candidate: dict[str, Any],
     *,
-    signal_index: int,
+    symbol: str,
+    run_id: str,
     entry_session_ordinal: int,
-    atr_at_signal: float,
-    timeframe: str,
-    exit_config: DynamicExitConfig,
+    exit_config: RsiProfitExitConfig,
 ) -> dict[str, Any]:
     entry_price = float(candidate["entryPrice"])
-    if not math.isfinite(atr_at_signal) or atr_at_signal <= 0:
-        raise ValueError("ATR is unavailable at signal time")
-    raw_atr_pct = atr_at_signal / entry_price * 100.0
-    if exit_config.exit_model == "ATR_DYNAMIC_TP_SL":
-        stop_pct = min(
-            max(raw_atr_pct * exit_config.stop_atr_multiplier, exit_config.minimum_stop_pct),
-            exit_config.maximum_stop_pct,
-        )
-        target_pct = stop_pct * exit_config.reward_risk_ratio
-    else:
-        stop_pct = exit_config.fixed_stop_loss_pct
-        target_pct = exit_config.fixed_take_profit_pct
-    stop_price = entry_price * (1.0 - stop_pct / 100.0)
-    target_price = entry_price * (1.0 + target_pct / 100.0)
-    quantity = _quantity_for(entry_price, stop_price, exit_config)
+    minimum_exit_price = entry_price * (1.0 + exit_config.minimum_profit_pct / 100.0)
+    stop_price = entry_price * (1.0 - exit_config.stop_loss_pct / 100.0)
+    quantity = int(exit_config.quantity_per_trade)
     return {
         "tradeId": candidate["tradeId"],
         "sequenceNumber": candidate["sequenceNumber"],
+        "runId": run_id,
+        "symbol": symbol,
         "candidate": candidate,
-        "signalIndex": signal_index,
         "entryIndex": int(candidate["entryBarIndex"]),
         "entryPrice": entry_price,
-        "targetPrice": target_price,
+        "minimumProfitableExitPrice": minimum_exit_price,
         "stopLossPrice": stop_price,
         "quantity": quantity,
         "capitalDeployed": entry_price * quantity,
@@ -194,17 +135,9 @@ def _new_position(
         "entrySessionOrdinal": entry_session_ordinal,
         "lowestPrice": None,
         "highestPrice": None,
-        "atrLength": exit_config.atr_length,
-        "atrTimeframe": timeframe,
-        "atrAtSignal": atr_at_signal,
-        "atrPctAtEntry": raw_atr_pct,
-        "stopAtrMultiplier": exit_config.stop_atr_multiplier,
-        "rewardRiskRatio": target_pct / stop_pct,
-        "minimumStopPct": exit_config.minimum_stop_pct,
-        "maximumStopPct": exit_config.maximum_stop_pct,
-        "dynamicStopPct": stop_pct,
-        "dynamicTargetPct": target_pct,
-        "exitModel": exit_config.exit_model,
+        "pendingRsiExitReason": None,
+        "pendingRsiExitRsi": None,
+        "pendingRsiExitSignalIndex": None,
     }
 
 
@@ -214,13 +147,17 @@ def _update_excursion(position: dict[str, Any], low: float, high: float) -> None
 
 
 def _skipped_signal(candidate: dict[str, Any], execution_model: str) -> dict[str, Any]:
-    known = execution_model == "SIGNAL_CLOSE"
+    entry_known = execution_model == "SIGNAL_CLOSE"
     return {
         "tradeId": candidate["tradeId"],
         "sequenceNumber": candidate["sequenceNumber"],
+        "symbol": candidate.get("symbol"),
         "signalTimestamp": candidate["signalTimestamp"],
-        "entryTimestamp": candidate["entryTimestamp"] if known else None,
-        "entryPrice": candidate["entryPrice"] if known else None,
+        "entryTimestamp": candidate["entryTimestamp"] if entry_known else None,
+        "entryPrice": candidate["entryPrice"] if entry_known else None,
+        "rsiArmTimestamp": candidate.get("rsiArmTimestamp"),
+        "rsiAtSignal": candidate.get("rsiAtEntry"),
+        "confirmationScore": candidate.get("confirmationScore"),
         "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
         "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
         "oiConfidence": candidate.get("oiConfidence"),
@@ -239,10 +176,13 @@ def _finish_position(
     *,
     candles: pd.DataFrame,
     end_index: int,
-    status: ExitStatus,
+    status: RsiProfitExitStatus,
     exit_price: float | None,
+    exit_rsi: float | None,
     holding_sessions: int,
+    timeframe: str,
     recovery_config: RecoveryConfig,
+    exit_config: RsiProfitExitConfig,
 ) -> dict[str, Any]:
     candidate = position["candidate"]
     entry_price = float(position["entryPrice"])
@@ -260,33 +200,45 @@ def _finish_position(
     entry_stamp = _timestamp(candidate["entryTimestamp"])
     end_stamp = _timestamp(candles.index[end_index])
     duration_minutes = max((end_stamp - entry_stamp).total_seconds() / 60.0, 0.0)
+    exit_fill = {
+        "RSI_PROFIT_EXIT": exit_config.exit_execution_model,
+        "RSI_OVERBOUGHT_PROFIT_EXIT": exit_config.exit_execution_model,
+        "STOP_GAP": "GAP_OPEN",
+        "STOP_EXIT": "STOP_PRICE",
+        "TIME_EXIT": "NEXT_TRADING_SESSION_OPEN",
+    }.get(status)
     return {
         "tradeId": position["tradeId"],
         "sequenceNumber": position["sequenceNumber"],
+        "runId": position["runId"],
+        "strategyMode": "rsi_recovery_position",
+        "symbol": position["symbol"],
+        "timeframe": timeframe,
         "signalTimestamp": candidate["signalTimestamp"],
         "entryTimestamp": candidate["entryTimestamp"],
         "entryBarIndex": int(position["entryIndex"]),
+        "entryExecutionModel": candidate["executionModel"],
         "executionModel": candidate["executionModel"],
-        "exitModel": position["exitModel"],
+        "exitExecutionModel": exit_config.exit_execution_model,
+        "exitModel": "RSI_PROFIT_RISK_CONTROL",
         "entryPrice": _finite(entry_price, 4),
         "quantity": quantity,
         "capitalDeployed": _finite(position["capitalDeployed"], 2),
-        "atrLength": position["atrLength"],
-        "atrTimeframe": position["atrTimeframe"],
-        "atrAtSignal": _finite(position["atrAtSignal"], 6),
-        "atrPctAtEntry": _finite(position["atrPctAtEntry"], 6),
-        "stopAtrMultiplier": position["stopAtrMultiplier"],
-        "rewardRiskRatio": _finite(position["rewardRiskRatio"], 6),
-        "minimumStopPct": position["minimumStopPct"],
-        "maximumStopPct": position["maximumStopPct"],
-        "dynamicStopPct": _finite(position["dynamicStopPct"], 6),
-        "dynamicTargetPct": _finite(position["dynamicTargetPct"], 6),
+        "minimumProfitPct": exit_config.minimum_profit_pct,
+        "minimumProfitableExitPrice": _finite(position["minimumProfitableExitPrice"], 4),
+        "targetPrice": _finite(position["minimumProfitableExitPrice"], 4),
+        "dynamicTargetPct": exit_config.minimum_profit_pct,
+        "profitExitRsi": exit_config.profit_exit_rsi,
+        "upperRsiLevel": exit_config.upper_rsi_level,
+        "stopLossPct": exit_config.stop_loss_pct,
+        "dynamicStopPct": exit_config.stop_loss_pct,
         "stopLossPrice": _finite(position["stopLossPrice"], 4),
-        "targetPrice": _finite(position["targetPrice"], 4),
         "rupeeRiskAtEntry": _finite(position["rupeeRiskAtEntry"], 2),
         "exitTimestamp": _iso(candles.index[end_index]) if closed else None,
+        "exitRsi": _finite(exit_rsi, 6),
         "exitPrice": _finite(exit_price, 4),
         "exitReason": status if closed else None,
+        "exitFill": exit_fill,
         "status": status,
         "holdingSessions": holding_sessions,
         "tradingSessionsHeld": holding_sessions,
@@ -294,6 +246,17 @@ def _finish_position(
         "durationMinutes": _finite(duration_minutes, 2),
         "durationHours": _finite(duration_minutes / 60.0, 4),
         "durationDays": _finite(duration_minutes / 1_440.0, 4),
+        "rsiArmTimestamp": candidate.get("rsiArmTimestamp"),
+        "rsiArmValue": candidate.get("rsiArmValue"),
+        "rsiAtSignal": candidate.get("rsiAtEntry"),
+        "rsiAtEntry": candidate.get("rsiAtEntry"),
+        "emaConfirmation": candidate.get("emaConfirmation"),
+        "vwapConfirmation": candidate.get("vwapConfirmation"),
+        "volumeConfirmation": candidate.get("volumeConfirmation"),
+        "confirmationScore": candidate.get("confirmationScore"),
+        "confirmationsPassed": candidate.get("confirmationScore"),
+        "confirmationsEnabled": recovery_config.enabled_confirmations,
+        "requiredConfirmations": candidate.get("requiredConfirmations"),
         "lowestPriceAfterEntry": _finite(lowest, 4),
         "maxAdversePct": _finite((lowest / entry_price - 1.0) * 100.0, 6),
         "highestPriceAfterEntry": _finite(highest, 4),
@@ -310,15 +273,32 @@ def _finish_position(
         "unrealizedPnl": _finite(net_pnl, 2) if not closed else 0.0,
         "lastTimestamp": _iso(candles.index[end_index]),
         "lastClose": _finite(last_close, 4),
-        "confirmationScore": candidate["confirmationScore"],
-        "requiredConfirmations": candidate["requiredConfirmations"],
-        "rsiAtEntry": candidate["rsiAtEntry"],
         "oiRegimeAtSignal": candidate.get("oiRegimeAtSignal"),
         "oiScoreAtSignal": candidate.get("oiScoreAtSignal"),
         "oiConfidence": candidate.get("oiConfidence"),
         "oiDecision": candidate.get("oiDecision"),
         "oiSourceTimestamp": candidate.get("oiSourceTimestamp"),
     }
+
+
+def _maximum_consecutive_losses(positions: list[dict[str, Any]]) -> int:
+    ordered = sorted(
+        (position for position in positions if position["status"] != "OPEN"),
+        key=lambda position: (
+            _timestamp(position["exitTimestamp"]),
+            str(position.get("symbol", "")),
+            int(position["sequenceNumber"]),
+        ),
+    )
+    current = 0
+    maximum = 0
+    for position in ordered:
+        if float(position["realizedPnl"]) < 0:
+            current += 1
+            maximum = max(maximum, current)
+        else:
+            current = 0
+    return maximum
 
 
 def _summary(
@@ -332,36 +312,59 @@ def _summary(
 ) -> dict[str, Any]:
     closed = [position for position in positions if position["status"] != "OPEN"]
     open_positions = [position for position in positions if position["status"] == "OPEN"]
-    statuses = {name: sum(position["status"] == name for position in positions) for name in (
-        "TARGET_EXIT", "TARGET_GAP", "STOP_EXIT", "STOP_GAP", "TIME_EXIT"
-    )}
+    status_names = (
+        "RSI_PROFIT_EXIT",
+        "RSI_OVERBOUGHT_PROFIT_EXIT",
+        "STOP_EXIT",
+        "STOP_GAP",
+        "TIME_EXIT",
+    )
+    statuses = {
+        name: sum(position["status"] == name for position in positions)
+        for name in status_names
+    }
     realized = [float(position["realizedPnl"]) for position in closed]
     gross = [float(position["grossPnl"]) for position in closed]
     profits = [value for value in realized if value > 0]
     losses = [value for value in realized if value < 0]
-    # Closed trades include both sides; OPEN trades include the entry side
-    # actually incurred. Estimated closing costs are disclosed separately.
+    net_profit = sum(profits)
+    net_loss = abs(sum(losses))
     costs = sum(float(position["tradingCosts"]) for position in positions)
+    closed_costs = [float(position["tradingCosts"]) for position in closed]
     estimated_open_exit_costs = sum(
         float(position["estimatedOpenExitCost"]) for position in open_positions
     )
     unrealized = sum(float(position["unrealizedPnl"]) for position in open_positions)
     holding_sessions = [float(position["holdingSessions"]) for position in positions]
-    dynamic_targets = [float(position["dynamicTargetPct"]) for position in positions]
-    dynamic_stops = [float(position["dynamicStopPct"]) for position in positions]
-    reward_risks = [float(position["rewardRiskRatio"]) for position in positions]
+    holding_minutes = [float(position["durationMinutes"]) for position in positions]
     realized_total = sum(realized)
     gross_profit = sum(value for value in gross if value > 0)
     gross_loss = abs(sum(value for value in gross if value < 0))
+    gross_winners = [float(position["grossPnl"]) for position in closed if float(position["realizedPnl"]) > 0]
+    gross_losers = [float(position["grossPnl"]) for position in closed if float(position["realizedPnl"]) < 0]
+    win_rate_fraction = len(profits) / len(closed) if closed else 0.0
+    loss_rate_fraction = len(losses) / len(closed) if closed else 0.0
+    average_gross_winner = float(np.mean(gross_winners)) if gross_winners else 0.0
+    average_gross_loser = float(np.mean(gross_losers)) if gross_losers else 0.0
+    average_cost = float(np.mean(closed_costs)) if closed_costs else 0.0
+    expectancy = (
+        win_rate_fraction * average_gross_winner
+        + loss_rate_fraction * average_gross_loser
+        - average_cost
+    ) if closed else None
+    rsi_exits = statuses["RSI_PROFIT_EXIT"] + statuses["RSI_OVERBOUGHT_PROFIT_EXIT"]
     return {
         "totalValidBuySignals": total_valid_signals,
         "totalBuySignals": total_valid_signals,
         "buySignals": total_valid_signals,
         "executedTrades": len(positions),
         "skippedMaxOpenLots": len(skipped),
-        "targetExits": statuses["TARGET_EXIT"],
-        "targetGapExits": statuses["TARGET_GAP"],
-        "targetsHit": statuses["TARGET_EXIT"] + statuses["TARGET_GAP"],
+        "rsiProfitExits": statuses["RSI_PROFIT_EXIT"],
+        "rsiOverboughtProfitExits": statuses["RSI_OVERBOUGHT_PROFIT_EXIT"],
+        "profitableRsiExits": rsi_exits,
+        "targetExits": 0,
+        "targetGapExits": 0,
+        "targetsHit": rsi_exits,
         "stopExits": statuses["STOP_EXIT"],
         "stopGapExits": statuses["STOP_GAP"],
         "timeExits": statuses["TIME_EXIT"],
@@ -371,16 +374,20 @@ def _summary(
         "losingTrades": len(losses),
         "profitableClosedTrades": len(profits),
         "losingClosedTrades": len(losses),
-        "winRate": _finite(len(profits) / len(closed) * 100.0, 2) if closed else 0.0,
-        "targetHitRate": _finite((statuses["TARGET_EXIT"] + statuses["TARGET_GAP"]) / len(positions) * 100.0, 2) if positions else 0.0,
-        "averageDynamicTargetPct": _finite(float(np.mean(dynamic_targets)), 6) if dynamic_targets else None,
-        "averageDynamicStopPct": _finite(float(np.mean(dynamic_stops)), 6) if dynamic_stops else None,
-        "averageRewardRisk": _finite(float(np.mean(reward_risks)), 6) if reward_risks else None,
+        "winRate": _finite(win_rate_fraction * 100.0, 2) if closed else 0.0,
+        "profitableExitRate": _finite(rsi_exits / len(positions) * 100.0, 2) if positions else 0.0,
+        "targetHitRate": _finite(rsi_exits / len(positions) * 100.0, 2) if positions else 0.0,
+        "averageDynamicTargetPct": _finite(float(np.mean([position["minimumProfitPct"] for position in positions])), 6) if positions else None,
+        "averageDynamicStopPct": _finite(float(np.mean([position["stopLossPct"] for position in positions])), 6) if positions else None,
+        "averageRewardRisk": None,
         "grossProfit": _finite(gross_profit, 2),
         "grossLoss": _finite(gross_loss, 2),
         "realizedGrossProfit": _finite(gross_profit, 2),
         "realizedGrossLoss": _finite(gross_loss, 2),
+        "netProfit": _finite(net_profit, 2),
+        "netLoss": _finite(net_loss, 2),
         "tradingCosts": _finite(costs, 2),
+        "averageCostsPerClosedTrade": _finite(average_cost, 2) if closed else None,
         "estimatedOpenExitCosts": _finite(estimated_open_exit_costs, 2),
         "netRealizedPnl": _finite(realized_total, 2),
         "unrealizedPnl": _finite(unrealized, 2),
@@ -389,30 +396,34 @@ def _summary(
         "averageLoser": _finite(float(np.mean(losses)), 2) if losses else None,
         "averageProfitPerTrade": _finite(float(np.mean(profits)), 2) if profits else None,
         "averageLossPerTrade": _finite(float(np.mean(losses)), 2) if losses else None,
-        "profitFactor": _finite(sum(profits) / abs(sum(losses)), 4) if losses else None,
-        "expectancyPerTrade": _finite(float(np.mean(realized)), 2) if realized else None,
+        "profitFactor": _finite(net_profit / net_loss, 4) if net_loss else None,
+        "expectancyPerTrade": _finite(expectancy, 2),
+        "expectancyFormula": "(win_rate * average_gross_winner) - (loss_rate * absolute_average_gross_loser) - average_closed_trade_costs",
         "maximumDrawdown": _finite(maximum_drawdown, 2),
         "maximumDrawdownPct": _finite(maximum_drawdown / peak_capital * 100.0, 4) if peak_capital else 0.0,
+        "maximumConsecutiveLosses": _maximum_consecutive_losses(positions),
         "maximumConcurrentPositions": maximum_concurrent,
         "maxConcurrentPositions": maximum_concurrent,
         "peakCapitalDeployed": _finite(peak_capital, 2),
+        "averageHoldingMinutes": _finite(float(np.mean(holding_minutes)), 2) if holding_minutes else None,
+        "medianHoldingMinutes": _finite(float(np.median(holding_minutes)), 2) if holding_minutes else None,
         "averageHoldingSessions": _finite(float(np.mean(holding_sessions)), 2) if holding_sessions else None,
         "medianHoldingSessions": _finite(float(np.median(holding_sessions)), 2) if holding_sessions else None,
     }
 
 
-def simulate_dynamic_exit_symbol(
+def simulate_rsi_profit_exit_symbol(
     symbol: str,
     candles: pd.DataFrame,
     *,
     timeframe: str,
     recovery_config: RecoveryConfig,
-    exit_config: DynamicExitConfig,
+    exit_config: RsiProfitExitConfig,
     run_id: str,
     analysis_start: datetime | None = None,
     observations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Apply fixed or ATR-frozen TP/SL exits to unchanged RSI Recovery signals."""
+    """Apply hard-stop, RSI-profit, and trading-session exits to RSI Recovery BUY candidates."""
     observations = observations or simulate_recovery_symbol(
         symbol,
         candles,
@@ -424,10 +435,11 @@ def simulate_dynamic_exit_symbol(
     candidates = sorted(observations["trades"], key=lambda item: int(item["sequenceNumber"]))
     data = candles.copy()
     if not isinstance(data.index, pd.DatetimeIndex):
-        raise TypeError("Dynamic exit backtest requires a DatetimeIndex")
+        raise TypeError("RSI profit-exit backtest requires a DatetimeIndex")
     data.index = data.index.tz_localize(IST) if data.index.tz is None else data.index.tz_convert(IST)
     data = data.sort_index()
-    atr_values = calculate_wilder_atr(data, exit_config.atr_length).to_numpy(dtype=float, copy=False)
+    indicators = calculate_recovery_indicators(data, recovery_config)
+    rsi_values = indicators["RecoveryRSI"].to_numpy(dtype=float, copy=False)
     start_position = int(data.index.searchsorted(_timestamp(analysis_start), side="left")) if analysis_start else 0
     open_values = data["Open"].to_numpy(dtype=float, copy=False)
     high_values = data["High"].to_numpy(dtype=float, copy=False)
@@ -447,7 +459,7 @@ def simulate_dynamic_exit_symbol(
         signal_candidates.setdefault(signal_index, []).append(candidate)
 
     active: list[dict[str, Any]] = []
-    pending_entries: dict[int, list[tuple[dict[str, Any], int, float]]] = {}
+    pending_entries: dict[int, list[dict[str, Any]]] = {}
     positions: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     realized_net = 0.0
@@ -459,9 +471,19 @@ def simulate_dynamic_exit_symbol(
     def capture_capacity() -> None:
         nonlocal maximum_concurrent, peak_capital
         maximum_concurrent = max(maximum_concurrent, len(active))
-        peak_capital = max(peak_capital, sum(float(position["capitalDeployed"]) for position in active))
+        peak_capital = max(
+            peak_capital,
+            sum(float(position["capitalDeployed"]) for position in active),
+        )
 
-    def close_position(position: dict[str, Any], index: int, status: ExitStatus, price: float, held: int) -> None:
+    def close_position(
+        position: dict[str, Any],
+        index: int,
+        status: RsiProfitExitStatus,
+        price: float,
+        held: int,
+        exit_rsi: float | None,
+    ) -> None:
         nonlocal realized_net
         completed = _finish_position(
             position,
@@ -469,8 +491,11 @@ def simulate_dynamic_exit_symbol(
             end_index=index,
             status=status,
             exit_price=price,
+            exit_rsi=exit_rsi,
             holding_sessions=held,
+            timeframe=timeframe,
             recovery_config=recovery_config,
+            exit_config=exit_config,
         )
         positions.append(completed)
         realized_net += float(completed["realizedPnl"])
@@ -489,24 +514,44 @@ def simulate_dynamic_exit_symbol(
             held = session_ordinal - int(position["entrySessionOrdinal"]) + 1
             if open_price <= float(position["stopLossPrice"]):
                 _update_excursion(position, open_price, open_price)
-                close_position(position, index, "STOP_GAP", open_price, held)
-            elif open_price >= float(position["targetPrice"]):
+                close_position(position, index, "STOP_GAP", open_price, held, None)
+                continue
+            pending_reason = position["pendingRsiExitReason"]
+            if pending_reason is not None:
+                if open_price >= float(position["minimumProfitableExitPrice"]):
+                    _update_excursion(position, open_price, open_price)
+                    close_position(
+                        position,
+                        index,
+                        pending_reason,
+                        open_price,
+                        held,
+                        position["pendingRsiExitRsi"],
+                    )
+                    continue
+                position["pendingRsiExitReason"] = None
+                position["pendingRsiExitRsi"] = None
+                position["pendingRsiExitSignalIndex"] = None
+            if first_bar and session_ordinal >= int(position["entrySessionOrdinal"]) + exit_config.max_holding_sessions:
                 _update_excursion(position, open_price, open_price)
-                close_position(position, index, "TARGET_GAP", open_price, held)
-            elif first_bar and session_ordinal >= int(position["entrySessionOrdinal"]) + exit_config.max_holding_sessions:
-                _update_excursion(position, open_price, open_price)
-                close_position(position, index, "TIME_EXIT", open_price, exit_config.max_holding_sessions)
+                close_position(
+                    position,
+                    index,
+                    "TIME_EXIT",
+                    open_price,
+                    exit_config.max_holding_sessions,
+                    None,
+                )
             else:
                 after_open.append(position)
         active = after_open
 
-        for candidate, signal_index, atr_at_signal in pending_entries.pop(index, []):
+        for candidate in pending_entries.pop(index, []):
             active.append(_new_position(
                 candidate,
-                signal_index=signal_index,
+                symbol=symbol,
+                run_id=run_id,
                 entry_session_ordinal=session_ordinal,
-                atr_at_signal=atr_at_signal,
-                timeframe=timeframe,
                 exit_config=exit_config,
             ))
         capture_capacity()
@@ -520,32 +565,61 @@ def simulate_dynamic_exit_symbol(
             high = float(high_values[index])
             _update_excursion(position, low, high)
             held = session_ordinal - int(position["entrySessionOrdinal"]) + 1
-            stop_hit = low <= float(position["stopLossPrice"])
-            target_hit = high >= float(position["targetPrice"])
-            if stop_hit:
-                close_position(position, index, "STOP_EXIT", float(position["stopLossPrice"]), held)
-            elif target_hit:
-                close_position(position, index, "TARGET_EXIT", float(position["targetPrice"]), held)
+            if low <= float(position["stopLossPrice"]):
+                close_position(
+                    position,
+                    index,
+                    "STOP_EXIT",
+                    float(position["stopLossPrice"]),
+                    held,
+                    None,
+                )
             else:
                 after_intrabar.append(position)
         active = after_intrabar
+
+        after_rsi: list[dict[str, Any]] = []
+        current_rsi = float(rsi_values[index])
+        close_price = float(close_values[index])
+        for position in active:
+            if index <= int(position["entryIndex"]):
+                after_rsi.append(position)
+                continue
+            profit_available = close_price >= float(position["minimumProfitableExitPrice"])
+            if not (
+                math.isfinite(current_rsi)
+                and current_rsi >= exit_config.profit_exit_rsi
+                and profit_available
+            ):
+                after_rsi.append(position)
+                continue
+            reason: RsiProfitExitStatus = (
+                "RSI_OVERBOUGHT_PROFIT_EXIT"
+                if current_rsi >= exit_config.upper_rsi_level
+                else "RSI_PROFIT_EXIT"
+            )
+            held = session_ordinal - int(position["entrySessionOrdinal"]) + 1
+            if exit_config.exit_execution_model == "SIGNAL_CLOSE":
+                close_position(position, index, reason, close_price, held, current_rsi)
+            else:
+                position["pendingRsiExitReason"] = reason
+                position["pendingRsiExitRsi"] = current_rsi
+                position["pendingRsiExitSignalIndex"] = index
+                after_rsi.append(position)
+        active = after_rsi
 
         for candidate in signal_candidates.get(index, []):
             if len(active) >= exit_config.max_open_lots_per_symbol:
                 skipped.append(_skipped_signal(candidate, recovery_config.execution_model))
                 continue
-            atr_at_signal = float(atr_values[index])
-            if not math.isfinite(atr_at_signal) or atr_at_signal <= 0:
-                raise ValueError(f"ATR({exit_config.atr_length}) is unavailable for signal at {data.index[index].isoformat()}")
             if recovery_config.execution_model == "NEXT_BAR_OPEN":
-                pending_entries.setdefault(int(candidate["entryBarIndex"]), []).append((candidate, index, atr_at_signal))
+                pending_entries.setdefault(int(candidate["entryBarIndex"]), []).append(candidate)
             else:
                 active.append(_new_position(
                     candidate,
-                    signal_index=index,
+                    symbol=symbol,
+                    run_id=run_id,
                     entry_session_ordinal=session_ordinal,
-                    atr_at_signal=atr_at_signal,
-                    timeframe=timeframe,
                     exit_config=exit_config,
                 ))
         capture_capacity()
@@ -553,10 +627,9 @@ def simulate_dynamic_exit_symbol(
         marked_pnl = realized_net
         for position in active:
             quantity = int(position["quantity"])
-            price = float(close_values[index])
-            gross = (price - float(position["entryPrice"])) * quantity
+            gross = (close_price - float(position["entryPrice"])) * quantity
             buy_cost, buy_slippage = _entry_cost(float(position["entryPrice"]), quantity, recovery_config)
-            sell_cost, sell_slippage = _exit_cost(price, quantity, recovery_config)
+            sell_cost, sell_slippage = _exit_cost(close_price, quantity, recovery_config)
             marked_pnl += gross - buy_cost - buy_slippage - sell_cost - sell_slippage
         equity_peak = max(equity_peak, marked_pnl)
         maximum_drawdown = max(maximum_drawdown, equity_peak - marked_pnl)
@@ -570,8 +643,11 @@ def simulate_dynamic_exit_symbol(
             end_index=final_index,
             status="OPEN",
             exit_price=None,
+            exit_rsi=None,
             holding_sessions=final_session_ordinal - int(position["entrySessionOrdinal"]) + 1,
+            timeframe=timeframe,
             recovery_config=recovery_config,
+            exit_config=exit_config,
         ))
     positions.sort(key=lambda item: int(item["sequenceNumber"]))
     skipped.sort(key=lambda item: int(item["sequenceNumber"]))
@@ -597,7 +673,7 @@ def simulate_dynamic_exit_symbol(
     }
 
 
-def aggregate_dynamic_exit_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate_rsi_profit_exit_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     positions = [position for result in results for position in result.get("positions", [])]
     skipped = [signal for result in results for signal in result.get("skippedSignals", [])]
     exposure_events: list[tuple[pd.Timestamp, int, float]] = []

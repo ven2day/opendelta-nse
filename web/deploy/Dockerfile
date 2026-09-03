@@ -5,8 +5,7 @@ WORKDIR /app
 COPY web/package.json web/package-lock.json ./web/
 RUN cd web && npm ci
 
-COPY nse_symbols_rsi_volume.csv ./nse_symbols_rsi_volume.csv
-COPY strategy-parameters.json ./strategy-parameters.json
+COPY data ./data
 COPY web ./web
 
 RUN cd web && npm run build \

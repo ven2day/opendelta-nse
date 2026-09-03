@@ -6,10 +6,10 @@ import os
 from datetime import datetime
 from typing import Sequence
 
-from crypto_providers import OkxPublicProvider
-from main import DhanClient, DhanConfig, download_instrument_master, historical_payload_to_frame
-from market_core import MarketCandle, MarketInstrument
-from opendelta.timescale_market_data import (
+from backend.markets.crypto.providers import OkxPublicProvider
+from backend.collector import DhanClient, DhanConfig, download_instrument_master, historical_payload_to_frame
+from backend.markets.common import MarketCandle, MarketInstrument
+from backend.data.timescale import (
     BackfillWorker,
     CandleProvider,
     CanonicalCandle,

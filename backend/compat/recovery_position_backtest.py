@@ -8,8 +8,8 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from main import IST
-from recovery_backtest import RecoveryConfig, simulate_recovery_symbol
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig, simulate_recovery_symbol
 
 POSITION_BACKTEST_VERSION = "recovery-exit-protection-1.0.0"
 

@@ -10,9 +10,9 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from main import IST
-from recovery_backtest import RecoveryConfig, simulate_recovery_symbol
-from recovery_dynamic_exit import (
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig, simulate_recovery_symbol
+from backend.compat.recovery_dynamic_exit import (
     DynamicExitConfig,
     aggregate_dynamic_exit_results,
     simulate_dynamic_exit_symbol,

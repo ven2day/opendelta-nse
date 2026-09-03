@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const siteDirectory = path.resolve(scriptDirectory, "..");
-const sourceFile = path.resolve(siteDirectory, "..", "nse_symbols_rsi_volume.csv");
+const sourceFile = path.resolve(siteDirectory, "..", "data", "nse_symbols_rsi_volume.csv");
 const dataDirectory = path.resolve(siteDirectory, "app", "data");
 const publicDirectory = path.resolve(siteDirectory, "public");
 const liveDirectory = path.resolve(publicDirectory, "live");

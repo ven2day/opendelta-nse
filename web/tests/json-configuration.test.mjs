@@ -8,7 +8,7 @@ import {
   parseAndValidateJsonConfiguration,
 } from "../app/legacy/backtest/json-configuration.mjs";
 
-const definitions = JSON.parse(await readFile(new URL("../../strategy-parameters.json", import.meta.url), "utf8"));
+const definitions = JSON.parse(await readFile(new URL("../../data/strategy-parameters.json", import.meta.url), "utf8"));
 const strategyNames = {
   rsi_range: "RSI Range Strategy",
   rsi_recovery: "RSI Recovery Scalping",

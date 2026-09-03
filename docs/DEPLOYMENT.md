@@ -50,7 +50,7 @@ and `backend/`.
 TimescaleDB is installed once with `sudo web/deploy/install-timescale-service.sh`
 (see [timescaledb-production-bootstrap.md](timescaledb-production-bootstrap.md)),
 which writes `MARKET_DATA_DATABASE_URL` into `/etc/vento-nse-dhan.env` and
-applies the candle schema with `python market_data_admin.py migrate`.
+applies the candle schema with `python -m backend.data.admin migrate`.
 
 The unified-platform tables are applied explicitly — the service never
 migrates on its own:
@@ -104,5 +104,6 @@ retire the legacy live-signal engine (`LIVE_SIGNAL_ENGINE_ENABLED`) and the
 The Dhan collector (`vento-nse-data.service` + timer) runs after the NSE close
 on weekdays, authenticates with TOTP, validates the data subscription, and
 publishes atomically only when the coverage threshold is met. Historical
-backfill and gap repair use `market_data_admin.py` and `market_data_worker.py`;
+backfill and gap repair use `python -m backend.data.admin` and
+`python -m backend.data.worker`;
 see [market-data-operations.md](market-data-operations.md).

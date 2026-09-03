@@ -8,7 +8,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from main import IST
+from backend.collector import IST
 
 STRATEGY_VERSION = "rsi-recovery-1.1.0"
 MAX_CHART_POINTS = 360

@@ -8,9 +8,9 @@ from typing import Any, Iterable
 
 import pandas as pd
 
-from atr_exit_optimizer import WalkForwardFold, build_walk_forward_folds
-from recovery_backtest import RecoveryConfig, simulate_recovery_symbol
-from recovery_rsi_profit_exit import (
+from backend.compat.atr_exit_optimizer import WalkForwardFold, build_walk_forward_folds
+from backend.compat.recovery_backtest import RecoveryConfig, simulate_recovery_symbol
+from backend.compat.recovery_rsi_profit_exit import (
     RsiProfitExitConfig,
     aggregate_rsi_profit_exit_results,
     simulate_rsi_profit_exit_symbol,

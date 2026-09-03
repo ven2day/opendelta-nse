@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 import pandas as pd
 
-import recovery_rsi_profit_exit
-from main import IST
-from recovery_backtest import RecoveryConfig, simulate_recovery_symbol
-from recovery_rsi_profit_exit import (
+import backend.compat.recovery_rsi_profit_exit as recovery_rsi_profit_exit
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig, simulate_recovery_symbol
+from backend.compat.recovery_rsi_profit_exit import (
     RsiProfitExitConfig,
     aggregate_rsi_profit_exit_results,
     simulate_rsi_profit_exit_symbol,
@@ -99,8 +99,8 @@ def simulate(
     indicators["RecoveryRSI"] = rsi
     recovery = recovery or RecoveryConfig(target_pct=0.51)
     with (
-        patch("recovery_rsi_profit_exit.simulate_recovery_symbol", return_value=observation(candles, candidates, symbol)),
-        patch("recovery_rsi_profit_exit.calculate_recovery_indicators", return_value=indicators),
+        patch("backend.compat.recovery_rsi_profit_exit.simulate_recovery_symbol", return_value=observation(candles, candidates, symbol)),
+        patch("backend.compat.recovery_rsi_profit_exit.calculate_recovery_indicators", return_value=indicators),
     ):
         return simulate_rsi_profit_exit_symbol(
             symbol,
@@ -126,8 +126,8 @@ def recovery_signals(rsi: list[float], config: RecoveryConfig) -> dict:
     config = replace(config, rsi_length=1, ema_fast=1, ema_slow=1, volume_ema=1)
     data = indicator_frame(rsi)
     with (
-        patch("recovery_backtest.validate_candles", return_value=[]),
-        patch("recovery_backtest.calculate_recovery_indicators", return_value=data),
+        patch("backend.compat.recovery_backtest.validate_candles", return_value=[]),
+        patch("backend.compat.recovery_backtest.calculate_recovery_indicators", return_value=data),
     ):
         return simulate_recovery_symbol(
             "TEST", data[["Open", "High", "Low", "Close", "Volume"]],
@@ -153,8 +153,8 @@ class ConfigurableEntryTests(unittest.TestCase):
         rejected["SessionVWAP"] = 101.0
         compact_config = replace(config, rsi_length=1, ema_fast=1, ema_slow=1, volume_ema=1)
         with (
-            patch("recovery_backtest.validate_candles", return_value=[]),
-            patch("recovery_backtest.calculate_recovery_indicators", return_value=rejected),
+            patch("backend.compat.recovery_backtest.validate_candles", return_value=[]),
+            patch("backend.compat.recovery_backtest.calculate_recovery_indicators", return_value=rejected),
         ):
             result = simulate_recovery_symbol(
                 "TEST", rejected[["Open", "High", "Low", "Close", "Volume"]],
@@ -318,7 +318,7 @@ class RsiProfitExitLifecycleTests(unittest.TestCase):
 
 class RequestContractTests(unittest.TestCase):
     def test_new_mode_defaults_are_separate_from_legacy(self) -> None:
-        from backtest_api import BacktestRequest
+        from backend.app import BacktestRequest
 
         legacy = BacktestRequest(symbols=["SBIN"], strategyMode="rsi_recovery")
         self.assertEqual((legacy.rsiArmLow, legacy.rsiArmHigh), (30, 40))

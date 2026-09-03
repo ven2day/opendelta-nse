@@ -1,5 +1,5 @@
 -- Unified trading platform schema. Idempotent; applied by backend.data.database.Database.migrate().
--- Candles live in the TimescaleDB hypertable owned by opendelta/sql; everything here is plain PostgreSQL.
+-- Candles live in the TimescaleDB hypertable owned by backend/data/sql; everything here is plain PostgreSQL.
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version text PRIMARY KEY,

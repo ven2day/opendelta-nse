@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-import ema_vwap_strong_buy as strategy
+import backend.strategies.strong_buy_compat as strategy
 
 
 class StrongBuyConfigTests(unittest.TestCase):

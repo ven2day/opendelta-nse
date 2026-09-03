@@ -94,7 +94,7 @@ cd opendelta-nse
 uv sync
 export MARKET_DATA_DATABASE_URL=postgresql://user:pass@localhost:5432/opendelta   # optional
 python -m backend.data.migrate                                                   # optional, explicit
-PYTHONPATH=. uv run uvicorn backtest_api:app --port 8000
+PYTHONPATH=. uv run uvicorn backend.app:app --port 8000
 ```
 
 ### Web
@@ -139,12 +139,13 @@ opendelta-nse/
 │   ├── paper_trading/            # broker.py, portfolio.py, execution.py, accounting.py
 │   ├── data/                     # database.py, repositories.py, migrate.py, sql/001_platform.sql
 │   ├── api/                      # screener, backtest, signal, paper_trading, settings, dashboard routes
+│   ├── config/                   # application and strategy configuration
+│   ├── compat/                   # supported historical API implementations
+│   ├── app.py                    # FastAPI entry point (compatibility routes + /v2)
+│   ├── collector.py              # Dhan client and NSE data collector
+│   ├── paths.py                  # stable repository data paths
 │   └── platform_runtime.py       # wires the platform into the FastAPI app
-├── opendelta/                    # TimescaleDB canonical candle store + SQL migration
-├── backtest_api.py               # FastAPI app (legacy routes + /platform/* + mounts /v2)
-├── main.py                       # Dhan client/credentials (the only place they are read) + collector
-├── ema_vwap_strong_buy.py        # legacy Strong Buy module, now delegating to the plug-in
-├── live_signals.py, crypto_*.py, recovery_*.py, market_data_*.py, …   # legacy runtime modules
+├── data/                         # symbols, generated market CSV and strategy parameter definitions
 ├── web/
 │   ├── app/                      # pages: / screener backtest signals paper-trading settings, legacy/*
 │   │   ├── api/                  # authenticated proxies (api/v2/[...path] for the platform)
@@ -157,7 +158,6 @@ opendelta-nse/
 │   └── legacy/                   #   retired-strategy reports
 ├── scripts/                      # security_scan.py, regression_existing_strategies.py
 ├── benchmarks/                   # legacy engine benchmarks and baselines
-├── symbols.csv, nse_symbols_rsi_volume.csv, strategy-parameters.json   # data files used by deploy
 ├── PROJECT_OVERVIEW.md · CONTRIBUTING.md · SECURITY.md
 └── pyproject.toml · uv.lock
 ```
@@ -171,7 +171,7 @@ opendelta-nse/
 | `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
 | `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |
 | `NSE_LIVE_STRATEGY`, `CRYPTO_LIVE_STRATEGY` | strategy id for live signals |
-| `DHAN_*` | Dhan credentials, read only by `main.py` |
+| `DHAN_*` | Dhan credentials, read only by `backend/collector.py` |
 | `BACKTEST_WORKERS`, `BACKTEST_CACHE_DIR` | legacy backtest service tuning and candle cache |
 
 All v2 features default to off; production behaviour is unchanged until they

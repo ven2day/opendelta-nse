@@ -62,7 +62,7 @@ GitHub Actions.
 ## Security
 
 No broker or exchange order client exists. Dhan credentials are read only by
-`main.py`; the web app never sees them. See [SECURITY.md](SECURITY.md).
+`backend/collector.py`; the web app never sees them. See [SECURITY.md](SECURITY.md).
 
 ## License
 

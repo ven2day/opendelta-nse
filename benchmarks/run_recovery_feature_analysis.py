@@ -19,10 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest_api import prepare_candles
-from main import IST
-from recovery_backtest import RecoveryConfig, STRATEGY_VERSION, simulate_recovery_symbol
-from recovery_feature_analysis import (
+from backend.app import prepare_candles
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig, STRATEGY_VERSION, simulate_recovery_symbol
+from backend.compat.recovery_feature_analysis import (
     FEATURE_DEFINITIONS_VERSION,
     FEATURE_SCHEMA_VERSION,
     build_signal_feature_snapshots,
@@ -193,7 +193,7 @@ def main() -> None:
     parser.add_argument(
         "--baseline", type=Path, default=ROOT / "benchmarks/opendelta-rsi-recovery-overlap-baseline.json"
     )
-    parser.add_argument("--symbols", type=Path, default=ROOT / "symbols.csv")
+    parser.add_argument("--symbols", type=Path, default=ROOT / "data" / "symbols.csv")
     parser.add_argument("--candle-cache", type=Path, default=Path("/var/lib/vento-nse/backtest"))
     parser.add_argument("--reports", type=Path, default=ROOT / "reports")
     parser.add_argument("--feature-cache", type=Path, default=Path("/var/lib/vento-nse/backtest/features"))
@@ -207,7 +207,7 @@ def main() -> None:
         raise RuntimeError(
             f"Baseline strategy {baseline.get('strategyVersion')} does not match source {STRATEGY_VERSION}"
         )
-    strategy_hash = _sha256(ROOT / "recovery_backtest.py")
+    strategy_hash = _sha256(ROOT / "backend" / "compat" / "recovery_backtest.py")
     if strategy_hash != EXPECTED_STRATEGY_SHA256:
         raise RuntimeError(
             "Recovery strategy source changed; feature analysis refuses to run. "

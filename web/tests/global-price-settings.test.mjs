@@ -10,7 +10,7 @@ test("admin exposes one persisted inclusive global price range", async () => {
     source("app/admin/page.tsx"),
     source("app/admin/admin-settings.tsx"),
     source("app/api/global-settings/route.ts"),
-    source("../application_settings.py"),
+    source("../backend/config/application_settings.py"),
   ]);
   assert.match(page, /requireSessionUser/);
   assert.match(form, /Global minimum price/);

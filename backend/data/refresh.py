@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from main import ConfigurationError, DhanAPIError, DhanConfig, IST, run_screener
+from backend.collector import ConfigurationError, DhanAPIError, DhanConfig, IST, run_screener
 
 
 RefreshProgress = Callable[[int, int], None]

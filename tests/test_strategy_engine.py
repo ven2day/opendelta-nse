@@ -29,7 +29,7 @@ from backend.core.models import MarketContext, SignalDecision, normalize_candles
 from backend.strategies import STRATEGIES, StrongBuyV1
 from backend.strategies.base import Strategy, resolve_config
 from backend.strategies.registry import StrategyRegistry
-from ema_vwap_strong_buy import StrongBuyConfig, calculate_strong_buy_indicators, simulate_strong_buy_symbol
+from backend.strategies.strong_buy_compat import StrongBuyConfig, calculate_strong_buy_indicators, simulate_strong_buy_symbol
 
 IST = "Asia/Kolkata"
 CANDLE_CACHE = Path("/var/lib/vento-nse/backtest")
@@ -162,7 +162,7 @@ class RealCandleEquivalenceTests(unittest.TestCase):
 
 class IndicatorLibraryTests(unittest.TestCase):
     def test_wilder_rma_and_rsi_match_recovery_backtest_exactly(self) -> None:
-        from recovery_backtest import calculate_wilder_rma, calculate_wilder_rsi
+        from backend.compat.recovery_backtest import calculate_wilder_rma, calculate_wilder_rsi
 
         close = synthetic_nse_candles(days=3)["Close"]
         pd.testing.assert_series_equal(indicators.wilder_rma(close, 14), calculate_wilder_rma(close, 14), check_exact=True)

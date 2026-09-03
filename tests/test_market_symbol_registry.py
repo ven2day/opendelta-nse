@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from market_symbol_registry import (
+from backend.data.symbol_registry import (
     MarketSymbolRegistry,
     SymbolAlreadyExistsError,
     SymbolNotFoundError,

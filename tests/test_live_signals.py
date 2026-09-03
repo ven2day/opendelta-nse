@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-import live_signals
-from live_signals import (
+import backend.compat.live_signals as live_signals
+from backend.compat.live_signals import (
     DhanQuoteTick,
     FiveMinuteCandleBuilder,
     LiveSignalEngine,
@@ -25,8 +25,8 @@ from live_signals import (
     parse_dhan_quote_packets,
     quantity_suggestion,
 )
-from main import IST
-from recovery_backtest import RecoveryConfig
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig
 
 
 def fixed_clock(value: str = "2026-08-26 10:05:10"):
@@ -155,7 +155,7 @@ class CandleAndPacketTests(unittest.TestCase):
 
 class RecoveryStateTests(unittest.TestCase):
     def evaluate(self, rsi: list[float], confirmations=(True, True, True), config: RecoveryConfig | None = None):
-        with patch("live_signals.calculate_recovery_indicators", side_effect=injected_indicators):
+        with patch("backend.compat.live_signals.calculate_recovery_indicators", side_effect=injected_indicators):
             return evaluate_latest_recovery(state_frame(rsi, confirmations=confirmations), config or RecoveryConfig())
 
     def test_rsi_must_arm_before_recovery(self) -> None:
@@ -399,7 +399,7 @@ class AutoPaperTradeTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_new_strong_buy_signal_auto_creates_paper_trade(self) -> None:
-        with patch("live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
+        with patch("backend.compat.live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
             self.engine.process_completed_candle("TEST", self.candle)
         trades = self.repo.paper_trades()
         self.assertEqual(len(trades), 1)
@@ -409,14 +409,14 @@ class AutoPaperTradeTests(unittest.TestCase):
 
     def test_auto_paper_trade_can_be_disabled(self) -> None:
         self.repo.save_settings(LiveSignalSettings(strong_buy_auto_paper_trade=False))
-        with patch("live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
+        with patch("backend.compat.live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
             self.engine.process_completed_candle("TEST", self.candle)
         self.assertEqual(len(self.repo.paper_trades()), 0)
         signals = [item for item in self.repo.signals() if item.get("strategyKey") == "ema_vwap_strong_buy"]
         self.assertEqual(len(signals), 1)
 
     def test_duplicate_signal_never_double_creates_paper_trade(self) -> None:
-        with patch("live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
+        with patch("backend.compat.live_signals.evaluate_latest_strong_buy", return_value=strong_buy_engine_result()):
             self.engine.process_completed_candle("TEST", self.candle)
             self.engine.process_completed_candle("TEST", self.candle)
         self.assertEqual(len(self.repo.paper_trades()), 1)

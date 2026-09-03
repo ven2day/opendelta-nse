@@ -9,7 +9,7 @@ from typing import Any, Literal, Sequence
 import numpy as np
 import pandas as pd
 
-from market_core import MarketCandle, MarketInstrument, iso_utc
+from backend.markets.common import MarketCandle, MarketInstrument, iso_utc
 
 
 STRATEGY_KEY = "crypto_trend_pullback_recovery"

@@ -13,8 +13,8 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from main import IST
-from recovery_backtest import (
+from backend.collector import IST
+from backend.compat.recovery_backtest import (
     STRATEGY_VERSION,
     RecoveryConfig,
     calculate_ema,

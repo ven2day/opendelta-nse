@@ -10,11 +10,11 @@ between backtest and paper-signal generation.
 
 | Layer | Implementation | Responsibility |
 | --- | --- | --- |
-| Instrument domain | `market_core.py` | Normalized instruments, candles, timeframes, stable IDs |
-| Public providers | `crypto_providers.py` | OKX instruments/candles and VALR pairs/buckets |
-| Strategy | `crypto_strategy.py` | Completed-candle features, signals, next-bar backtest |
-| Persistence/runtime | `crypto_engine.py` | SQLite, catalog validation, candle cache, scans, runs |
-| Service API | `crypto_api.py` | Provider, instrument, signal, status, and backtest routes |
+| Instrument domain | `backend/markets/common.py` | Normalized instruments, candles, timeframes, stable IDs |
+| Public providers | `backend/markets/crypto/providers.py` | OKX instruments/candles and VALR pairs/buckets |
+| Strategy | `backend/markets/crypto/strategy.py` | Completed-candle features, signals, next-bar backtest |
+| Persistence/runtime | `backend/markets/crypto/engine.py` | SQLite, catalog validation, candle cache, scans, runs |
+| Service API | `backend/markets/crypto/api.py` | Provider, instrument, signal, status, and backtest routes |
 | Authenticated web proxy | `web/app/api/crypto/route.ts` | Session/proxy-token protected service access |
 | Web UI | `web/app/crypto/crypto-workspace.tsx` | Add/remove, signals, and backtests |
 

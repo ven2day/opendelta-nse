@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from application_settings import (
+from backend.config.application_settings import (
     ApplicationSettingsRepository,
     DEFAULT_MAXIMUM_PRICE,
     GlobalPriceSettings,

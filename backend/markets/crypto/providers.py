@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from market_core import (
+from backend.markets.common import (
     TIMEFRAME_SECONDS,
     MarketCandle,
     MarketInstrument,

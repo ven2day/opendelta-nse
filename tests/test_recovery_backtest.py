@@ -10,10 +10,10 @@ from unittest.mock import patch
 import pandas as pd
 from pydantic import ValidationError
 
-import recovery_backtest
-from backtest_api import BacktestRequest, run_recovery_backtest
-from main import IST
-from recovery_backtest import (
+import backend.compat.recovery_backtest as recovery_backtest
+from backend.app import BacktestRequest, run_recovery_backtest
+from backend.collector import IST
+from backend.compat.recovery_backtest import (
     RecoveryConfig,
     _session_speed_bucket,
     _target_speed_bucket,
@@ -78,7 +78,7 @@ def baseline_rsi(count: int = 30) -> list[float]:
 
 
 def simulate(frame: pd.DataFrame, config: RecoveryConfig | None = None) -> dict:
-    with patch("recovery_backtest.calculate_recovery_indicators", side_effect=injected_indicators):
+    with patch("backend.compat.recovery_backtest.calculate_recovery_indicators", side_effect=injected_indicators):
         return simulate_recovery_symbol(
             "TEST",
             frame,
@@ -497,7 +497,7 @@ class ValidationAndParityTests(unittest.TestCase):
             def candles(*_args, **_kwargs) -> pd.DataFrame:
                 return state_frame(baseline_rsi())
 
-        with patch("recovery_backtest.calculate_recovery_indicators", side_effect=injected_indicators):
+        with patch("backend.compat.recovery_backtest.calculate_recovery_indicators", side_effect=injected_indicators):
             response = run_recovery_backtest(
                 BacktestRequest(symbols=["TEST"], strategyMode="rsi_recovery", timeframe="5m", runId="metadata-run"),
                 Store(),

@@ -14,13 +14,13 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
-from dhan_oi import (
+from backend.markets.nse.oi import (
     DhanInstrumentCatalog,
     download_detailed_instrument_catalog,
     parse_rolling_option_history,
 )
-from main import DhanAPIError, DhanClient, DhanConfig, historical_payload_to_frame
-from nifty_oi_regime import (
+from backend.collector import DhanAPIError, DhanClient, DhanConfig, historical_payload_to_frame
+from backend.markets.nse.oi_regime import (
     IST,
     NiftyOiConfig,
     OiRegimeRepository,

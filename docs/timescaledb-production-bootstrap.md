@@ -61,7 +61,7 @@ session_date
 Generate the explicit all-date calendar:
 
 ```bash
-python market_data_calendar.py \
+python -m backend.data.calendar \
   --trading-days /secure/path/official-nse-trading-days.csv \
   --output /secure/path/nse-sessions.csv \
   --start 2024-09-01 \

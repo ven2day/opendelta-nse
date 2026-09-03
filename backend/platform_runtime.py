@@ -1,6 +1,6 @@
 """Wires the unified platform into the existing FastAPI process.
 
-Kept separate from backtest_api.py so the legacy module only needs to call
+Kept separate from backend/app.py so the compatibility layer only needs to call
 ``install_platform(app, ...)``. The database is optional: without
 ``MARKET_DATA_DATABASE_URL`` the v2 routes answer 503 instead of crashing the
 service that also hosts the legacy endpoints.

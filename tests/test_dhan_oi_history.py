@@ -5,14 +5,14 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import pytest
 
-from dhan_oi import DhanInstrument, DhanInstrumentCatalog
-from dhan_oi_history import (
+from backend.markets.nse.oi import DhanInstrument, DhanInstrumentCatalog
+from backend.markets.nse.oi_history import (
     HistoricalOiImportConfig,
     HistoricalOiImporter,
     nominal_nifty_weekly_expiry,
 )
-from main import DhanAPIError
-from nifty_oi_regime import IST, NiftyOiConfig, OiRegimeRepository, score_spot_trend
+from backend.collector import DhanAPIError
+from backend.markets.nse.oi_regime import IST, NiftyOiConfig, OiRegimeRepository, score_spot_trend
 
 
 def _timestamps(count: int = 25) -> list[int]:

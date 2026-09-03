@@ -33,44 +33,44 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from atr_exit_optimizer import (
+from backend.compat.atr_exit_optimizer import (
     AtrOptimizationGrid,
     evaluate_atr_exit_grid,
 )
-from application_settings import (
+from backend.config.application_settings import (
     ApplicationSettingsRepository,
     DEFAULT_MAXIMUM_PRICE as GLOBAL_DEFAULT_MAXIMUM_PRICE,
     filter_symbols_by_price,
     prices_by_symbol,
 )
-from crypto_api import create_crypto_router
-from crypto_engine import CryptoMarketService, service_from_environment as crypto_service_from_environment
+from backend.markets.crypto.api import create_crypto_router
+from backend.markets.crypto.engine import CryptoMarketService, service_from_environment as crypto_service_from_environment
 from backend.data.database import Database
 from backend.markets.crypto.exchange_adapter import CryptoCandleSource
 from backend.markets.nse.dhan_adapter import DhanCandleSource
 from backend.platform_runtime import PlatformRuntime, install_platform
-from backtest_history import BacktestHistoryRepository, HISTORY_LIMIT
-from backtest_jobs import BacktestJobService
-from live_signals import (
+from backend.backtest.history import BacktestHistoryRepository, HISTORY_LIMIT
+from backend.compat.backtest_jobs import BacktestJobService
+from backend.compat.live_signals import (
     MARKET_CLOSE,
     MARKET_OPEN,
     LiveSignalEngine,
     LiveSignalRepository,
     LiveSignalSettings,
 )
-from market_data_refresh import MarketDataRefreshService
-from opendelta.timescale_market_data import (
+from backend.data.refresh import MarketDataRefreshService
+from backend.data.timescale import (
     CanonicalCandleWriter,
     TimescaleDualWriter,
     canonical_candles_from_dhan_frame,
     dual_writer_from_environment,
 )
-from market_symbol_registry import (
+from backend.data.symbol_registry import (
     MarketSymbolRegistry,
     SymbolAlreadyExistsError,
     SymbolNotFoundError,
 )
-from ema_vwap_strong_buy import (
+from backend.strategies.strong_buy_compat import (
     STRATEGY_DESCRIPTION as STRONG_BUY_DESCRIPTION,
     STRATEGY_KEY as STRONG_BUY_STRATEGY_KEY,
     STRATEGY_NAME as STRONG_BUY_STRATEGY_NAME,
@@ -79,8 +79,8 @@ from ema_vwap_strong_buy import (
     aggregate_strong_buy_results,
     simulate_strong_buy_symbol,
 )
-from dhan_oi import build_oi_service_from_environment
-from main import (
+from backend.markets.nse.oi import build_oi_service_from_environment
+from backend.collector import (
     ConfigurationError,
     DEFAULT_SYMBOLS_FILE,
     IST,
@@ -92,52 +92,52 @@ from main import (
     historical_payload_to_frame,
     load_symbols,
 )
-from recovery_backtest import (
+from backend.compat.recovery_backtest import (
     QUALITY_WEIGHTS,
     RecoveryConfig,
     aggregate_recovery_results,
     simulate_recovery_symbol,
     summarize_recovery_trades,
 )
-from strategy_parameters import numeric_field_kwargs, parameter_definition
-from nifty_oi_regime import (
+from backend.config.strategy_parameters import numeric_field_kwargs, parameter_definition
+from backend.markets.nse.oi_regime import (
     NiftyOiConfig,
     OiRegimeRepository,
     apply_oi_filter_chronologically,
 )
-from recovery_backtest import (
+from backend.compat.recovery_backtest import (
     STRATEGY_VERSION as RECOVERY_STRATEGY_VERSION,
 )
-from recovery_feature_analysis import (
+from backend.compat.recovery_feature_analysis import (
     REPORT_FILENAMES,
     build_feature_analysis,
     filter_feature_snapshots,
     load_feature_analysis,
     load_feature_snapshots,
 )
-from recovery_dynamic_exit import (
+from backend.compat.recovery_dynamic_exit import (
     DYNAMIC_EXIT_VERSION,
     DynamicExitConfig,
     aggregate_dynamic_exit_results,
     simulate_dynamic_exit_symbol,
 )
-from recovery_position_backtest import (
+from backend.compat.recovery_position_backtest import (
     POSITION_BACKTEST_VERSION,
     PositionProtectionConfig,
     aggregate_protected_results,
     simulate_protected_recovery_symbol,
 )
-from recovery_rsi_profit_exit import (
+from backend.compat.recovery_rsi_profit_exit import (
     RSI_PROFIT_EXIT_VERSION,
     RsiProfitExitConfig,
     aggregate_rsi_profit_exit_results,
     simulate_rsi_profit_exit_symbol,
 )
-from rsi_exit_optimizer import (
+from backend.compat.rsi_exit_optimizer import (
     RsiExitOptimizationGrid,
     evaluate_rsi_exit_grid,
 )
-from universe_selection import (
+from backend.compat.universe_selection import (
     DEFAULT_MAXIMUM_PRICE,
     DEFAULT_MINIMUM_BUY_OBSERVATIONS,
     DEFAULT_MINIMUM_PRICE,

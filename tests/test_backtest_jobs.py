@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import time
 
-from backtest_api import (
+from backend.app import (
     _completed_job_progress,
     _execute_market_batches,
     _job_history_record,
     _market_task_batches,
     BacktestRequest,
 )
-from backtest_jobs import BacktestJobService
+from backend.compat.backtest_jobs import BacktestJobService
 
 
 def wait_terminal(service: BacktestJobService, job_id: str) -> dict[str, object]:

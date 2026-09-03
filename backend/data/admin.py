@@ -7,9 +7,9 @@ import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from crypto_engine import CryptoMarketRepository
-from main import build_security_map, download_instrument_master, load_symbols
-from opendelta.timescale_market_data import TimescaleMarketDataStore
+from backend.markets.crypto.engine import CryptoMarketRepository
+from backend.collector import build_security_map, download_instrument_master, load_symbols
+from backend.data.timescale import TimescaleMarketDataStore
 
 
 def database_url() -> str:

@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
-from nifty_oi_regime import (
+from backend.markets.nse.oi_regime import (
     FuturesOiObservation,
     NiftyOiConfig,
     OiRegimeRepository,

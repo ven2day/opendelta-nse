@@ -7,7 +7,7 @@ from unittest.mock import Mock, call
 
 import pandas as pd
 
-from main import (
+from backend.collector import (
     OUTPUT_COLUMNS,
     RSI_PERIOD,
     DhanAPIError,

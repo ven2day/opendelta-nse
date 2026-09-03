@@ -20,7 +20,7 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-market-data-worker \
   --pids-limit 128 \
   --memory 1g \
   vento-nse-backtest:current \
-  python market_data_worker.py
+  python -m backend.data.worker
 TimeoutStartSec=45min
 
 [Install]

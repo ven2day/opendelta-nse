@@ -12,7 +12,7 @@ yesterday/current close, and 24-hour volume.
    project root:
 
    ```powershell
-   python main.py
+   python -m backend.collector
    ```
 
 3. Install and run the web app:

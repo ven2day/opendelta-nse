@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pandas as pd
 
-import market_data_admin
-from crypto_engine import CryptoMarketRepository
-from market_core import MarketInstrument, instrument_identifier
+import backend.data.admin as market_data_admin
+from backend.markets.crypto.engine import CryptoMarketRepository
+from backend.markets.common import MarketInstrument, instrument_identifier
 
 
 class EnqueueStore:

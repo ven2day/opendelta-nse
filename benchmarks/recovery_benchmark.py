@@ -13,8 +13,8 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import IST  # noqa: E402
-from recovery_backtest import STRATEGY_VERSION, RecoveryConfig, simulate_recovery_symbol  # noqa: E402
+from backend.collector import IST  # noqa: E402
+from backend.compat.recovery_backtest import STRATEGY_VERSION, RecoveryConfig, simulate_recovery_symbol  # noqa: E402
 
 _WORKER_FRAME: pd.DataFrame | None = None
 _WORKER_CONFIG = RecoveryConfig()

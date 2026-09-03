@@ -19,7 +19,7 @@ reproduction, and the impact. Expect an acknowledgement within a few days.
   private keys, database URLs or production host details. The root
   `.gitignore` excludes the usual files and `scripts/security_scan.py` runs in
   CI over every tracked file.
-- Dhan credentials are read in exactly one place (`main.py`,
+- Dhan credentials are read in exactly one place (`backend/collector.py`,
   `DhanConfig.from_environment()`); every other module receives an
   authenticated client. The web app never receives `/etc/vento-nse-dhan.env`.
 - Crypto market data uses public OKX/VALR endpoints; no exchange API key is

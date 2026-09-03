@@ -19,7 +19,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 DATABASE_URL_VARIABLE = "MARKET_DATA_DATABASE_URL"
-_MIGRATION_NAME = re.compile(r"^(\d{3})_[a-z0-9_]+\.sql$")
+_MIGRATION_NAME = re.compile(r"^(\d{3}_[a-z0-9_]+)\.sql$")
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -98,7 +98,7 @@ class Database:
 
     @staticmethod
     def migration_files() -> list[tuple[str, str]]:
-        """``[(version, sql)]`` in ascending version order."""
+        """Return migrations keyed by their full unique filename stem."""
         found: list[tuple[str, str]] = []
         for entry in files("backend.data.sql").iterdir():
             match = _MIGRATION_NAME.match(entry.name)

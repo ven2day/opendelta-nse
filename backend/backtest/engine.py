@@ -24,7 +24,7 @@ import pandas as pd
 from backend.backtest.metrics import MetricsAccumulator
 from backend.backtest.result_writer import ResultWriter
 from backend.core.fifo import FifoInventory, FifoMatch, net_profit_target_price
-from backend.core.models import MarketContext
+from backend.core.models import MarketContext, normalize_candles
 from backend.markets.base import CandleSource, MarketSpec
 from backend.strategies.base import Strategy, decision_frame
 from backend.strategies.lot_policy import PriceBandLadder
@@ -217,7 +217,7 @@ class BacktestEngine:
         timezone = self.market.timezone
         execution = request.execution
         ladder = PriceBandLadder.from_config(config)
-        bar_minutes = self.market.minutes(request.timeframe)
+        strategy_bar_minutes = self.market.minutes(request.timeframe)
         warmup = self.strategy.required_history(config)
         start = datetime.combine(request.start_date, datetime.min.time()).replace(tzinfo=_zone(timezone))
         end = datetime.combine(request.end_date, datetime.max.time()).replace(tzinfo=_zone(timezone))
@@ -228,12 +228,24 @@ class BacktestEngine:
         if frame.empty:
             return
         frame = frame[frame.index <= end]
+        execution_timeframe = request.timeframe
+        if self.market.market == "NSE" and request.timeframe == "1d":
+            execution_timeframe = "5m"
+            frame = self._project_daily_signals_onto_intraday(
+                symbol, frame, start=start, end=end
+            )
+            if frame.empty:
+                return
+        bar_minutes = self.market.minutes(execution_timeframe)
+        expiry_bar_multiplier = max(1, math.ceil(strategy_bar_minutes / bar_minutes))
         timestamps = frame.index
         opens = frame["Open"].to_numpy(dtype=float)
         highs = frame["High"].to_numpy(dtype=float)
         lows = frame["Low"].to_numpy(dtype=float)
         closes = frame["Close"].to_numpy(dtype=float)
         decisions = (frame["Decision"] == "BUY").to_numpy()
+        signal_timestamps = frame["SignalTimestamp"].to_numpy() if "SignalTimestamp" in frame else timestamps.to_numpy()
+        signal_prices = frame["SignalPrice"].to_numpy(dtype=float) if "SignalPrice" in frame else closes
         signal_targets = frame["TargetPrice"].to_numpy(dtype=float)
         in_window = np.asarray(timestamps >= start, dtype=bool)
         del frame
@@ -256,7 +268,8 @@ class BacktestEngine:
                 pending = None
                 entered = self._enter(
                     request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id,
-                    timestamps, opens, closes, signal_targets, cycle_first_entry_price, inventory.cost,
+                    timestamps, opens, closes, signal_timestamps, signal_prices, signal_targets,
+                    cycle_first_entry_price, inventory.cost, expiry_bar_multiplier,
                 )
                 if entered is not None:
                     open_lots.append(entered)
@@ -335,7 +348,53 @@ class BacktestEngine:
         if batch:
             self.writer.write_trades(request.run_id, batch)
 
-    def _enter(self, request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_targets, cycle_first_entry_price, current_open_capital) -> _Lot | None:
+    def _project_daily_signals_onto_intraday(
+        self,
+        symbol: str,
+        daily: pd.DataFrame,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> pd.DataFrame:
+        """Evaluate on completed daily bars and execute on completed 5m bars.
+
+        A daily decision becomes actionable only after that session's final 5m
+        candle completes. The normal pending-order path then fills it at the
+        next available session's first 5m open. Targets, stops and ladder dips
+        are also replayed on 5m OHLC, matching the paper broker's clock.
+        """
+        intraday = normalize_candles(
+            self.source.candles(symbol, "5m", start, end, warmup_bars=0),
+            self.market.timezone,
+        )
+        if intraday.empty:
+            return intraday
+        projected = intraday.copy()
+        projected["Decision"] = "NONE"
+        projected["SignalTimestamp"] = pd.Series([None] * len(projected), index=projected.index, dtype=object)
+        projected["SignalPrice"] = np.nan
+        projected["TargetPrice"] = np.nan
+        projected["StopPrice"] = np.nan
+        session_dates = pd.Series(projected.index.date, index=projected.index)
+        final_bar_by_session = session_dates.groupby(session_dates).apply(lambda rows: rows.index[-1])
+        daily_local = daily.copy()
+        daily_local.index = (
+            daily_local.index.tz_localize(self.market.timezone)
+            if daily_local.index.tz is None
+            else daily_local.index.tz_convert(self.market.timezone)
+        )
+        for signal_stamp, row in daily_local[daily_local["Decision"] == "BUY"].iterrows():
+            final_stamp = final_bar_by_session.get(signal_stamp.date())
+            if final_stamp is None:
+                continue
+            projected.at[final_stamp, "Decision"] = "BUY"
+            projected.at[final_stamp, "SignalTimestamp"] = signal_stamp
+            projected.at[final_stamp, "SignalPrice"] = float(row["SignalPrice"])
+            projected.at[final_stamp, "TargetPrice"] = float(row["TargetPrice"])
+            projected.at[final_stamp, "StopPrice"] = float(row["StopPrice"])
+        return projected
+
+    def _enter(self, request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_timestamps, signal_prices, signal_targets, cycle_first_entry_price, current_open_capital, expiry_bar_multiplier=1) -> _Lot | None:
         reference_price = float(opens[bar])
         ladder = PriceBandLadder.from_config(config)
         indicative_fill_price = self.market.fees.buy(reference_price, 1).price
@@ -354,18 +413,18 @@ class BacktestEngine:
             target_pct = float(config["target_pct"])
         else:
             strategy_target = float(signal_targets[signal_bar])
-            signal_close = float(closes[signal_bar])
+            signal_close = float(signal_prices[signal_bar])
             # Preserve the strategy's target distance relative to the actual fill.
             target = entry_price * (strategy_target / signal_close) if signal_close > 0 and not math.isnan(strategy_target) else entry_price * 1.01
             target_pct = (target / entry_price - 1) * 100
         stop = entry_price * (1 - execution.stop_loss_pct / 100) if execution.stop_loss_pct is not None else None
-        expires_bar = bar + execution.maximum_holding_bars if execution.maximum_holding_bars is not None else None
+        expires_bar = bar + execution.maximum_holding_bars * expiry_bar_multiplier if execution.maximum_holding_bars is not None else None
         return _Lot(
             lot_id=f"{cycle_id}-Lot{entry_number + 1}",
             cycle_id=cycle_id,
             lot_number=entry_number + 1,
-            signal_timestamp=timestamps[signal_bar].to_pydatetime(),
-            signal_price=float(closes[signal_bar]),
+            signal_timestamp=pd.Timestamp(signal_timestamps[signal_bar]).to_pydatetime(),
+            signal_price=float(signal_prices[signal_bar]),
             entry_bar=bar,
             entry_timestamp=timestamps[bar].to_pydatetime(),
             entry_price=entry_price,

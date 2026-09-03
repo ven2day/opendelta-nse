@@ -104,7 +104,7 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
 test("legacy NSE Signals presents an expected market-close state without false degradation", async ({ page }) => {
   await page.goto("/legacy/signals");
 
-  await expect(page.locator(".platform-route-context span")).toHaveText("Legacy tool");
+  await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByText("Dhan market data")).toBeVisible();
   await expect(page.getByText("DISCONNECTED", { exact: true })).toBeVisible();
   await expect(page.getByText("MARKET CLOSED", { exact: true })).toBeVisible();
@@ -126,7 +126,7 @@ test("topbar links perform full document navigation in production", async ({ pag
   ]);
   await expect(page).toHaveURL(/\/signals$/);
   expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
-  await expect(page.locator(".platform-route-context strong")).toHaveText("Signals");
+  await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("aria-current", "page");
 
   const backtestsLink = page.getByRole("link", { name: "Backtest", exact: true });
   await expect(backtestsLink).toHaveAttribute("href", "/backtest");
@@ -139,7 +139,7 @@ test("topbar links perform full document navigation in production", async ({ pag
   ]);
   await expect(page).toHaveURL(/\/backtest$/);
   expect(await page.evaluate(() => Boolean((window as Window & { __openDeltaNavProbe?: boolean }).__openDeltaNavProbe))).toBe(false);
-  await expect(page.locator(".platform-route-context strong")).toHaveText("Backtest");
+  await expect(page.getByRole("link", { name: "Backtest", exact: true })).toHaveAttribute("aria-current", "page");
 });
 
 test("the market switcher keeps the current page and carries the market into navigation", async ({ page }) => {
@@ -171,7 +171,7 @@ test("backtest ticket is compact and trade controls filter and sort the full res
       tradeRequests.push(url);
       const rows = url.searchParams.has("symbol") || url.searchParams.has("status") ? [] : [
         { symbol: "TCS", lotId: "lot-open", status: "OPEN", entryTimestamp: "2026-09-01T09:30:00Z", entryPrice: 100, quantity: 10, targetPrice: 101, netPnl: 0, unrealizedPnl: -5, lastPrice: 99.5, holdingBars: 12 },
-        { symbol: "RELIANCE", lotId: "lot-hit", status: "TARGET_HIT", entryTimestamp: "2026-09-01T09:35:00Z", entryPrice: 200, quantity: 5, targetPrice: 202, exitPrice: 202, netPnl: 10, holdingMinutes: 25 },
+        { symbol: "RELIANCE", lotId: "lot-hit", status: "TARGET_HIT", entryTimestamp: "2026-09-01T09:35:00Z", entryPrice: 200, quantity: 5, targetPrice: 202, exitTimestamp: "2026-09-01T10:00:00Z", exitPrice: 202, netPnl: 10, holdingMinutes: 25 },
       ];
       return route.fulfill({ json: { runId: run.runId, total: rows.length, limit: 50, offset: 0, trades: rows } });
     }
@@ -212,6 +212,8 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   await expect(page.getByText("Unrealized", { exact: true })).toBeVisible();
   await expect(page.getByText("99.5", { exact: true })).toBeVisible();
   await expect(page.getByText("12 bars", { exact: true })).toBeVisible();
+  await expect(page.getByText("01 Sept 2026, 15:00 IST", { exact: true })).toBeVisible();
+  await expect(page.getByText("01 Sept 2026, 15:30 IST", { exact: true })).toBeVisible();
 
   await expect(page.getByText("OPEN", { exact: true })).toHaveClass(/warn/);
   await page.getByRole("button", { name: /Symbol/ }).click();
@@ -285,6 +287,8 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
   });
   expect(shell.height).toBeLessThanOrEqual(60);
   expect(shell.childrenFitOneRow).toBe(true);
+  const navFits = await page.locator(".platform-topnav").evaluate((nav) => nav.scrollWidth <= nav.clientWidth + 1);
+  expect(navFits).toBe(true);
   const workspaceWidth = await page.locator(".quant-workspace").evaluate((element) => element.getBoundingClientRect().width);
   expect(workspaceWidth).toBeGreaterThanOrEqual(1400);
   const screenerColumns = await page.locator(".quant-screener-layout").evaluate((layout) => {

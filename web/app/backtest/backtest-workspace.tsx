@@ -232,6 +232,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   };
 
   const metrics = run?.metrics ?? null;
+  const executionTimeframe = typeof run?.executionSettings?.executionTimeframe === "string" ? run.executionSettings.executionTimeframe : null;
   const total = trades.data?.total ?? 0;
   const pageStart = trades.data ? trades.data.offset + 1 : 0;
   const pageEnd = trades.data ? Math.min(trades.data.offset + trades.data.trades.length, total) : 0;
@@ -274,7 +275,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       </form>}
     </Panel>
 
-    <Panel icon={<Gauge size={17} />} title={run ? `Run ${shortId(run.runId)}` : "Run progress"} description={run ? `${run.strategyId} ${run.strategyVersion ? `v${run.strategyVersion}` : ""} · ${run.timeframe} · ${run.startDate} → ${run.endDate}` : "Select a run from the list below or start a new one."} aside={run && <div className="quant-toolbar"><StatusBadge tone={tone(run.status)}>{run.status}</StatusBadge>{runActive && <button type="button" className="danger" disabled={cancelling || run.cancelRequested} onClick={() => void cancel()}><Square size={13} />{run.cancelRequested ? "Cancelling…" : cancelling ? "Cancelling…" : "Cancel"}</button>}</div>}>
+    <Panel icon={<Gauge size={17} />} title={run ? `Run ${shortId(run.runId)}` : "Run progress"} description={run ? `${run.strategyId} ${run.strategyVersion ? `v${run.strategyVersion}` : ""} · ${run.timeframe} signals${executionTimeframe && executionTimeframe !== run.timeframe ? ` · ${executionTimeframe} execution` : ""} · ${run.startDate} → ${run.endDate}` : "Select a run from the list below or start a new one."} aside={run && <div className="quant-toolbar"><StatusBadge tone={tone(run.status)}>{run.status}</StatusBadge>{runActive && <button type="button" className="danger" disabled={cancelling || run.cancelRequested} onClick={() => void cancel()}><Square size={13} />{run.cancelRequested ? "Cancelling…" : cancelling ? "Cancelling…" : "Cancel"}</button>}</div>}>
       {!selectedRunId ? <EmptyState title="No backtests yet" description="Start a backtest above; progress and metrics appear here." /> : runDetail.error ? <RequestErrorState error={runDetail.error} retry={runDetail.reload} /> : !run ? <LoadingState label="Loading run" /> : <>
         <div className="quant-progress-row">
           <div className="quant-progress"><span style={{ width: `${progressPct(run)}%` }} /></div>
@@ -318,12 +319,12 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <tr className="quant-sort-row">
               <SortableHeading label="Symbol" column="symbol" active={tradeSort === "symbol"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Status" column="status" active={tradeSort === "status"} direction={tradeDirection} onSort={sortTrades} />
-              <SortableHeading label="Entry" column="entryTimestamp" active={tradeSort === "entryTimestamp"} direction={tradeDirection} onSort={sortTrades} />
+              <SortableHeading label="Entry executed" column="entryTimestamp" active={tradeSort === "entryTimestamp"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Entry price" column="entryPrice" active={tradeSort === "entryPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Qty" column="quantity" active={tradeSort === "quantity"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label={market === "NSE" ? "FIFO net target" : "Target"} column="targetPrice" active={tradeSort === "targetPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <SortableHeading label="Stop" column="stopPrice" active={tradeSort === "stopPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
-              <SortableHeading label="Exit" column="exitTimestamp" active={tradeSort === "exitTimestamp"} direction={tradeDirection} onSort={sortTrades} />
+              <SortableHeading label="Exit / target hit" column="exitTimestamp" active={tradeSort === "exitTimestamp"} direction={tradeDirection} onSort={sortTrades} />
               <SortableHeading label="Exit price" column="exitPrice" active={tradeSort === "exitPrice"} direction={tradeDirection} numeric onSort={sortTrades} />
               <th className="numeric">Current close</th>
               <SortableHeading label="P&amp;L" column="netPnl" active={tradeSort === "netPnl"} direction={tradeDirection} numeric onSort={sortTrades} />

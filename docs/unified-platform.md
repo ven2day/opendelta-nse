@@ -79,6 +79,15 @@ lot at the following candle open without requiring another RSI signal. The
 engines enforce the finite quantity array and capital ceiling. Each tranche
 retains its sell quantity while the executable target changes with FIFO cost.
 
+For an NSE `1d` backtest, RSI is still evaluated only after each completed
+daily candle. Execution is replayed separately from stored completed `5m`
+candles: the first lot fills at the next session's 09:15 candle open, dip lots
+fill at the next 5-minute open, and target/stop timestamps identify the exact
+5-minute candle that crossed the executable price. This is the same two-clock
+model used by live signals and PaperBroker. The run snapshot records
+`executionTimeframe: 5m`; older saved daily runs must be rerun to gain exact
+execution timestamps.
+
 For NSE/CNC, those targets are sell instructions rather than broker-selectable
 inventory lots. Dhan accepts a symbol and quantity, then matches the sale to the
 oldest available shares using FIFO. Before every NSE profit exit, Backtest and

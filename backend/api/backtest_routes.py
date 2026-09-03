@@ -99,12 +99,14 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         runs = _guard(services.runs)
+        execution_snapshot = execution.public()
+        execution_snapshot["executionTimeframe"] = "5m" if request.market == "NSE" and request.timeframe == "1d" else request.timeframe
         record = runs.create(
             market=request.market,
             strategy_id=strategy.strategy_id,
             strategy_version=strategy.version,
             configuration_snapshot=snapshot,
-            execution_settings=execution.public(),
+            execution_settings=execution_snapshot,
             timeframe=request.timeframe,
             symbols=symbols,
             start_date=request.startDate,

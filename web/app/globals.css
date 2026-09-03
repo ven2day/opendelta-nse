@@ -4497,9 +4497,6 @@ footer {
 .platform-identity div { display: grid; line-height: 1.1; }
 .platform-identity strong { font-size: 15px; letter-spacing: -.015em; }
 .platform-identity small { margin-top: 3px; color: #8fa1b9; font-size: 10px; letter-spacing: .035em; text-transform: uppercase; }
-.platform-route-context { display: grid; min-width: 105px; gap: 2px; border-left: 1px solid #2a3850; padding-left: 18px; }
-.platform-route-context span { color: #71839d; font-size: 9px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
-.platform-route-context strong { color: #dce7f5; font-size: 13px; }
 .platform-market-switch { display: flex; gap: 3px; border: 1px solid #2b3a53; border-radius: 9px; padding: 3px; background: #111d30; }
 .platform-market-switch a { border-radius: 6px; padding: 7px 12px; color: #91a3bc; font-size: 11px; font-weight: 750; text-decoration: none; transition: color .15s ease, background .15s ease; }
 .platform-market-switch a.active { color: #eff6ff; background: #285cbd; box-shadow: 0 4px 12px rgb(20 73 170 / 28%); }
@@ -4640,7 +4637,7 @@ footer {
 .research-sort select { min-height: 34px; border: 1px solid #cad5e3; border-radius: 7px; padding: 5px 8px; color: #2e415a; background: #fff; }
 
 @media (max-width: 1100px) {
-  .platform-route-context, .platform-status, .platform-environment { display: none !important; }
+  .platform-status, .platform-environment { display: none !important; }
   .quant-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .research-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .research-factor-select { grid-template-columns: repeat(2, minmax(0, 1fr)); }

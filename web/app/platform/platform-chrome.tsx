@@ -93,8 +93,6 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   const shellEnabled = usesPlatformShell(pathname);
   const search = searchParams.toString();
   const market = marketFor(pathname, searchParams.get("market"));
-  const legacy = pathname.startsWith("/legacy/") || pathname.startsWith("/admin");
-  const activeItem = navigation.find((item) => item.match(pathname)) ?? navigation[0];
 
   useEffect(() => {
     if (!shellEnabled) return;
@@ -169,10 +167,6 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
             <span aria-hidden="true">Δ</span>
             <div><strong>OpenDelta</strong><small>Quant research</small></div>
           </a>
-          <div className="platform-route-context" aria-label="Current workspace">
-            <span>{legacy ? "Legacy tool" : "Workspace"}</span>
-            <strong>{activeItem.label}</strong>
-          </div>
           <div className="platform-market-switch" role="group" aria-label="Active market">
             {MARKETS.map((item) => (
               <a key={item} className={market === item ? "active" : ""} href={marketHref(pathname, search, item)} aria-current={market === item ? "true" : undefined}>{marketLabel(item)}</a>

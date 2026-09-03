@@ -40,6 +40,17 @@ class Source:
         return self.frame
 
 
+class DailyWithIntradaySource:
+    def __init__(self, daily: pd.DataFrame, intraday: pd.DataFrame) -> None:
+        self.daily = daily
+        self.intraday = intraday
+        self.calls: list[str] = []
+
+    def candles(self, symbol, timeframe, start, end, *, warmup_bars):
+        self.calls.append(timeframe)
+        return self.intraday if timeframe == "5m" else self.daily
+
+
 class RsiDipLadderTests(unittest.TestCase):
     def setUp(self) -> None:
         self.strategy = STRATEGIES.get("rsi_dip_ladder_v1")
@@ -100,6 +111,51 @@ class RsiDipLadderTests(unittest.TestCase):
         for lot in lots:
             signal_position = frame.index.get_loc(pd.Timestamp(lot["signal_timestamp"]))
             self.assertEqual(pd.Timestamp(lot["entry_timestamp"]), frame.index[signal_position + 1])
+
+    def test_daily_signal_uses_exact_next_session_five_minute_entry_and_exit_times(self) -> None:
+        daily_index = pd.date_range("2026-08-03 09:15", periods=8, freq="B", tz=IST)
+        daily_close = pd.Series([110, 100, 90, 80, 90, 100, 105, 110], index=daily_index, dtype=float)
+        daily = pd.DataFrame({
+            "Open": daily_close,
+            "High": daily_close * 1.01,
+            "Low": daily_close * 0.99,
+            "Close": daily_close,
+            "Volume": 100_000.0,
+        }, index=daily_index)
+        intraday_index = pd.DatetimeIndex([
+            "2026-08-07 15:20:00+05:30",
+            "2026-08-07 15:25:00+05:30",
+            "2026-08-10 09:15:00+05:30",
+            "2026-08-10 09:20:00+05:30",
+        ])
+        intraday = pd.DataFrame({
+            "Open": [89.0, 90.0, 97.0, 102.0],
+            "High": [90.0, 91.0, 98.0, 110.0],
+            "Low": [88.0, 89.0, 96.0, 101.0],
+            "Close": [89.5, 90.0, 97.5, 103.0],
+            "Volume": 100_000.0,
+        }, index=intraday_index)
+        source = DailyWithIntradaySource(daily, intraday)
+        writer = MemoryResultWriter()
+        BacktestEngine(strategy=self.strategy, market=market_spec("NSE"), source=source, writer=writer).run(
+            BacktestRequest(
+                run_id="daily-exact",
+                market="NSE",
+                strategy_id=self.strategy.strategy_id,
+                symbols=["TEST"],
+                timeframe="1d",
+                start_date=date(2026, 8, 3),
+                end_date=date(2026, 8, 12),
+                configuration={"rsi_length": 2, "rsi_low": 30, "rsi_recovery": 35},
+            )
+        )
+        self.assertEqual(source.calls, ["1d", "5m"])
+        self.assertEqual(len(writer.trades), 1)
+        trade = writer.trades[0]
+        self.assertEqual(pd.Timestamp(trade["signal_timestamp"]), daily_index[4])
+        self.assertEqual(pd.Timestamp(trade["entry_timestamp"]), pd.Timestamp("2026-08-10 09:15:00+05:30"))
+        self.assertEqual(pd.Timestamp(trade["exit_timestamp"]), pd.Timestamp("2026-08-10 09:20:00+05:30"))
+        self.assertEqual(trade["holding_minutes"], 5.0)
 
     def test_five_percent_targets_use_each_candidate_fifo_quantity(self) -> None:
         frame = candles([900, 880, 860, 840, 860, 880, 820, 800, 820, 840, 860, 880, 920])

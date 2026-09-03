@@ -139,6 +139,7 @@ export type BacktestRun = {
 export type BacktestRunsResponse = { runs: BacktestRun[] };
 export type BacktestTrade = {
   symbol: string;
+  timeframe?: string | null;
   lotId: string;
   cycleId?: string | null;
   lotNumber?: number | null;

@@ -52,11 +52,12 @@ export function formatDateTime(value: unknown, market: PlatformMarket): string {
   return new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
     month: "short",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
     timeZone: marketTimeZone(market),
-  }).format(date);
+  }).format(date) + ` ${market === "NSE" ? "IST" : "UTC"}`;
 }
 
 export function formatDate(value: unknown): string {

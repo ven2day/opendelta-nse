@@ -124,7 +124,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
         <button type="button" role="tab" aria-selected={tab === "trades"} className={tab === "trades" ? "active" : ""} onClick={() => setTab("trades")}>Trades ({formatInteger(snapshot.data.trades.length)})</button>
       </div>}>
         {tab === "orders" ? (!snapshot.data.orders.length ? <EmptyState title="No paper orders" description="Order decisions are recorded when signals are filled or rejected." /> : <div className="quant-table-scroll tall"><table className="quant-table">
-          <thead><tr><th>Order</th><th>Symbol</th><th>Side</th><th className="numeric">Qty</th><th className="numeric">Requested</th><th className="numeric">Executed</th><th className="numeric">Fees</th><th className="numeric">Slippage</th><th>Status</th><th>Reason</th><th>Created</th></tr></thead>
+          <thead><tr><th>Order</th><th>Symbol</th><th>Side</th><th className="numeric">Qty</th><th className="numeric">Requested</th><th className="numeric">Executed</th><th className="numeric">Fees</th><th className="numeric">Slippage</th><th>Status</th><th>Reason</th><th>Order time</th></tr></thead>
           <tbody>{snapshot.data.orders.map((order) => <tr key={order.orderId}>
             <td className="mono">{order.orderId.slice(0, 8)}</td>
             <td><strong>{order.symbol}</strong></td>
@@ -139,7 +139,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
             <td>{formatDateTime(order.createdAt, market)}</td>
           </tr>)}</tbody>
         </table></div>) : (!snapshot.data.trades.length ? <EmptyState title="No paper fills" description="Executed paper trades appear here." /> : <div className="quant-table-scroll tall"><table className="quant-table">
-          <thead><tr><th>Symbol</th><th>Side</th><th className="numeric">Qty</th><th className="numeric">Price</th><th className="numeric">Fees</th><th className="numeric">Slippage</th><th>Reason</th><th>Executed</th></tr></thead>
+          <thead><tr><th>Symbol</th><th>Side</th><th className="numeric">Qty</th><th className="numeric">Price</th><th className="numeric">Fees</th><th className="numeric">Slippage</th><th>Reason</th><th>Execution time</th></tr></thead>
           <tbody>{snapshot.data.trades.map((trade, index) => <tr key={`${trade.symbol}-${trade.executedAt ?? index}-${index}`}>
             <td><strong>{trade.symbol}</strong></td>
             <td>{trade.side}</td>

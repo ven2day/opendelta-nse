@@ -107,11 +107,20 @@ class BacktestRouteTests(unittest.TestCase):
         self.assertEqual(record["configurationSnapshot"]["target_pct"], 1.5)
         self.assertEqual(record["configurationSnapshot"]["ema_fast"], 9)
         self.assertEqual(record["executionSettings"]["stopLossPct"], 1.0)
+        self.assertEqual(record["executionSettings"]["executionTimeframe"], "5m")
         self.assertEqual(len(self.runner.submitted), 1)
         submitted = self.runner.submitted[0]
         self.assertEqual(submitted.run_id, record["runId"])
         self.assertEqual(submitted.execution.stop_loss_pct, 1.0)
         self.assertEqual(submitted.configuration, record["configurationSnapshot"])
+
+    def test_daily_nse_run_records_its_five_minute_execution_clock(self) -> None:
+        record = self._create(
+            strategyId="rsi_dip_ladder_v1",
+            timeframe="1d",
+            configuration={},
+        )
+        self.assertEqual(record["executionSettings"]["executionTimeframe"], "5m")
 
     def test_create_resolves_built_in_universe_to_an_immutable_symbol_snapshot(self) -> None:
         record = self._create(symbols=[], universePresetId="nifty_top_20")

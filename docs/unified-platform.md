@@ -70,6 +70,12 @@ strategy-name `if/elif` chains (`tests/test_strategy_engine.py` guards this).
 Every backtest run, signal and paper lot stores `strategy_id`,
 `strategy_version` and the immutable `configuration_snapshot`.
 
+`RSI_DIP_LADDER_V1` also publishes a standard price-band lot policy in that
+snapshot. Backtest and PaperBroker both use `backend/strategies/lot_policy.py`
+to freeze the band from the first fill, require each later fill to be at least
+the configured percentage below the previous fill, enforce the finite quantity
+array and capital ceiling, and retain an independent target for every lot.
+
 ## Database
 
 The platform tables live in the existing PostgreSQL/TimescaleDB instance

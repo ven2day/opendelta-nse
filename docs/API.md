@@ -27,7 +27,7 @@ configured or its schema is behind (`python -m backend.data.migrate`).
 | GET | `/v2/strategies/{id}/config?market=` | `active` config (or null), `effectiveConfiguration`, `effectiveRiskSettings`, `all` saved configs for the market. |
 | POST | `/v2/strategies/{id}/config` | Body `{market, name, configuration, riskSettings, activate}`. Validated through the strategy's schema and rules; one active config per market and strategy. Returns 201. |
 
-`configSchema` entries are `{type: integer|number|boolean|string, default, minimum?, maximum?, enum?, label?}`.
+`configSchema` entries are `{type: integer|integer_array|number|boolean|string, default, minimum?, maximum?, enum?, label?}`. Integer arrays also support `minItems` and `maxItems` and are used by finite quantity ladders.
 
 ## Screener
 

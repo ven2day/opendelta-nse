@@ -15,7 +15,7 @@ import pandas as pd
 
 from backend.core.models import Market, MarketContext, SignalDecision
 
-FieldType = str  # "integer" | "number" | "boolean" | "string"
+FieldType = str  # "integer" | "integer_array" | "number" | "boolean" | "string"
 
 ConfigSchema = Mapping[str, Mapping[str, Any]]
 """``{field_name: {"type": ..., "default": ..., "minimum"?, "maximum"?, "enum"?, "label"?}}``
@@ -65,6 +65,23 @@ def resolve_config(schema: ConfigSchema, config: Mapping[str, Any] | None) -> di
             if isinstance(value, bool) or not float(value).is_integer():
                 raise ValueError(f"{name} must be a whole number")
             value = int(value)
+        elif kind == "integer_array":
+            if not isinstance(value, (list, tuple)) or isinstance(value, (str, bytes)):
+                raise ValueError(f"{name} must be an integer array")
+            converted: list[int] = []
+            for item in value:
+                if isinstance(item, bool) or not isinstance(item, (int, float)) or not float(item).is_integer():
+                    raise ValueError(f"{name} must contain whole numbers")
+                converted.append(int(item))
+            if "minItems" in definition and len(converted) < definition["minItems"]:
+                raise ValueError(f"{name} must contain at least {definition['minItems']} values")
+            if "maxItems" in definition and len(converted) > definition["maxItems"]:
+                raise ValueError(f"{name} must contain at most {definition['maxItems']} values")
+            if "minimum" in definition and any(item < definition["minimum"] for item in converted):
+                raise ValueError(f"{name} values must be at least {definition['minimum']}")
+            if "maximum" in definition and any(item > definition["maximum"] for item in converted):
+                raise ValueError(f"{name} values must be at most {definition['maximum']}")
+            value = converted
         elif kind == "number":
             if isinstance(value, bool):
                 raise ValueError(f"{name} must be a number")
@@ -74,9 +91,9 @@ def resolve_config(schema: ConfigSchema, config: Mapping[str, Any] | None) -> di
                 raise ValueError(f"{name} must be true or false")
         elif kind == "string":
             value = str(value)
-        if "minimum" in definition and value < definition["minimum"]:
+        if kind != "integer_array" and "minimum" in definition and value < definition["minimum"]:
             raise ValueError(f"{name} must be at least {definition['minimum']}")
-        if "maximum" in definition and value > definition["maximum"]:
+        if kind != "integer_array" and "maximum" in definition and value > definition["maximum"]:
             raise ValueError(f"{name} must be at most {definition['maximum']}")
         if "enum" in definition and value not in definition["enum"]:
             raise ValueError(f"{name} must be one of: " + ", ".join(map(str, definition["enum"])))

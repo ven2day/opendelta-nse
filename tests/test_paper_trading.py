@@ -124,6 +124,25 @@ def signal(symbol: str = "TCS", price: float = 100.0, minute: int = 0, *, market
     return {"signalId": signal_id or str(uuid.uuid4()), "market": market, "strategyId": "ema_vwap_strong_buy", "strategyVersion": "1.0.0", "symbol": symbol, "timeframe": "5m", "candleTimestamp": stamp.isoformat(), "signalType": "BUY", "status": "STRONG_BUY", "signalPrice": price, "targetPrice": round(price * 1.01, 4), "stopPrice": None, "configurationSnapshot": {"target_pct": 1.0, "ema_fast": 9}}
 
 
+def ladder_signal(symbol: str, price: float, minute: int) -> dict[str, Any]:
+    draft = signal(symbol, price, minute)
+    draft.update(
+        strategyId="rsi_dip_ladder_v1",
+        strategyVersion="1.0.0",
+        targetPrice=round(price * 1.05, 4),
+        configurationSnapshot={
+            "target_pct": 5.0,
+            "lot_sizing_mode": "PRICE_BAND_LADDER",
+            "price_band_threshold": 1000.0,
+            "high_price_quantities": [5, 10, 25, 50],
+            "low_price_quantities": [10, 20, 50, 100],
+            "dip_step_pct": 5.0,
+            "maximum_position_capital": 250000.0,
+        },
+    )
+    return draft
+
+
 def candle(minute: int, *, open_: float, high: float, low: float, close: float) -> tuple[dict[str, float], datetime]:
     stamp = datetime(2026, 9, 1, 10, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo) + timedelta(minutes=minute)
     return {"Open": open_, "High": high, "Low": low, "Close": close, "Volume": 1000.0}, stamp
@@ -171,6 +190,29 @@ class SizingAndCostTests(unittest.TestCase):
 
 
 class OrderAndLotTests(unittest.TestCase):
+    def test_rsi_dip_ladder_uses_frozen_price_band_dip_gate_and_independent_targets_after_restart(self) -> None:
+        repositories = memory_repositories()
+        broker = make_broker(repositories)
+        first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))
+        self.assertEqual((first["lotNumber"], first["quantity"]), (1, 5))
+        self.assertIsNone(broker.on_signal(ladder_signal("M&M", 2900.0, 5)))
+        self.assertEqual(repositories.orders.rows[-1]["reason"], "DIP_THRESHOLD_NOT_REACHED")
+        second = broker.on_signal(ladder_signal("M&M", 2850.0, 10))
+        third = broker.on_signal(ladder_signal("M&M", 2705.0, 15))
+        self.assertEqual([second["quantity"], third["quantity"]], [10, 25])
+        self.assertTrue(all(lot["targetPrice"] == round(lot["entryPrice"] * 1.05, 4) for lot in (first, second, third)))
+
+        row, stamp = candle(20, open_=2800.0, high=float(third["targetPrice"]) + 1, low=2790.0, close=2800.0)
+        closed = broker.on_completed_candle("M&M", row, stamp)
+        self.assertEqual([lot["lotNumber"] for lot in closed], [3])
+        self.assertEqual(sorted(lot["lotNumber"] for lot in broker.positions()), [1, 2])
+
+        reborn = make_broker(repositories)
+        fourth = reborn.on_signal(ladder_signal("M&M", 2565.0, 25))
+        self.assertEqual((fourth["cycleId"], fourth["lotNumber"], fourth["quantity"]), ("M&M-Cycle1", 4, 50))
+        self.assertIsNone(reborn.on_signal(ladder_signal("M&M", 2400.0, 30)))
+        self.assertEqual(repositories.orders.rows[-1]["reason"], "MAXIMUM_ENTRIES_PER_CYCLE")
+
     def test_the_same_signal_cannot_open_two_paper_orders(self) -> None:
         broker = make_broker()
         first = signal(signal_id="11111111-1111-1111-1111-111111111111")

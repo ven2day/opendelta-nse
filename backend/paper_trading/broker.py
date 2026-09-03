@@ -23,6 +23,7 @@ from backend.markets.base import MarketSpec
 from backend.paper_trading.accounting import Accounting
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.paper_trading.portfolio import Portfolio
+from backend.strategies.lot_policy import PriceBandLadder
 
 logger = logging.getLogger("opendelta.paper")
 
@@ -99,15 +100,35 @@ class PaperBroker:
         account_id = self.account["accountId"]
         symbol = signal["symbol"]
         open_lots = self.portfolio.lots_for(symbol)
+        snapshot = signal.get("configurationSnapshot") or {}
+        ladder = PriceBandLadder.from_config(snapshot)
         cycles, _ = self.repositories.lots.cycle_state(account_id, symbol)
         if open_lots and not self.policy.allow_additional_buys:
             return self._reject(signal, reference_price, "ADDITIONAL_BUYS_DISABLED")
-        entry_number = len(open_lots)
-        if entry_number >= self.policy.maximum_entries_per_cycle:
+        if open_lots:
+            cycle_id = open_lots[0]["cycleId"]
+            cycle_lots = [lot for lot in self.repositories.lots.list(account_id, limit=5_000) if lot["symbol"] == symbol and lot["cycleId"] == cycle_id]
+            entry_number = max(int(lot["lotNumber"]) for lot in cycle_lots)
+            cycle_number = int(cycle_id.rsplit("Cycle", 1)[1])
+        else:
+            cycle_lots = []
+            entry_number = 0
+            cycle_number = cycles + 1
+        maximum_entries = min(self.policy.maximum_entries_per_cycle, ladder.maximum_entries) if ladder else self.policy.maximum_entries_per_cycle
+        if entry_number >= maximum_entries:
             return self._reject(signal, reference_price, "MAXIMUM_ENTRIES_PER_CYCLE")
-        cycle_number = int(open_lots[0]["cycleId"].rsplit("Cycle", 1)[1]) if open_lots else cycles + 1
-        quantity = self.policy.lot_quantity(entry_number, reference_price)
+        if ladder is not None and entry_number > 0:
+            last_entry = max(cycle_lots, key=lambda lot: int(lot["lotNumber"]))
+            if not ladder.additional_entry_allowed(float(signal["signalPrice"]), float(last_entry["entryPrice"])):
+                return self._reject(signal, reference_price, "DIP_THRESHOLD_NOT_REACHED")
+        indicative_fill_price = self.market.fees.buy(reference_price, 1).price
+        first_entry_price = float(min(cycle_lots, key=lambda lot: int(lot["lotNumber"]))["entryPrice"]) if cycle_lots else indicative_fill_price
+        quantity = ladder.quantity(entry_number, first_entry_price) if ladder else self.policy.lot_quantity(entry_number, reference_price)
         fill = self.policy.buy(self.market.fees, reference_price, quantity)
+        if ladder is not None:
+            current_open_capital = sum(float(lot["entryPrice"]) * float(lot["quantity"]) for lot in open_lots)
+            if not ladder.within_capital(current_open_capital, fill.price, quantity):
+                return self._reject(signal, reference_price, "MAXIMUM_POSITION_CAPITAL")
         cost = Accounting.entry_cost(fill.price, quantity, fill.fees)
         if cost > float(self.account["cashBalance"]):
             return self._reject(signal, reference_price, "INSUFFICIENT_FUNDS")
@@ -119,7 +140,6 @@ class PaperBroker:
         if order is None:  # the unique index says this signal already opened an order
             self.rejected += 1
             return None
-        snapshot = signal.get("configurationSnapshot") or {}
         target_pct = float(snapshot.get("target_pct") or ((float(signal["targetPrice"]) / float(signal["signalPrice"]) - 1) * 100 if signal.get("targetPrice") else 1.0))
         target, stop, expires = self.policy.targets(round(fill.price, 4), target_pct, entry_time, self.bar_minutes)
         if signal.get("stopPrice") is not None and stop is None:

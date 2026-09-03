@@ -5,11 +5,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+from backend.paths import data_file
+
 StrategyKey = Literal[
     "rsi_range",
     "rsi_recovery",
 ]
-PARAMETER_FILE = Path(__file__).with_name("strategy-parameters.json")
+PARAMETER_FILE = data_file("strategy-parameters.json")
 
 
 @lru_cache(maxsize=4)

@@ -12,13 +12,13 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from live_signals import (
+from backend.compat.live_signals import (
     IST,
     DhanQuoteTick,
     FiveMinuteCandleBuilder,
     evaluate_latest_recovery,
 )
-from recovery_backtest import RecoveryConfig
+from backend.compat.recovery_backtest import RecoveryConfig
 
 SYMBOLS = 300
 BARS = 200

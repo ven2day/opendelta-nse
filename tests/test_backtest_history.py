@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from backtest_history import BacktestHistoryRepository
+from backend.backtest.history import BacktestHistoryRepository
 
 
 def owner(value: str) -> str:

@@ -10,8 +10,8 @@ The RSI state machine is unchanged: enter the configured arm zone, remain armed 
 
 ## Files changed
 
-- `recovery_backtest.py`: overlapping active list, unique trade identity/sequence, isolated lifecycle state, and symbol/universe concurrency metrics.
-- `backtest_api.py`: recovery-only research terminology and strategy version `rsi-recovery-1.1.0`.
+- `backend/compat/recovery_backtest.py`: overlapping active list, unique trade identity/sequence, isolated lifecycle state, and symbol/universe concurrency metrics.
+- `backend/app.py`: recovery-only compatibility terminology and strategy version `rsi-recovery-1.1.0`.
 - `tests/test_recovery_backtest.py` and `tests/fixtures/pine_recovery_expected.json`: replacement overlap lifecycle and deterministic Pine-parity coverage.
 - `benchmarks/recovery_benchmark.py` and `benchmarks/run_live_recovery_universe.py`: overlap throughput and old/new production reporting.
 - `web/app/backtest/backtest-dashboard.tsx`, `web/app/backtest/recovery-results.tsx`, and `web/app/globals.css`: native OpenDelta controls, cards, concurrency columns, independent trade detail, and signal-observation wording.

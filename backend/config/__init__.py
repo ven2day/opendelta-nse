@@ -1,0 +1,1 @@
+"""Application and strategy configuration."""

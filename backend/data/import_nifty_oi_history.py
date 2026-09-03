@@ -6,9 +6,9 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 
-from dhan_oi_history import HistoricalOiImportConfig, build_historical_oi_importer
-from main import DhanConfig
-from nifty_oi_regime import OiRegimeRepository
+from backend.markets.nse.oi_history import HistoricalOiImportConfig, build_historical_oi_importer
+from backend.collector import DhanConfig
+from backend.markets.nse.oi_regime import OiRegimeRepository
 
 
 def _arguments() -> argparse.Namespace:
@@ -35,7 +35,7 @@ def _expiry_schedule(path: Path) -> tuple[tuple[date, int], ...]:
 
 def main() -> int:
     arguments = _arguments()
-    workspace = Path(__file__).resolve().parent
+    workspace = Path(__file__).resolve().parents[2]
     if os.name == "nt":
         os.environ.setdefault("DHAN_TOKEN_CACHE_FILE", str(workspace / ".runtime" / "dhan" / "token_cache.json"))
         os.environ.setdefault("NSE_DATA_FILE", str(workspace / ".runtime" / "nse_data.csv"))

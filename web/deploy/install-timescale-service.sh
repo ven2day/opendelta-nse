@@ -67,7 +67,7 @@ docker run --rm \
   --network vento-nse-internal \
   --env-file "${application_environment}" \
   vento-nse-backtest:current \
-  python market_data_admin.py migrate
+  python -m backend.data.admin migrate
 
 systemctl enable --now vento-nse-timescale-backup.timer
 systemctl --no-pager --full status vento-nse-timescale.service

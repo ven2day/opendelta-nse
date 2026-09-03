@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from backtest_api import (
+from backend.app import (
     BacktestHistorySaveRequest,
     BacktestRequest,
     IST,
@@ -35,8 +35,8 @@ from backtest_api import (
     start_backtest_job,
 )
 from fastapi import HTTPException
-from main import DhanAPIError, DhanConfig
-from backtest_api import (
+from backend.collector import DhanAPIError, DhanConfig
+from backend.app import (
     _nse_session_is_open,
     platform_instruments,
     platform_market_context,
@@ -418,7 +418,7 @@ class RequestTests(unittest.TestCase):
             symbols_file = Path(directory) / "symbols.csv"
             symbols_file.write_text("symbol\nALPHA\nBETA\nGAMMA\n", encoding="utf-8")
             with patch.dict("os.environ", {"SYMBOLS_FILE": str(symbols_file), "APPLICATION_SETTINGS_DIR": directory}):
-                with patch("backtest_api._application_settings_repository", None):
+                with patch("backend.app._application_settings_repository", None):
                     response = list_market_symbols()
         self.assertEqual(response["symbols"], ["ALPHA", "BETA", "GAMMA"])
         self.assertEqual(response["symbolCount"], 3)
@@ -438,7 +438,7 @@ class RequestTests(unittest.TestCase):
                 "APPLICATION_SETTINGS_DIR": str(root / "settings"),
             }
             with patch.dict("os.environ", environment):
-                with patch("backtest_api._application_settings_repository", None):
+                with patch("backend.app._application_settings_repository", None):
                     update_application_settings(GlobalPriceSettingsRequest(minimumPrice=110, maximumPrice=3000))
                     response = list_market_symbols()
                     current = application_settings()
@@ -502,7 +502,7 @@ class StrategyLaunchRestrictionTests(unittest.TestCase):
             captured["request"] = passed_request
             return {"metadata": {"strategyMode": "ema_vwap_strong_buy"}}
 
-        with patch("backtest_api.run_strong_buy_backtest", engine):
+        with patch("backend.app.run_strong_buy_backtest", engine):
             result = run_backtest(request, self.RefusingStore())
 
         self.assertIs(captured["request"], request)
@@ -634,7 +634,7 @@ class PlatformEndpointTests(unittest.TestCase):
         def broken() -> None:
             raise RuntimeError("engine offline")
 
-        with patch("backtest_api.get_live_signal_engine", broken):
+        with patch("backend.app.get_live_signal_engine", broken):
             payload = platform_overview()
         self.assertEqual(payload["dataFreshness"]["status"], "UNAVAILABLE")
         self.assertEqual(payload["jobStatus"]["status"], "UNAVAILABLE")
@@ -643,32 +643,32 @@ class PlatformEndpointTests(unittest.TestCase):
 
     def test_overview_marks_fresh_and_stale_data_during_market_hours(self) -> None:
         fresh = _FakeEngine({"marketSession": "OPEN", "dataAgeSeconds": 120, "engineStatus": "READY", "connectionStatus": "CONNECTED"})
-        with patch("backtest_api.get_live_signal_engine", lambda: fresh):
+        with patch("backend.app.get_live_signal_engine", lambda: fresh):
             payload = platform_overview()
         self.assertEqual(payload["dataFreshness"]["status"], "FRESH")
         self.assertEqual(payload["jobStatus"]["status"], "RUNNING")
 
         stale = _FakeEngine({"marketSession": "OPEN", "dataAgeSeconds": 3600, "engineStatus": "STOPPED", "connectionStatus": "DISCONNECTED"})
-        with patch("backtest_api.get_live_signal_engine", lambda: stale):
+        with patch("backend.app.get_live_signal_engine", lambda: stale):
             payload = platform_overview()
         self.assertEqual(payload["dataFreshness"]["status"], "STALE")
         self.assertEqual(payload["jobStatus"]["status"], "STOPPED")
 
     def test_overview_treats_last_completed_candle_as_current_after_close(self) -> None:
         closed = _FakeEngine({"marketSession": "CLOSED", "dataAgeSeconds": 40000, "lastCompletedCandle": "2026-09-01T15:25:00+05:30", "engineStatus": "READY"})
-        with patch("backtest_api.get_live_signal_engine", lambda: closed):
+        with patch("backend.app.get_live_signal_engine", lambda: closed):
             payload = platform_overview()
         self.assertEqual(payload["dataFreshness"]["status"], "FRESH")
         self.assertEqual(payload["dataFreshness"]["reason"], "MARKET_CLOSED_LAST_SESSION_CURRENT")
 
     def test_instruments_lists_nse_universe_and_crypto_catalog_with_pagination(self) -> None:
-        with patch("backtest_api.get_store", lambda: _FakeStore()):
+        with patch("backend.app.get_store", lambda: _FakeStore()):
             nse = platform_instruments(market="NSE", offset=1, limit=1)
         self.assertEqual(nse["count"], 3)
         self.assertEqual([row["symbol"] for row in nse["rows"]], ["TCS"])
         self.assertEqual(nse["rows"][0]["provider"], "DHAN")
 
-        with patch("backtest_api.get_crypto_market_service", lambda: _FakeCryptoService()):
+        with patch("backend.app.get_crypto_market_service", lambda: _FakeCryptoService()):
             crypto = platform_instruments(market="crypto", offset=0, limit=100)
         self.assertEqual(crypto["count"], 1)
         self.assertEqual(crypto["rows"][0]["symbol"], "BTC/USDT")

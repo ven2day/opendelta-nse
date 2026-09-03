@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-import recovery_feature_analysis as analysis
-from main import IST
-from recovery_backtest import RecoveryConfig, calculate_recovery_indicators
+import backend.compat.recovery_feature_analysis as analysis
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig, calculate_recovery_indicators
 
 
 def fixture_candles() -> pd.DataFrame:

@@ -300,7 +300,7 @@ class TimescaleMarketDataStore:
     def migrate(self) -> None:
         from importlib.resources import files
 
-        sql = files("opendelta.sql").joinpath("001_timescale_market_data.sql").read_text()
+        sql = files("backend.data.sql").joinpath("001_timescale_market_data.sql").read_text()
         with self.pool.connection() as connection, connection.cursor() as cursor:
             cursor.execute(sql)
             connection.commit()

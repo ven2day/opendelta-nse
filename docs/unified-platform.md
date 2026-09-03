@@ -20,7 +20,7 @@ backend/
   data/         database.py, repositories.py, sql/001_platform.sql, migrate.py
   api/          screener_routes.py, backtest_routes.py, signal_routes.py,
                 paper_trading_routes.py, settings_routes.py, dashboard_routes.py
-  platform_runtime.py   wires everything into the existing FastAPI app (backtest_api.py)
+  platform_runtime.py   wires everything into the FastAPI app (backend/app.py)
 ```
 
 ## The one strategy evaluator

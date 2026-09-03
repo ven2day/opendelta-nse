@@ -8,13 +8,13 @@ import json
 import sys
 from datetime import datetime
 
-from backtest_api import (
+from backend.app import (
     BacktestRequest,
     get_store,
     run_recovery_backtest,
     run_rsi_range_backtest,
 )
-from main import IST
+from backend.collector import IST
 
 # These strategies are retired from the launch surface (run_backtest and the HTTP API
 # accept EMA/VWAP Strong Buy only). This offline regression hash still calls their

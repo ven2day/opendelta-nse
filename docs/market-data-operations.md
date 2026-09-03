@@ -13,8 +13,8 @@ Do not switch research or signal reads as part of this rollout.
    installer creates a protected credential and updates
    `MARKET_DATA_DATABASE_URL`; it never prints the credential.
 2. Export the exact official NSE trading dates for the complete approved range
-   and build the versioned calendar with `market_data_calendar.py`.
-3. Load the generated calendar with `market_data_admin.py load-sessions`, or
+   and build the versioned calendar with `python -m backend.data.calendar`.
+3. Load the generated calendar with `python -m backend.data.admin load-sessions`, or
    use `bootstrap-market-data.sh` to migrate, load, and health-check together.
 4. Review the calendar metadata, requested range, symbol mappings, and job
    counts before passing `--enqueue` to the bootstrap script.
@@ -36,16 +36,16 @@ The current NSE symbol registry and all active configured OKX instruments can
 be queued directly:
 
 ```bash
-python market_data_admin.py enqueue-nse-universe \
+python -m backend.data.admin enqueue-nse-universe \
   --timeframe 5m --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z
-python market_data_admin.py enqueue-okx-configured \
+python -m backend.data.admin enqueue-okx-configured \
   --timeframe 5m --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z
 ```
 
 Single instrument:
 
 ```bash
-python market_data_admin.py enqueue-backfill \
+python -m backend.data.admin enqueue-backfill \
   --market CRYPTO --provider OKX \
   --instrument-id INS-REPLACE --symbol BTCUSDT --timeframe 5m \
   --start 2024-09-01T00:00:00Z --end 2026-09-01T00:00:00Z \
@@ -55,7 +55,7 @@ python market_data_admin.py enqueue-backfill \
 Bulk manifest:
 
 ```bash
-python market_data_admin.py enqueue-manifest --file /secure/path/backfill.csv
+python -m backend.data.admin enqueue-manifest --file /secure/path/backfill.csv
 ```
 
 Required columns are:
@@ -70,7 +70,7 @@ crypto timeframes supported by the public provider.
 
 ## Worker lifecycle
 
-`market_data_worker.py` claims one durable job at a time with `FOR UPDATE SKIP
+`backend.data.worker` claims one durable job at a time with `FOR UPDATE SKIP
 LOCKED`. A lease allows another process to recover work after a crash. A
 successful chunk is upserted and read back; its count and exact candle SHA-256
 must match before `next_start` advances. Failures retry with exponential backoff
@@ -80,8 +80,8 @@ and repairs remaining gaps through the same provider adapter.
 Run manually:
 
 ```bash
-python market_data_worker.py --providers DHAN,OKX --maximum-chunks 100
-python market_data_admin.py health
+python -m backend.data.worker --providers DHAN,OKX --maximum-chunks 100
+python -m backend.data.admin health
 ```
 
 ## Acceptance before reader migration

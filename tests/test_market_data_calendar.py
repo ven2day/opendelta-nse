@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from market_data_calendar import generate_calendar, load_exact_trading_days
+from backend.data.calendar import generate_calendar, load_exact_trading_days
 
 
 def write_sessions(path: Path, values: list[str]) -> None:

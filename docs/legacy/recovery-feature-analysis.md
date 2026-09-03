@@ -54,7 +54,7 @@ so an interrupted universe run can resume without returning a partition from a
 different configuration. Final CSV, Parquet, and JSON reports are also written
 atomically.
 
-The production runner refuses to run if `recovery_backtest.py` differs from the
+The production runner refuses to run if `backend/compat/recovery_backtest.py` differs from the
 v1.1.0 source hash, and the exact baseline run fails unless it reconciles to
 57,510 BUY observations, 56,088 targets hit, and 1,422 OPEN observations.
 

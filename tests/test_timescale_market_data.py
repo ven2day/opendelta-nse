@@ -6,7 +6,7 @@ import uuid
 import pandas as pd
 import pytest
 
-from opendelta.timescale_market_data import (
+from backend.data.timescale import (
     BackfillJob,
     BackfillWorker,
     CanonicalCandle,

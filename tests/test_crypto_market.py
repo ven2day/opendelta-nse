@@ -7,12 +7,12 @@ from urllib.parse import parse_qs, urlparse
 import pandas as pd
 import pytest
 
-import crypto_strategy
-from crypto_engine import CryptoMarketRepository, CryptoMarketService
-from crypto_providers import OkxPublicProvider, ProviderFactory, ValrPublicProvider
-from crypto_strategy import CryptoPullbackConfig, generate_signals, run_pullback_backtest
-from market_core import MarketCandle, MarketInstrument, instrument_identifier
-from opendelta.timescale_market_data import CanonicalCandle, DualWriteResult
+import backend.markets.crypto.strategy as crypto_strategy
+from backend.markets.crypto.engine import CryptoMarketRepository, CryptoMarketService
+from backend.markets.crypto.providers import OkxPublicProvider, ProviderFactory, ValrPublicProvider
+from backend.markets.crypto.strategy import CryptoPullbackConfig, generate_signals, run_pullback_backtest
+from backend.markets.common import MarketCandle, MarketInstrument, instrument_identifier
+from backend.data.timescale import CanonicalCandle, DualWriteResult
 
 
 UTC = timezone.utc

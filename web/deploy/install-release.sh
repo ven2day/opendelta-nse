@@ -22,7 +22,7 @@ fi
 test -f "${release}/web/deploy/Dockerfile"
 test -f "${release}/web/deploy/collector.Dockerfile"
 test -f "${release}/web/deploy/backtest.Dockerfile"
-test -s "${release}/nse_symbols_rsi_volume.csv"
+test -s "${release}/data/nse_symbols_rsi_volume.csv"
 
 docker build \
   --tag "vento-nse-dashboard:${release_id}" \

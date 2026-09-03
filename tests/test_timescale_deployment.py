@@ -28,7 +28,7 @@ def test_installer_protects_credentials_and_runs_migration() -> None:
     assert "umask 077" in installer
     assert "openssl rand -hex 32" in installer
     assert 'chmod 0600 "${database_environment}" "${application_environment}"' in installer
-    assert "python market_data_admin.py migrate" in installer
+    assert "python -m backend.data.admin migrate" in installer
     assert "enable --now vento-nse-timescale-backup.timer" in installer
 
 
@@ -55,4 +55,4 @@ def test_all_timescale_shell_assets_parse() -> None:
 
 def test_runtime_image_contains_calendar_builder() -> None:
     dockerfile = read("backtest.Dockerfile")
-    assert "market_data_calendar.py" in dockerfile
+    assert "backend/data/calendar.py" in dockerfile or "COPY backend ./backend" in dockerfile

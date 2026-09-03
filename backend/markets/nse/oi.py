@@ -16,8 +16,8 @@ from urllib.request import Request, urlopen
 
 import pandas as pd
 
-from main import DhanAPIError, DhanClient, DhanConfig, historical_payload_to_frame
-from nifty_oi_regime import (
+from backend.collector import DhanAPIError, DhanClient, DhanConfig, historical_payload_to_frame
+from backend.markets.nse.oi_regime import (
     FuturesOiObservation,
     NiftyOiConfig,
     OiRegimeRepository,

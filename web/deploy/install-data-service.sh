@@ -16,7 +16,7 @@ fi
 install -d -o 10001 -g 10001 -m 0755 /var/lib/vento-nse/data
 install -d -o 10001 -g 10001 -m 0700 /var/lib/vento-nse/dhan
 if [[ ! -s /var/lib/vento-nse/data/symbols.csv ]]; then
-  install -o 10001 -g 10001 -m 0644 "${release}/symbols.csv" /var/lib/vento-nse/data/symbols.csv
+  install -o 10001 -g 10001 -m 0644 "${release}/data/symbols.csv" /var/lib/vento-nse/data/symbols.csv
 fi
 install -m 0644 \
   "${release}/web/deploy/vento-nse-data.service" \

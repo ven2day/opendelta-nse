@@ -40,7 +40,7 @@ flock -n "${backtest_root}/.nifty-oi-history-import.lock" \
     --pids-limit 256 \
     --memory 4g \
     "${image}" \
-    python import_nifty_oi_history.py \
+    python -m backend.data.import_nifty_oi_history \
       --from-date "${from_date}" \
       --to-date "${to_date}" \
       --strikes-each-side 5 \

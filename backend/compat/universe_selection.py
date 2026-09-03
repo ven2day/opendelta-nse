@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from recovery_backtest import QUALITY_WEIGHTS, SPEED_SCORES, STRATEGY_VERSION
+from backend.compat.recovery_backtest import QUALITY_WEIGHTS, SPEED_SCORES, STRATEGY_VERSION
 
 IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_TOP_N = 300

@@ -19,16 +19,16 @@ from urllib.parse import urlencode
 import numpy as np
 import pandas as pd
 
-from main import IST, DhanClient, DhanConfig, historical_payload_to_frame
-from recovery_backtest import (
+from backend.collector import IST, DhanClient, DhanConfig, historical_payload_to_frame
+from backend.compat.recovery_backtest import (
     STRATEGY_VERSION,
     RecoveryConfig,
     calculate_recovery_indicators,
     rsi_recovery_crossovers,
 )
-from recovery_feature_analysis import calculate_entry_feature_frame
-from nifty_oi_regime import NiftyOiConfig, insufficient_regime
-from ema_vwap_strong_buy import (
+from backend.compat.recovery_feature_analysis import calculate_entry_feature_frame
+from backend.markets.nse.oi_regime import NiftyOiConfig, insufficient_regime
+from backend.strategies.strong_buy_compat import (
     STRATEGY_KEY as STRONG_BUY_STRATEGY_KEY,
     STRATEGY_NAME as STRONG_BUY_STRATEGY_NAME,
     STRATEGY_VERSION as STRONG_BUY_STRATEGY_VERSION,

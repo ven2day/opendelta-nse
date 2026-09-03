@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import main
-from dhan_oi import (
+import backend.collector as main
+from backend.markets.nse.oi import (
     DhanInstrument,
     DhanInstrumentCatalog,
     DhanNiftyOiService,
@@ -18,9 +18,9 @@ from dhan_oi import (
     parse_option_chain,
     parse_rolling_option_history,
 )
-from live_signals import DhanFeedPacket, parse_dhan_feed_packets
-from main import DhanClient, DhanConfig
-from nifty_oi_regime import OiRegimeRepository
+from backend.compat.live_signals import DhanFeedPacket, parse_dhan_feed_packets
+from backend.collector import DhanClient, DhanConfig
+from backend.markets.nse.oi_regime import OiRegimeRepository
 
 
 IST = ZoneInfo("Asia/Kolkata")

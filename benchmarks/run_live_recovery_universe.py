@@ -194,7 +194,7 @@ def compare_with_previous(previous: dict[str, Any], current_summary: dict[str, A
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the deployed baseline RSI Recovery strategy over symbols.csv.")
     parser.add_argument("--url", default="http://127.0.0.1:3200/backtest")
-    parser.add_argument("--symbols", type=Path, default=Path("/opt/vento-nse/current/symbols.csv"))
+    parser.add_argument("--symbols", type=Path, default=Path("/opt/vento-nse/current/data/symbols.csv"))
     parser.add_argument("--output", type=Path, default=Path("/tmp/opendelta-rsi-recovery-overlap-baseline.json"))
     parser.add_argument("--previous", type=Path, default=Path("/tmp/opendelta-rsi-recovery-baseline.json"))
     arguments = parser.parse_args()

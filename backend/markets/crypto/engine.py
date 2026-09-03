@@ -11,8 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from crypto_providers import MarketProviderError, OkxPublicProvider, ProviderFactory, ValrPublicProvider
-from crypto_strategy import (
+from backend.markets.crypto.providers import MarketProviderError, OkxPublicProvider, ProviderFactory, ValrPublicProvider
+from backend.markets.crypto.strategy import (
     STRATEGY_KEY,
     STRATEGY_NAME,
     STRATEGY_VERSION,
@@ -22,7 +22,7 @@ from crypto_strategy import (
     run_pullback_backtest,
     signal_payload,
 )
-from market_core import (
+from backend.markets.common import (
     TIMEFRAME_SECONDS,
     MarketCandle,
     MarketInstrument,
@@ -31,7 +31,7 @@ from market_core import (
     normalize_provider_symbol,
     utc_datetime,
 )
-from opendelta.timescale_market_data import CanonicalCandle, CanonicalCandleWriter
+from backend.data.timescale import CanonicalCandle, CanonicalCandleWriter
 
 
 class CryptoMarketRepository:

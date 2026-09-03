@@ -6,9 +6,9 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 
-from crypto_engine import CryptoMarketService
-from crypto_providers import MarketProviderError
-from crypto_strategy import CryptoPullbackConfig
+from backend.markets.crypto.engine import CryptoMarketService
+from backend.markets.crypto.providers import MarketProviderError
+from backend.markets.crypto.strategy import CryptoPullbackConfig
 
 
 class AddCryptoInstrumentRequest(BaseModel):

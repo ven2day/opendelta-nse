@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from main import IST
-from recovery_backtest import RecoveryConfig
-from recovery_rsi_profit_exit import RsiProfitExitConfig
-from rsi_exit_optimizer import RsiExitOptimizationGrid, evaluate_rsi_exit_grid
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig
+from backend.compat.recovery_rsi_profit_exit import RsiProfitExitConfig
+from backend.compat.rsi_exit_optimizer import RsiExitOptimizationGrid, evaluate_rsi_exit_grid
 
 
 def daily_candles(start: str, periods: int) -> pd.DataFrame:
@@ -27,7 +27,7 @@ def daily_candles(start: str, periods: int) -> pd.DataFrame:
 
 class RsiExitOptimizerTests(unittest.TestCase):
     def test_default_grid_and_request_are_deterministic(self) -> None:
-        from backtest_api import RsiExitComparisonRequest
+        from backend.app import RsiExitComparisonRequest
 
         request = RsiExitComparisonRequest(symbols=["SBIN"])
         self.assertEqual(request.resolved_exit_model(), "RSI_PROFIT_RISK_CONTROL")
@@ -67,7 +67,7 @@ class RsiExitOptimizerTests(unittest.TestCase):
             stop_loss_pcts=(1.5,),
             max_holding_sessions=(5,),
         )
-        with patch("rsi_exit_optimizer.simulate_recovery_symbol", side_effect=fake_observations):
+        with patch("backend.compat.rsi_exit_optimizer.simulate_recovery_symbol", side_effect=fake_observations):
             first = evaluate_rsi_exit_grid(
                 {"AAA": candles},
                 timeframe="5m",

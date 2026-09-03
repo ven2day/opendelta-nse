@@ -11,7 +11,7 @@ from typing import Iterator
 
 import pandas as pd
 
-from main import instrument_company_name, load_symbols, normalize_symbol
+from backend.collector import instrument_company_name, load_symbols, normalize_symbol
 
 try:
     import fcntl

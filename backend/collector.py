@@ -24,14 +24,16 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from backend.paths import data_file
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows development fallback.
     fcntl = None
 
 BASE_DIRECTORY = Path(__file__).resolve().parent
-DEFAULT_SYMBOLS_FILE = BASE_DIRECTORY / "symbols.csv"
-DEFAULT_OUTPUT_FILE = BASE_DIRECTORY / "nse_symbols_rsi_volume.csv"
+DEFAULT_SYMBOLS_FILE = data_file("symbols.csv")
+DEFAULT_OUTPUT_FILE = data_file("nse_symbols_rsi_volume.csv")
 
 RSI_PERIOD = 14
 HISTORY_DAYS = 160

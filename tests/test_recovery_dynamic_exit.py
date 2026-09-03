@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pandas as pd
 
-import recovery_dynamic_exit
-from main import IST
-from recovery_backtest import RecoveryConfig
-from recovery_dynamic_exit import (
+import backend.compat.recovery_dynamic_exit as recovery_dynamic_exit
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig
+from backend.compat.recovery_dynamic_exit import (
     DynamicExitConfig,
     aggregate_dynamic_exit_results,
     calculate_wilder_atr,
@@ -81,7 +81,7 @@ def simulate(
     symbol: str = "TEST",
 ) -> dict:
     recovery = recovery or RecoveryConfig(target_pct=0.51)
-    with patch("recovery_dynamic_exit.simulate_recovery_symbol", return_value=observation(candles, candidates, symbol)):
+    with patch("backend.compat.recovery_dynamic_exit.simulate_recovery_symbol", return_value=observation(candles, candidates, symbol)):
         return simulate_dynamic_exit_symbol(
             symbol,
             candles,
@@ -230,7 +230,7 @@ class DynamicExitLifecycleTests(unittest.TestCase):
 
 class DynamicExitRequestTests(unittest.TestCase):
     def test_new_defaults_and_legacy_compatibility(self) -> None:
-        from backtest_api import BacktestRequest
+        from backend.app import BacktestRequest
 
         legacy = BacktestRequest(symbols=["SBIN"], strategyMode="rsi_recovery")
         self.assertEqual(legacy.resolved_exit_model(), "LEGACY_FIXED_TARGET")

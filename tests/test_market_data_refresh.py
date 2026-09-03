@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from main import DhanAPIError
-from market_data_refresh import MarketDataRefreshService
+from backend.collector import DhanAPIError
+from backend.data.refresh import MarketDataRefreshService
 
 
 class MarketDataRefreshServiceTests(unittest.TestCase):

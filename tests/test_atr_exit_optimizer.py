@@ -5,14 +5,14 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from atr_exit_optimizer import (
+from backend.compat.atr_exit_optimizer import (
     AtrOptimizationGrid,
     build_walk_forward_folds,
     evaluate_atr_exit_grid,
 )
-from main import IST
-from recovery_backtest import RecoveryConfig
-from recovery_dynamic_exit import DynamicExitConfig
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig
+from backend.compat.recovery_dynamic_exit import DynamicExitConfig
 
 
 def daily_candles(start: str, periods: int) -> pd.DataFrame:
@@ -59,7 +59,7 @@ class WalkForwardFoldTests(unittest.TestCase):
 
 class OptimizerTests(unittest.TestCase):
     def test_optimizer_request_defaults_to_dynamic_exit_model(self) -> None:
-        from backtest_api import AtrOptimizationRequest
+        from backend.app import AtrOptimizationRequest
 
         request = AtrOptimizationRequest(symbols=["SBIN"])
         self.assertEqual(request.resolved_exit_model(), "ATR_DYNAMIC_TP_SL")
@@ -101,7 +101,7 @@ class OptimizerTests(unittest.TestCase):
             minimum_stop_pcts=(0.5,),
             maximum_stop_pcts=(2.0,),
         )
-        with patch("atr_exit_optimizer.simulate_recovery_symbol", side_effect=fake_observations):
+        with patch("backend.compat.atr_exit_optimizer.simulate_recovery_symbol", side_effect=fake_observations):
             first = evaluate_atr_exit_grid(
                 {"AAA": candles},
                 timeframe="5m",

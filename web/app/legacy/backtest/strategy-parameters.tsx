@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import definitionsJson from "../../../../strategy-parameters.json";
+import definitionsJson from "../../../../data/strategy-parameters.json";
 
 export type ParameterStrategy = string;
 export type ParameterDefinition = {

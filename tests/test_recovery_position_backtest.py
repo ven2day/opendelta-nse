@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pandas as pd
 
-import recovery_position_backtest
-from main import IST
-from recovery_backtest import RecoveryConfig
-from recovery_position_backtest import (
+import backend.compat.recovery_position_backtest as recovery_position_backtest
+from backend.collector import IST
+from backend.compat.recovery_backtest import RecoveryConfig
+from backend.compat.recovery_position_backtest import (
     PositionProtectionConfig,
     aggregate_protected_results,
     simulate_protected_recovery_symbol,
@@ -106,7 +106,7 @@ def simulate(
     protection: PositionProtectionConfig | None = None,
 ) -> dict:
     with patch(
-        "recovery_position_backtest.simulate_recovery_symbol",
+        "backend.compat.recovery_position_backtest.simulate_recovery_symbol",
         return_value=observation(frame, candidates),
     ):
         return simulate_protected_recovery_symbol(
@@ -124,7 +124,7 @@ class PositionProtectionLifecycleTests(unittest.TestCase):
         frame = candles_for_sessions(["2026-01-02", "2026-01-05"])
         existing = observation(frame, [candidate(frame, 1, 0)])
         with patch(
-            "recovery_position_backtest.simulate_recovery_symbol", return_value=existing
+            "backend.compat.recovery_position_backtest.simulate_recovery_symbol", return_value=existing
         ):
             result = simulate_protected_recovery_symbol(
                 "TEST",
@@ -305,7 +305,7 @@ class PositionProtectionRequestTests(unittest.TestCase):
     def test_protection_defaults_are_safe_and_target_defaults_to_point_five_one(
         self,
     ) -> None:
-        from backtest_api import BacktestRequest
+        from backend.app import BacktestRequest
 
         request = BacktestRequest(
             symbols=["KPIGREEN"],
@@ -320,7 +320,7 @@ class PositionProtectionRequestTests(unittest.TestCase):
     def test_existing_request_contract_remains_signal_observation_by_default(
         self,
     ) -> None:
-        from backtest_api import BacktestRequest
+        from backend.app import BacktestRequest
 
         request = BacktestRequest(symbols=["KPIGREEN"], strategyMode="rsi_recovery")
         self.assertFalse(request.exitProtectionEnabled)

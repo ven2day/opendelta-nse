@@ -32,7 +32,7 @@ run_admin() {
     --mount type=bind,source="${calendar_file}",target=/run/nse-sessions.csv,readonly \
     --mount type=bind,source=/var/lib/vento-nse/backtest,target=/var/lib/vento-nse/backtest \
     vento-nse-backtest:current \
-    python market_data_admin.py "$@"
+    python -m backend.data.admin "$@"
 }
 
 run_admin migrate

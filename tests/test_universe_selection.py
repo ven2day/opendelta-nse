@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from universe_selection import (
+from backend.compat.universe_selection import (
     IST,
     ReferencePrice,
     UniverseRepository,

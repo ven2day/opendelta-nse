@@ -100,6 +100,21 @@ Suggested order: apply migrations → restart the service → verify
 retire the legacy live-signal engine (`LIVE_SIGNAL_ENGINE_ENABLED`) and the
 `/legacy/*` pages.
 
+For the NSE daily swing worker, production must have all of the following:
+
+```dotenv
+PLATFORM_CANDLE_READ_MODE=timescale-fallback
+NSE_SIGNAL_ENGINE_V2_ENABLED=true
+NSE_PAPER_TRADING_V2_ENABLED=true
+NSE_LIVE_STRATEGIES=[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"}]
+```
+
+After restart, verify the signal-health response reports the daily worker and
+that the paper account's execution policy is `NEXT_OPEN`. Daily signals are
+created only after 15:30 IST; the independent 5-minute tracking feed supplies
+the next-session paper fill and in-session marks. Do not certify the service for
+a session if either feed is stale or the paper account is missing.
+
 ## Market-data services
 
 The Dhan collector (`vento-nse-data.service` + timer) runs after the NSE close

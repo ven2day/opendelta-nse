@@ -72,6 +72,11 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
 
         def fake_worker(_market: str, *, binding: LiveStrategyBinding, **_kwargs):
             return SimpleNamespace(
+                engine=SimpleNamespace(
+                    tracked_symbols=lambda: [],
+                    track_market_candle=lambda *_args: None,
+                ),
+                configure_market_tracking=lambda **_kwargs: None,
                 start=lambda: started.append((binding.strategy_id, binding.timeframe)),
                 stop=lambda: None,
                 status=lambda: {**binding.public(), "status": "READY"},

@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from backend.data.repositories import EngineStatusRepository
 from backend.markets.base import CandleSource, MarketSpec
 from backend.signals.candle_processor import CandleProcessor
@@ -64,12 +66,30 @@ class MarketSignalWorker:
         self._lock = threading.Lock()
         self._symbols: list[str] = []
         self._last_daily_poll_date = None
+        self._last_market_candle: dict[str, pd.Timestamp] = {}
         self._state: dict[str, Any] = {"status": "STOPPED", "connectionStatus": "DISCONNECTED", "message": "Not started", "consecutiveFailures": 0, "polls": 0}
         self.candle_listeners: list[Callable[[str, Any, datetime], None]] = []
+        self.market_candle_listeners: list[Callable[[str, Any, datetime], None]] = []
+        self.market_symbols: Callable[[], Sequence[str]] | None = None
+        self.market_processor = CandleProcessor(
+            bar_minutes=market.minutes("5m"),
+            timezone=market.timezone,
+            clock=clock,
+        )
 
     def add_candle_listener(self, listener: Callable[[str, Any, datetime], None]) -> None:
         """Called with ``(symbol, candle_row, timestamp)`` for every completed candle the engine accepts."""
         self.candle_listeners.append(listener)
+
+    def configure_market_tracking(
+        self,
+        *,
+        symbols: Callable[[], Sequence[str]],
+        listener: Callable[[str, Any, datetime], None],
+    ) -> None:
+        """Attach an independent 5m feed for daily signal/portfolio tracking."""
+        self.market_symbols = symbols
+        self.market_candle_listeners.append(listener)
 
     # ---- lifecycle ---------------------------------------------------------------
 
@@ -97,10 +117,29 @@ class MarketSignalWorker:
         while not self._stop.is_set():
             now = self.clock()
             if not self._poll_is_due(now):
-                self._set_state(status="MARKET_CLOSED", connection="DISCONNECTED", message=f"{self.market.market} session is closed")
+                if self.market_candle_listeners and self.market.session_is_open(now):
+                    try:
+                        tracked = self.poll_market_once()
+                        backoff = self.poll_seconds
+                        self._set_state(
+                            status="READY",
+                            connection="CONNECTED",
+                            message=f"Tracking {tracked} intraday candle(s)",
+                            reset_failures=True,
+                        )
+                    except Exception as error:  # noqa: BLE001 - expose and retry tracking failures
+                        backoff = min(backoff * 2, self.maximum_backoff_seconds)
+                        self._set_state(status="ERROR", connection="DISCONNECTED", message=f"Market tracking failed, retrying in {int(backoff)}s: {error}"[:240], failure=True)
+                else:
+                    self._set_state(status="MARKET_CLOSED", connection="DISCONNECTED", message=f"{self.market.market} session is closed")
                 self._stop.wait(self.closed_poll_seconds)
                 continue
             try:
+                # At the daily close, consume the final completed 5m bar before
+                # evaluating the 1d strategy. A signal created below therefore
+                # cannot execute retrospectively inside its own signal day.
+                if self.engine.timeframe == "1d" and self.market_candle_listeners:
+                    self.poll_market_once()
                 created = self.poll_once()
                 if self.engine.timeframe == "1d" and self.market.daily_session_close is not None:
                     self._last_daily_poll_date = self._local_moment(now).date()
@@ -165,6 +204,39 @@ class MarketSignalWorker:
         if failures and len(failures) == len(symbols) and symbols:
             raise RuntimeError("every symbol failed; " + failures[0])
         return created
+
+    def poll_market_once(self) -> int:
+        """Forward only newly completed 5m candles to lifecycle listeners."""
+        if self.market_symbols is None or not self.market_candle_listeners:
+            return 0
+        now = self.clock()
+        now_local = pd.Timestamp(now)
+        now_local = now_local.tz_localize(self.market.timezone) if now_local.tzinfo is None else now_local.tz_convert(self.market.timezone)
+        session_start = now_local.normalize()
+        symbols = list(dict.fromkeys(str(item).strip().upper() for item in self.market_symbols() if str(item).strip()))
+        forwarded = 0
+        failures: list[str] = []
+        for symbol in symbols:
+            if self._stop.is_set():
+                break
+            try:
+                frame = self.source.candles(symbol, "5m", session_start.to_pydatetime(), now, warmup_bars=0)
+                completed = self.market_processor.completed(frame, now)
+                cutoff = self._last_market_candle.get(symbol, session_start - pd.Timedelta(microseconds=1))
+                fresh = completed[completed.index > cutoff]
+                for stamp, row in fresh.iterrows():
+                    for listener in self.market_candle_listeners:
+                        try:
+                            listener(symbol, row, stamp.to_pydatetime())
+                        except Exception:  # noqa: BLE001 - one consumer must not stop market tracking
+                            logger.exception("Market-candle listener failed for %s", symbol)
+                    self._last_market_candle[symbol] = stamp
+                    forwarded += 1
+            except Exception as error:  # noqa: BLE001 - isolate provider failures by symbol
+                failures.append(f"{symbol}: {error}"[:120])
+        if failures and len(failures) == len(symbols) and symbols:
+            raise RuntimeError("every tracked symbol failed; " + failures[0])
+        return forwarded
 
     def refresh_universe(self) -> list[str]:
         symbols = list(dict.fromkeys(str(item).strip().upper() for item in self.universe() if str(item).strip()))

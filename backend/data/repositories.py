@@ -819,6 +819,7 @@ def _public_pending_entry(row: Mapping[str, Any]) -> dict[str, Any]:
         "entryReason": row["entry_reason"],
         "cycleId": row["cycle_id"],
         "lotNumber": row["lot_number"],
+        "createdAt": _iso(row["created_at"]),
     }
 
 

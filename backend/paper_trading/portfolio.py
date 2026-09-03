@@ -13,11 +13,13 @@ class Portfolio:
     pending_entries: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # symbol -> signals awaiting NEXT_OPEN
 
     @classmethod
-    def rebuild(cls, account: Mapping[str, Any], lots: list[dict[str, Any]]) -> "Portfolio":
+    def rebuild(cls, account: Mapping[str, Any], lots: list[dict[str, Any]], pending_entries: list[dict[str, Any]] | None = None) -> "Portfolio":
         portfolio = cls(account=dict(account))
         for lot in lots:
             if lot["status"] == "OPEN":
                 portfolio.open_lots.setdefault(lot["symbol"], []).append(dict(lot))
+        for entry in pending_entries or []:
+            portfolio.pending_entries.setdefault(entry["symbol"], []).append(dict(entry))
         return portfolio
 
     def lots_for(self, symbol: str) -> list[dict[str, Any]]:

@@ -18,7 +18,7 @@ from typing import Any, Callable, Mapping
 
 import pandas as pd
 
-from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperTradeRepository
+from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperPendingEntryRepository, PaperTradeRepository
 from backend.markets.base import MarketSpec
 from backend.paper_trading.accounting import Accounting
 from backend.paper_trading.execution import ExecutionPolicy
@@ -37,6 +37,7 @@ class PaperRepositories:
     orders: PaperOrderRepository
     lots: PaperLotRepository
     trades: PaperTradeRepository
+    pending: PaperPendingEntryRepository
 
 
 class PaperBroker:
@@ -63,7 +64,7 @@ class PaperBroker:
             starting_balance=starting_balance if starting_balance is not None else DEFAULT_STARTING_BALANCES[market.market],
             risk_settings=self.policy.public(),
         )
-        self.portfolio = Portfolio.rebuild(self.account, repositories.lots.open(self.account["accountId"]))
+        self.portfolio = self._rebuild_portfolio()
         self.rejected = 0
         self.filled = 0
 
@@ -75,11 +76,20 @@ class PaperBroker:
             if account is None:
                 raise RuntimeError(f"Paper account for {self.market.market} disappeared")
             self.account = account
-            self.portfolio = Portfolio.rebuild(account, self.repositories.lots.open(account["accountId"]))
+            self.portfolio = self._rebuild_portfolio()
             return self.portfolio
+
+    def _rebuild_portfolio(self) -> Portfolio:
+        account_id = self.account["accountId"]
+        return Portfolio.rebuild(
+            self.account,
+            self.repositories.lots.open(account_id),
+            self.repositories.pending.list(account_id),
+        )
 
     def reset(self, *, starting_balance: float | None = None) -> dict[str, Any]:
         with self._lock:
+            self.repositories.pending.clear(self.account["accountId"])
             self.account = self.repositories.accounts.reset(self.market.market, starting_balance=starting_balance, risk_settings=self.policy.public())
             self.portfolio = Portfolio.rebuild(self.account, [])
             return self.account
@@ -97,7 +107,7 @@ class PaperBroker:
                 # driven only by completed-candle dip thresholds below.
                 return None
             if self.policy.price_model == "NEXT_OPEN":
-                self.portfolio.pending_entries.setdefault(signal["symbol"], []).append(dict(signal))
+                self._persist_pending_entry(dict(signal))
                 return None
             return self._fill_entry(signal, float(signal["signalPrice"]), pd.Timestamp(signal["candleTimestamp"]).to_pydatetime())
 
@@ -179,9 +189,16 @@ class PaperBroker:
         open_, high, low, close = (float(candle[key]) for key in ("Open", "High", "Low", "Close"))
         closed: list[dict[str, Any]] = []
         with self._lock:
+            deferred: list[dict[str, Any]] = []
             for signal in self.portfolio.pending_entries.pop(symbol, []):
                 if pd.Timestamp(signal["candleTimestamp"]) < pd.Timestamp(stamp):
                     self._fill_entry(signal, open_, stamp)
+                    if signal.get("pendingEntryId"):
+                        self.repositories.pending.delete(signal["pendingEntryId"])
+                else:
+                    deferred.append(signal)
+            if deferred:
+                self.portfolio.pending_entries[symbol] = deferred
             for lot in self.portfolio.lots_for(symbol):
                 if pd.Timestamp(lot["entryTimestamp"]) >= pd.Timestamp(stamp):
                     continue
@@ -220,7 +237,7 @@ class PaperBroker:
         if int(latest["lotNumber"]) >= maximum_entries or not ladder.additional_entry_allowed(close, float(latest["entryPrice"])):
             return
         target_pct = float(snapshot["target_pct"])
-        self.portfolio.pending_entries.setdefault(symbol, []).append({
+        signal = {
             "signalId": None,
             "market": self.market.market,
             "strategyId": first["strategyId"],
@@ -234,7 +251,18 @@ class PaperBroker:
             "stopPrice": None,
             "configurationSnapshot": snapshot,
             "entryReason": "LADDER_DIP_ENTRY",
-        })
+        }
+        self._persist_pending_entry(signal, cycle_id=cycle_id, lot_number=int(latest["lotNumber"]) + 1)
+
+    def _persist_pending_entry(self, signal: dict[str, Any], *, cycle_id: str | None = None, lot_number: int | None = None) -> None:
+        stored = self.repositories.pending.insert(
+            signal,
+            account_id=self.account["accountId"],
+            cycle_id=cycle_id,
+            lot_number=lot_number,
+        )
+        if stored is not None:
+            self.portfolio.pending_entries.setdefault(signal["symbol"], []).append(stored)
 
     def close_lot_manually(self, lot_id: str, *, price: float, timestamp: datetime | None = None) -> dict[str, Any]:
         with self._lock:

@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 
 from backend.data.database import Database
-from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperTradeRepository
+from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperPendingEntryRepository, PaperTradeRepository
 from backend.markets.base import market_spec
 from backend.markets.nse.fees import NseFeeModel
 from backend.paper_trading import Accounting, ExecutionPolicy, PaperBroker, PaperRepositories
@@ -121,8 +121,32 @@ class MemoryTrades:
         return [dict(r) for r in self.rows if r["account_id"] == account_id][:limit]
 
 
+class MemoryPendingEntries:
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, Any]] = {}
+
+    def insert(self, signal, *, account_id, cycle_id=None, lot_number=None):
+        if signal.get("signalId") and any(row["accountId"] == account_id and row.get("signalId") == signal["signalId"] for row in self.rows.values()):
+            return None
+        if cycle_id is not None and any(row["accountId"] == account_id and row.get("cycleId") == cycle_id and row.get("lotNumber") == lot_number for row in self.rows.values()):
+            return None
+        pending_id = str(uuid.uuid4())
+        row = {**dict(signal), "pendingEntryId": pending_id, "accountId": account_id, "cycleId": cycle_id, "lotNumber": lot_number}
+        self.rows[pending_id] = row
+        return dict(row)
+
+    def list(self, account_id):
+        return [dict(row) for row in self.rows.values() if row["accountId"] == account_id]
+
+    def delete(self, pending_entry_id):
+        self.rows.pop(str(pending_entry_id), None)
+
+    def clear(self, account_id):
+        self.rows = {key: row for key, row in self.rows.items() if row["accountId"] != account_id}
+
+
 def memory_repositories() -> PaperRepositories:
-    return PaperRepositories(MemoryAccounts(), MemoryOrders(), MemoryLots(), MemoryTrades())  # type: ignore[arg-type]
+    return PaperRepositories(MemoryAccounts(), MemoryOrders(), MemoryLots(), MemoryTrades(), MemoryPendingEntries())  # type: ignore[arg-type]
 
 
 def signal(symbol: str = "TCS", price: float = 100.0, minute: int = 0, *, market: str = "NSE", signal_id: str | None = None) -> dict[str, Any]:
@@ -196,6 +220,24 @@ class SizingAndCostTests(unittest.TestCase):
 
 
 class OrderAndLotTests(unittest.TestCase):
+    def test_scheduled_ladder_entry_survives_restart_before_next_open(self) -> None:
+        repositories = memory_repositories()
+        broker = make_broker(repositories)
+        first = broker.on_signal(ladder_signal("M&M", 3000.0, 0))
+
+        trigger, trigger_stamp = candle(5, open_=2860.0, high=2870.0, low=2840.0, close=2850.0)
+        broker.on_completed_candle("M&M", trigger, trigger_stamp)
+        self.assertEqual(len(repositories.pending.rows), 1)
+
+        reborn = make_broker(repositories)
+        following, following_stamp = candle(10, open_=2840.0, high=2850.0, low=2830.0, close=2845.0)
+        reborn.on_completed_candle("M&M", following, following_stamp)
+
+        lots = sorted(reborn.positions(), key=lambda lot: lot["lotNumber"])
+        self.assertEqual([(lot["lotNumber"], lot["quantity"]) for lot in lots], [(1, 5), (2, 10)])
+        self.assertEqual(pd.Timestamp(lots[1]["entryTimestamp"]), pd.Timestamp(following_stamp))
+        self.assertEqual(repositories.pending.rows, {})
+
     def test_rsi_dip_ladder_uses_frozen_price_band_dip_gate_and_independent_targets_after_restart(self) -> None:
         repositories = memory_repositories()
         broker = make_broker(repositories)
@@ -358,7 +400,7 @@ class PaperDatabaseTests(unittest.TestCase):
         cls.database.open()
         cls.database.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
         cls.database.migrate()
-        cls.repositories = PaperRepositories(PaperAccountRepository(cls.database), PaperOrderRepository(cls.database), PaperLotRepository(cls.database), PaperTradeRepository(cls.database))
+        cls.repositories = PaperRepositories(PaperAccountRepository(cls.database), PaperOrderRepository(cls.database), PaperLotRepository(cls.database), PaperTradeRepository(cls.database), PaperPendingEntryRepository(cls.database))
 
     @classmethod
     def tearDownClass(cls) -> None:

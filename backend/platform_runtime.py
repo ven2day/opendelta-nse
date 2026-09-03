@@ -38,6 +38,7 @@ from backend.data.repositories import (
     PaperAccountRepository,
     PaperLotRepository,
     PaperOrderRepository,
+    PaperPendingEntryRepository,
     PaperTradeRepository,
     SavedUniverseRepository,
     ScreenerResultRepository,
@@ -153,7 +154,7 @@ class PlatformRuntime:
 
     def paper_repositories(self) -> PaperRepositories:
         database = self.require_database()
-        return PaperRepositories(PaperAccountRepository(database), PaperOrderRepository(database), PaperLotRepository(database), PaperTradeRepository(database))
+        return PaperRepositories(PaperAccountRepository(database), PaperOrderRepository(database), PaperLotRepository(database), PaperTradeRepository(database), PaperPendingEntryRepository(database))
 
     def paper_broker(self, market: str) -> PaperBroker:
         key = market.strip().upper()

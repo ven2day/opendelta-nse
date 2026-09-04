@@ -1,0 +1,26 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          # The key above is restricted server-side (forced command in
+          # authorized_keys) to running exactly one script, regardless of
+          # what's sent here. See web/deploy/ci-deploy.sh.
+          script: /root/repos/opendelta-nse/web/deploy/ci-deploy.sh
+          command_timeout: 20m

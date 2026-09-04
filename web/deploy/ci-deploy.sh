@@ -26,11 +26,16 @@ log "building images"
 
 log "cutting over backtest service"
 previous_backtest_image="$(docker inspect --format '{{.Image}}' opendelta-backtest 2>/dev/null || true)"
-systemctl restart opendelta-backtest.service
+if ! systemctl restart opendelta-backtest.service; then
+  restart_rc=$?
+  log "systemctl restart exited ${restart_rc}; retrying once"
+  sleep 2
+  systemctl restart opendelta-backtest.service
+fi
 
 backtest_healthy=false
 for _ in $(seq 1 90); do
-  status="$(docker inspect --format '{{.State.Health.Status}}' opendelta-backtest 2>/dev/null)"
+  status="$(docker inspect --format '{{.State.Health.Status}}' opendelta-backtest 2>/dev/null || echo starting)"
   if [[ "${status}" == "healthy" ]]; then
     backtest_healthy=true
     break

@@ -202,6 +202,19 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
   expect(shell.childrenFitOneRow).toBe(true);
   const navFits = await page.locator(".platform-topnav").evaluate((nav) => nav.scrollWidth <= nav.clientWidth + 1);
   expect(navFits).toBe(true);
+  const compactNavigation = await page.locator(".platform-topnav").evaluate((nav) => ({
+    width: nav.getBoundingClientRect().width,
+    linkWidths: Array.from(nav.querySelectorAll("a"), (link) => link.getBoundingClientRect().width),
+    flexGrow: getComputedStyle(nav).flexGrow,
+  }));
+  expect(compactNavigation.width).toBeLessThanOrEqual(270);
+  expect(compactNavigation.flexGrow).toBe("0");
+  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40]);
+  const settingsLink = page.getByRole("link", { name: "Settings", exact: true });
+  const collapsedWidth = await settingsLink.evaluate((link) => link.getBoundingClientRect().width);
+  await settingsLink.hover();
+  await expect(settingsLink.locator(".platform-nav-label")).toBeVisible();
+  await expect.poll(() => settingsLink.evaluate((link) => link.getBoundingClientRect().width)).toBeGreaterThan(collapsedWidth + 35);
   const workspaceWidth = await page.locator(".quant-workspace").evaluate((element) => element.getBoundingClientRect().width);
   expect(workspaceWidth).toBeGreaterThanOrEqual(1400);
   const screenerColumns = await page.locator(".quant-screener-layout").evaluate((layout) => {

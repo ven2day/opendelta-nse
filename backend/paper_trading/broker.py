@@ -12,14 +12,21 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import pandas as pd
 
 from backend.core.fifo import FifoInventory, net_profit_target_price
-from backend.data.repositories import PaperAccountRepository, PaperLotRepository, PaperOrderRepository, PaperPendingEntryRepository, PaperTradeRepository
+from backend.data.repositories import (
+    PaperAccountRepository,
+    PaperLotRepository,
+    PaperOrderRepository,
+    PaperPendingEntryRepository,
+    PaperTradeRepository,
+)
 from backend.markets.base import MarketSpec
 from backend.paper_trading.accounting import Accounting
 from backend.paper_trading.execution import ExecutionPolicy
@@ -48,6 +55,7 @@ class PaperBroker:
         market: MarketSpec,
         repositories: PaperRepositories,
         policy: ExecutionPolicy,
+        policy_resolver: Callable[[Mapping[str, Any]], ExecutionPolicy] | None = None,
         timeframe: str,
         clock: Callable[[], datetime],
         starting_balance: float | None = None,
@@ -55,6 +63,7 @@ class PaperBroker:
         self.market = market
         self.repositories = repositories
         self.policy = policy.validate()
+        self.policy_resolver = policy_resolver
         self.timeframe = timeframe
         self.bar_minutes = market.minutes(timeframe)
         self.clock = clock
@@ -62,7 +71,9 @@ class PaperBroker:
         self.account = repositories.accounts.get_or_create(
             market.market,
             currency=market.currency,
-            starting_balance=starting_balance if starting_balance is not None else DEFAULT_STARTING_BALANCES[market.market],
+            starting_balance=starting_balance
+            if starting_balance is not None
+            else DEFAULT_STARTING_BALANCES[market.market],
             risk_settings=self.policy.public(),
         )
         self._inventories = self._load_fifo_inventories()
@@ -93,7 +104,9 @@ class PaperBroker:
     def reset(self, *, starting_balance: float | None = None) -> dict[str, Any]:
         with self._lock:
             self.repositories.pending.clear(self.account["accountId"])
-            self.account = self.repositories.accounts.reset(self.market.market, starting_balance=starting_balance, risk_settings=self.policy.public())
+            self.account = self.repositories.accounts.reset(
+                self.market.market, starting_balance=starting_balance, risk_settings=self.policy.public()
+            )
             self._inventories = {}
             self.portfolio = Portfolio.rebuild(self.account, [])
             return self.account
@@ -105,6 +118,7 @@ class PaperBroker:
         if signal.get("market") != self.market.market or signal.get("signalType") != "BUY":
             return None
         with self._lock:
+            policy = self._policy_for(signal)
             open_lots = self.portfolio.lots_for(
                 signal["symbol"], strategy_id=signal["strategyId"], timeframe=signal["timeframe"]
             )
@@ -112,12 +126,19 @@ class PaperBroker:
                 # The initial RSI signal starts the cycle. Further entries are
                 # driven only by completed-candle dip thresholds below.
                 return None
-            if self.policy.price_model == "NEXT_OPEN":
-                self._persist_pending_entry(dict(signal))
+            if policy.price_model == "NEXT_OPEN":
+                self._persist_pending_entry(self._with_policy_snapshot(signal, policy))
                 return None
-            return self._fill_entry(signal, float(signal["signalPrice"]), pd.Timestamp(signal["candleTimestamp"]).to_pydatetime())
+            return self._fill_entry(
+                self._with_policy_snapshot(signal, policy),
+                float(signal["signalPrice"]),
+                pd.Timestamp(signal["candleTimestamp"]).to_pydatetime(),
+            )
 
-    def _fill_entry(self, signal: Mapping[str, Any], reference_price: float, entry_time: datetime) -> dict[str, Any] | None:
+    def _fill_entry(
+        self, signal: Mapping[str, Any], reference_price: float, entry_time: datetime
+    ) -> dict[str, Any] | None:
+        policy = self._policy_for(signal)
         account_id = self.account["accountId"]
         symbol = signal["symbol"]
         signal_timeframe = str(signal.get("timeframe") or self.timeframe)
@@ -125,7 +146,7 @@ class PaperBroker:
         snapshot = signal.get("configurationSnapshot") or {}
         ladder = PriceBandLadder.from_config(snapshot)
         cycles, _ = self.repositories.lots.cycle_state(account_id, symbol)
-        if open_lots and not self.policy.allow_additional_buys:
+        if open_lots and not policy.allow_additional_buys:
             return self._reject(signal, reference_price, "ADDITIONAL_BUYS_DISABLED")
         if open_lots:
             cycle_id = open_lots[0]["cycleId"]
@@ -136,7 +157,11 @@ class PaperBroker:
             cycle_lots = []
             entry_number = 0
             cycle_number = cycles + 1
-        maximum_entries = min(self.policy.maximum_entries_per_cycle, ladder.maximum_entries) if ladder else self.policy.maximum_entries_per_cycle
+        maximum_entries = (
+            min(policy.maximum_entries_per_cycle, ladder.maximum_entries)
+            if ladder
+            else policy.maximum_entries_per_cycle
+        )
         if entry_number >= maximum_entries:
             return self._reject(signal, reference_price, "MAXIMUM_ENTRIES_PER_CYCLE")
         if ladder is not None and entry_number > 0:
@@ -144,40 +169,100 @@ class PaperBroker:
             if not ladder.additional_entry_allowed(float(signal["signalPrice"]), float(last_entry["entryPrice"])):
                 return self._reject(signal, reference_price, "DIP_THRESHOLD_NOT_REACHED")
         indicative_fill_price = self.market.fees.buy(reference_price, 1).price
-        first_entry_price = float(min(cycle_lots, key=lambda lot: int(lot["lotNumber"]))["entryPrice"]) if cycle_lots else indicative_fill_price
-        quantity = ladder.quantity(entry_number, first_entry_price) if ladder else self.policy.lot_quantity(entry_number, reference_price)
-        fill = self.policy.buy(self.market.fees, reference_price, quantity)
+        first_entry_price = (
+            float(min(cycle_lots, key=lambda lot: int(lot["lotNumber"]))["entryPrice"])
+            if cycle_lots
+            else indicative_fill_price
+        )
+        quantity = (
+            ladder.quantity(entry_number, first_entry_price)
+            if ladder
+            else policy.lot_quantity(entry_number, reference_price)
+        )
+        fill = policy.buy(self.market.fees, reference_price, quantity)
         if ladder is not None:
-            current_open_capital = self._fifo_inventory(symbol).cost if self.market.market == "NSE" else sum(float(lot["entryPrice"]) * float(lot["quantity"]) for lot in open_lots)
+            current_open_capital = (
+                self._fifo_inventory(symbol).cost
+                if self.market.market == "NSE"
+                else sum(float(lot["entryPrice"]) * float(lot["quantity"]) for lot in open_lots)
+            )
             if not ladder.within_capital(current_open_capital, fill.price, quantity):
                 return self._reject(signal, reference_price, "MAXIMUM_POSITION_CAPITAL")
         cost = Accounting.entry_cost(fill.price, quantity, fill.fees)
         if cost > float(self.account["cashBalance"]):
             return self._reject(signal, reference_price, "INSUFFICIENT_FUNDS")
+        rejection = self._portfolio_rejection(policy, cost, entry_time, opens_new_position=not open_lots)
+        if rejection is not None:
+            return self._reject(signal, reference_price, rejection)
         order = self.repositories.orders.insert(
-            account_id=account_id, market=self.market.market, signal_id=signal.get("signalId"),
-            strategy_id=signal["strategyId"], strategy_version=signal["strategyVersion"], symbol=symbol, side="BUY",
-            quantity=quantity, requested_price=reference_price, executed_price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), status="FILLED",
+            account_id=account_id,
+            market=self.market.market,
+            signal_id=signal.get("signalId"),
+            strategy_id=signal["strategyId"],
+            strategy_version=signal["strategyVersion"],
+            symbol=symbol,
+            side="BUY",
+            quantity=quantity,
+            requested_price=reference_price,
+            executed_price=round(fill.price, 4),
+            fees=round(fill.fees, 4),
+            slippage=round(fill.slippage, 4),
+            status="FILLED",
         )
         if order is None:  # the unique index says this signal already opened an order
             self.rejected += 1
             return None
-        target_pct = float(snapshot.get("target_pct") or ((float(signal["targetPrice"]) / float(signal["signalPrice"]) - 1) * 100 if signal.get("targetPrice") else 1.0))
-        target, stop, expires = self.policy.targets(
+        target_pct = float(
+            snapshot.get("target_pct")
+            or (
+                (float(signal["targetPrice"]) / float(signal["signalPrice"]) - 1) * 100
+                if signal.get("targetPrice")
+                else 1.0
+            )
+        )
+        target, stop, expires = policy.targets(
             round(fill.price, 4), target_pct, entry_time, self.market.minutes(signal_timeframe)
         )
         if signal.get("stopPrice") is not None and stop is None:
             stop = float(signal["stopPrice"])
         lot = self.repositories.lots.insert(
-            account_id=account_id, order_id=order["orderId"], signal_id=signal.get("signalId"), market=self.market.market,
-            strategy_id=signal["strategyId"], strategy_version=signal["strategyVersion"], symbol=symbol, timeframe=signal_timeframe,
-            cycle_id=f"{symbol}-Cycle{cycle_number}", lot_number=entry_number + 1, entry_timestamp=entry_time, entry_price=round(fill.price, 4),
-            quantity=quantity, target_price=target, stop_price=stop, expires_at=expires, fees=round(fill.fees, 4),
-            unrealized_pnl=Accounting.unrealized_pnl(round(fill.price, 4), round(fill.price, 4), quantity, fill.fees), configuration_snapshot=snapshot,
+            account_id=account_id,
+            order_id=order["orderId"],
+            signal_id=signal.get("signalId"),
+            market=self.market.market,
+            strategy_id=signal["strategyId"],
+            strategy_version=signal["strategyVersion"],
+            symbol=symbol,
+            timeframe=signal_timeframe,
+            cycle_id=f"{symbol}-Cycle{cycle_number}",
+            lot_number=entry_number + 1,
+            entry_timestamp=entry_time,
+            entry_price=round(fill.price, 4),
+            quantity=quantity,
+            target_price=target,
+            stop_price=stop,
+            expires_at=expires,
+            fees=round(fill.fees, 4),
+            unrealized_pnl=Accounting.unrealized_pnl(round(fill.price, 4), round(fill.price, 4), quantity, fill.fees),
+            configuration_snapshot=snapshot,
         )
-        self.repositories.trades.insert(account_id=account_id, lot_id=lot["lotId"], market=self.market.market, symbol=symbol, side="BUY", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason=signal.get("entryReason", "SIGNAL_ENTRY"), executed_at=entry_time)
+        self.repositories.trades.insert(
+            account_id=account_id,
+            lot_id=lot["lotId"],
+            market=self.market.market,
+            symbol=symbol,
+            side="BUY",
+            quantity=quantity,
+            price=round(fill.price, 4),
+            fees=round(fill.fees, 4),
+            slippage=round(fill.slippage, 4),
+            reason=signal.get("entryReason", "SIGNAL_ENTRY"),
+            executed_at=entry_time,
+        )
         if self.market.market == "NSE":
-            self._fifo_inventory(symbol).add(lot["lotId"], entry_time, round(fill.price, 4), quantity, round(fill.fees, 4))
+            self._fifo_inventory(symbol).add(
+                lot["lotId"], entry_time, round(fill.price, 4), quantity, round(fill.fees, 4)
+            )
         self.account["cashBalance"] = self.repositories.accounts.adjust_cash(account_id, -cost)
         self.portfolio.add_lot(lot)
         self._mark_open_lots(symbol, round(fill.price, 4), {})
@@ -187,12 +272,86 @@ class PaperBroker:
 
     def _reject(self, signal: Mapping[str, Any], price: float, reason: str) -> None:
         self.repositories.orders.insert(
-            account_id=self.account["accountId"], market=self.market.market, signal_id=signal.get("signalId"),
-            strategy_id=signal["strategyId"], strategy_version=signal["strategyVersion"], symbol=signal["symbol"], side="BUY",
-            quantity=0, requested_price=price, executed_price=None, fees=0.0, slippage=0.0, status="REJECTED", reason=reason,
+            account_id=self.account["accountId"],
+            market=self.market.market,
+            signal_id=signal.get("signalId"),
+            strategy_id=signal["strategyId"],
+            strategy_version=signal["strategyVersion"],
+            symbol=signal["symbol"],
+            side="BUY",
+            quantity=0,
+            requested_price=price,
+            executed_price=None,
+            fees=0.0,
+            slippage=0.0,
+            status="REJECTED",
+            reason=reason,
         )
         self.rejected += 1
         return None
+
+    def _policy_for(self, item: Mapping[str, Any]) -> ExecutionPolicy:
+        snapshot = item.get("configurationSnapshot") or {}
+        stored = snapshot.get("_execution_policy") if isinstance(snapshot, Mapping) else None
+        if isinstance(stored, Mapping):
+            return ExecutionPolicy.from_mapping(stored, whole_units=(self.market.market == "NSE"))
+        if self.policy_resolver is not None:
+            return self.policy_resolver(item).validate()
+        return self.policy
+
+    @staticmethod
+    def _with_policy_snapshot(signal: Mapping[str, Any], policy: ExecutionPolicy) -> dict[str, Any]:
+        stored = dict(signal)
+        snapshot = dict(stored.get("configurationSnapshot") or {})
+        snapshot["_execution_policy"] = policy.public()
+        stored["configurationSnapshot"] = snapshot
+        return stored
+
+    def _portfolio_rejection(
+        self,
+        policy: ExecutionPolicy,
+        proposed_cost: float,
+        moment: datetime,
+        *,
+        opens_new_position: bool,
+    ) -> str | None:
+        open_lots = self.portfolio.all_open()
+        if opens_new_position:
+            positions = {(lot["symbol"], lot["strategyId"], lot["timeframe"]) for lot in open_lots}
+            if len(positions) >= policy.maximum_open_positions:
+                return "MAXIMUM_OPEN_POSITIONS"
+        exposure = sum(
+            float(lot.get("costBasisPrice") or lot["entryPrice"]) * float(lot["quantity"]) for lot in open_lots
+        )
+        maximum_exposure = float(self.account["startingBalance"]) * policy.maximum_total_exposure_pct / 100.0
+        if exposure + proposed_cost > maximum_exposure:
+            return "MAXIMUM_TOTAL_EXPOSURE"
+        local_day = self._market_date(moment)
+        trades = self.repositories.trades.list(self.account["accountId"], limit=10_000)
+        buys_today = 0
+        for trade in trades:
+            side = trade.get("side")
+            executed = trade.get("executedAt", trade.get("executed_at"))
+            if side == "BUY" and executed is not None and self._market_date(executed) == local_day:
+                buys_today += 1
+        if buys_today >= policy.maximum_daily_trades:
+            return "MAXIMUM_DAILY_TRADES"
+        realized_today = 0.0
+        for lot in self.repositories.lots.list(self.account["accountId"], limit=10_000):
+            exited = lot.get("exitTimestamp")
+            if exited is not None and self._market_date(exited) == local_day:
+                realized_today += float(lot.get("realizedPnl") or 0.0)
+        unrealized = sum(float(lot.get("unrealizedPnl") or 0.0) for lot in open_lots)
+        loss_limit = float(self.account["startingBalance"]) * policy.maximum_daily_loss_pct / 100.0
+        if realized_today + unrealized <= -loss_limit:
+            return "MAXIMUM_DAILY_LOSS"
+        return None
+
+    def _market_date(self, value: Any):
+        stamp = pd.Timestamp(value)
+        if stamp.tzinfo is not None:
+            stamp = stamp.tz_convert(self.market.timezone)
+        return stamp.date()
 
     # ---- candles in --------------------------------------------------------------------
 
@@ -266,7 +425,11 @@ class PaperBroker:
                 self.portfolio.pending_entries[symbol] = deferred
             survivors: dict[str, tuple[float, float]] = {}
             nse_exit_occurred = False
-            timeframe_lots = self.portfolio.lots_for(symbol, timeframe=lot_timeframe) if lot_timeframe else self.portfolio.lots_for(symbol)
+            timeframe_lots = (
+                self.portfolio.lots_for(symbol, timeframe=lot_timeframe)
+                if lot_timeframe
+                else self.portfolio.lots_for(symbol)
+            )
             for lot in timeframe_lots:
                 if pd.Timestamp(lot["entryTimestamp"]) >= pd.Timestamp(stamp):
                     continue
@@ -288,14 +451,22 @@ class PaperBroker:
                         nse_exit_occurred = True
                 else:
                     survivors[lot["lotId"]] = (mae, mfe)
-            remaining_timeframe_lots = self.portfolio.lots_for(symbol, timeframe=lot_timeframe) if lot_timeframe else self.portfolio.lots_for(symbol)
+            remaining_timeframe_lots = (
+                self.portfolio.lots_for(symbol, timeframe=lot_timeframe)
+                if lot_timeframe
+                else self.portfolio.lots_for(symbol)
+            )
             self._mark_open_lots(symbol, close, survivors, lots=remaining_timeframe_lots)
-            strategy_keys = list(dict.fromkeys((lot["strategyId"], lot["timeframe"]) for lot in remaining_timeframe_lots))
+            strategy_keys = list(
+                dict.fromkeys((lot["strategyId"], lot["timeframe"]) for lot in remaining_timeframe_lots)
+            )
             for strategy_id, strategy_timeframe in strategy_keys:
                 self._queue_ladder_entry(symbol, close, stamp, strategy_id=strategy_id, timeframe=strategy_timeframe)
         return closed
 
-    def _pending_is_executable(self, signal: Mapping[str, Any], stamp: datetime, execution_timeframe: str | None) -> bool:
+    def _pending_is_executable(
+        self, signal: Mapping[str, Any], stamp: datetime, execution_timeframe: str | None
+    ) -> bool:
         candle_stamp = pd.Timestamp(stamp)
         if candle_stamp <= pd.Timestamp(signal["candleTimestamp"]):
             return False
@@ -317,13 +488,15 @@ class PaperBroker:
         with self._lock:
             return sorted(set(self.portfolio.open_lots) | set(self.portfolio.pending_entries))
 
-    def _queue_ladder_entry(self, symbol: str, close: float, stamp: datetime, *, strategy_id: str, timeframe: str) -> None:
+    def _queue_ladder_entry(
+        self, symbol: str, close: float, stamp: datetime, *, strategy_id: str, timeframe: str
+    ) -> None:
         open_lots = self.portfolio.lots_for(symbol, strategy_id=strategy_id, timeframe=timeframe)
         matching_pending = any(
             item.get("strategyId") == strategy_id and item.get("timeframe") == timeframe
             for item in self.portfolio.pending_entries.get(symbol, [])
         )
-        if not open_lots or matching_pending or not self.policy.allow_additional_buys:
+        if not open_lots or matching_pending:
             return
         cycle_id = open_lots[0]["cycleId"]
         cycle_lots = self.repositories.lots.cycle(self.account["accountId"], symbol, cycle_id)
@@ -331,12 +504,17 @@ class PaperBroker:
             return
         first = min(cycle_lots, key=lambda lot: int(lot["lotNumber"]))
         latest = max(cycle_lots, key=lambda lot: int(lot["lotNumber"]))
+        policy = self._policy_for(first)
+        if not policy.allow_additional_buys:
+            return
         snapshot = first.get("configurationSnapshot") or {}
         ladder = PriceBandLadder.from_config(snapshot)
         if ladder is None:
             return
-        maximum_entries = min(self.policy.maximum_entries_per_cycle, ladder.maximum_entries)
-        if int(latest["lotNumber"]) >= maximum_entries or not ladder.additional_entry_allowed(close, float(latest["entryPrice"])):
+        maximum_entries = min(policy.maximum_entries_per_cycle, ladder.maximum_entries)
+        if int(latest["lotNumber"]) >= maximum_entries or not ladder.additional_entry_allowed(
+            close, float(latest["entryPrice"])
+        ):
             return
         target_pct = float(snapshot["target_pct"])
         signal = {
@@ -356,7 +534,9 @@ class PaperBroker:
         }
         self._persist_pending_entry(signal, cycle_id=cycle_id, lot_number=int(latest["lotNumber"]) + 1)
 
-    def _persist_pending_entry(self, signal: dict[str, Any], *, cycle_id: str | None = None, lot_number: int | None = None) -> None:
+    def _persist_pending_entry(
+        self, signal: dict[str, Any], *, cycle_id: str | None = None, lot_number: int | None = None
+    ) -> None:
         stored = self.repositories.pending.insert(
             signal,
             account_id=self.account["accountId"],
@@ -372,14 +552,18 @@ class PaperBroker:
             if lot is None:
                 raise KeyError(f"Open paper lot {lot_id} was not found")
             stamp = timestamp or self.clock()
-            mae, mfe = Accounting.excursions(float(lot["entryPrice"]), price, price, lot.get("maePct"), lot.get("mfePct"))
+            mae, mfe = Accounting.excursions(
+                float(lot["entryPrice"]), price, price, lot.get("maePct"), lot.get("mfePct")
+            )
             closed = self._close_lot(lot, "CLOSED", price, stamp, mae, mfe)
             self._mark_open_lots(lot["symbol"], price, {})
             return closed
 
-    def _close_lot(self, lot: Mapping[str, Any], status: str, raw_price: float, stamp: datetime, mae: float, mfe: float) -> dict[str, Any]:
+    def _close_lot(
+        self, lot: Mapping[str, Any], status: str, raw_price: float, stamp: datetime, mae: float, mfe: float
+    ) -> dict[str, Any]:
         quantity = float(lot["quantity"])
-        fill = self.policy.sell(self.market.fees, raw_price, quantity)
+        fill = self._policy_for(lot).sell(self.market.fees, raw_price, quantity)
         if self.market.market == "NSE":
             matched = self._fifo_inventory(lot["symbol"]).preview_allocations([quantity])[0]
             cost_basis_price = round(matched.cost_basis_price, 4)
@@ -388,15 +572,50 @@ class PaperBroker:
         else:
             cost_basis_price = float(lot["entryPrice"])
             entry_fees = float(lot.get("fees") or 0.0)
-            fifo_allocations = [{"lotId": lot["lotId"], "quantity": quantity, "entryPrice": cost_basis_price, "fees": entry_fees}]
+            fifo_allocations = [
+                {"lotId": lot["lotId"], "quantity": quantity, "entryPrice": cost_basis_price, "fees": entry_fees}
+            ]
         total_fees = round(entry_fees + fill.fees, 4)
         realized = Accounting.realized_pnl(cost_basis_price, round(fill.price, 4), quantity, total_fees)
-        self.repositories.lots.mark(lot["lotId"], last_price=raw_price, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, target_price=float(lot["targetPrice"]), entry_fees=entry_fees, unrealized_pnl=0.0, mae_pct=mae, mfe_pct=mfe)
-        updated = self.repositories.lots.close(lot["lotId"], status=status, exit_timestamp=stamp, exit_price=round(fill.price, 4), cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, realized_pnl=realized, fees=total_fees)
-        self.repositories.trades.insert(account_id=self.account["accountId"], lot_id=lot["lotId"], market=self.market.market, symbol=lot["symbol"], side="SELL", quantity=quantity, price=round(fill.price, 4), fees=round(fill.fees, 4), slippage=round(fill.slippage, 4), reason=status, executed_at=stamp)
+        self.repositories.lots.mark(
+            lot["lotId"],
+            last_price=raw_price,
+            cost_basis_price=cost_basis_price,
+            fifo_allocations=fifo_allocations,
+            target_price=float(lot["targetPrice"]),
+            entry_fees=entry_fees,
+            unrealized_pnl=0.0,
+            mae_pct=mae,
+            mfe_pct=mfe,
+        )
+        updated = self.repositories.lots.close(
+            lot["lotId"],
+            status=status,
+            exit_timestamp=stamp,
+            exit_price=round(fill.price, 4),
+            cost_basis_price=cost_basis_price,
+            fifo_allocations=fifo_allocations,
+            realized_pnl=realized,
+            fees=total_fees,
+        )
+        self.repositories.trades.insert(
+            account_id=self.account["accountId"],
+            lot_id=lot["lotId"],
+            market=self.market.market,
+            symbol=lot["symbol"],
+            side="SELL",
+            quantity=quantity,
+            price=round(fill.price, 4),
+            fees=round(fill.fees, 4),
+            slippage=round(fill.slippage, 4),
+            reason=status,
+            executed_at=stamp,
+        )
         if self.market.market == "NSE":
             self._fifo_inventory(lot["symbol"]).consume(quantity)
-        self.account["cashBalance"] = self.repositories.accounts.adjust_cash(self.account["accountId"], Accounting.exit_proceeds(fill.price, quantity, fill.fees))
+        self.account["cashBalance"] = self.repositories.accounts.adjust_cash(
+            self.account["accountId"], Accounting.exit_proceeds(fill.price, quantity, fill.fees)
+        )
         self.portfolio.remove_lot(lot["lotId"], lot["symbol"])
         return updated
 
@@ -410,7 +629,13 @@ class PaperBroker:
         for trade in self.repositories.trades.chronological(self.account["accountId"]):
             inventory = inventories.setdefault(trade["symbol"], FifoInventory())
             if trade["side"] == "BUY":
-                inventory.add(trade["lotId"], pd.Timestamp(trade["executedAt"]).to_pydatetime(), float(trade["price"]), float(trade["quantity"]), float(trade.get("fees") or 0.0))
+                inventory.add(
+                    trade["lotId"],
+                    pd.Timestamp(trade["executedAt"]).to_pydatetime(),
+                    float(trade["price"]),
+                    float(trade["quantity"]),
+                    float(trade.get("fees") or 0.0),
+                )
             else:
                 inventory.consume(float(trade["quantity"]))
         return inventories
@@ -423,25 +648,65 @@ class PaperBroker:
         *,
         lots: list[dict[str, Any]] | None = None,
     ) -> None:
-        lots = sorted(lots if lots is not None else self.portfolio.lots_for(symbol), key=lambda item: (item["entryTimestamp"], item["lotNumber"]))
+        lots = sorted(
+            lots if lots is not None else self.portfolio.lots_for(symbol),
+            key=lambda item: (item["entryTimestamp"], item["lotNumber"]),
+        )
         if not lots:
             return
         # Every open tranche is an independent candidate sale. Dhan will match
         # whichever tranche triggers against the then-current oldest inventory,
         # so each target must preview FIFO from the front of the same queue.
-        matches = [
-            self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"])])[0]
-            for lot in lots
-        ] if self.market.market == "NSE" else [None] * len(lots)
+        matches = (
+            [self._fifo_inventory(symbol).preview_allocations([float(lot["quantity"])])[0] for lot in lots]
+            if self.market.market == "NSE"
+            else [None] * len(lots)
+        )
         for lot, matched in zip(lots, matches):
             cost_basis_price = round(matched.cost_basis_price, 4) if matched is not None else float(lot["entryPrice"])
             entry_fees = matched.entry_fees if matched is not None else float(lot.get("fees") or 0.0)
-            fifo_allocations = _public_fifo_allocations(matched.allocations) if matched is not None else [{"lotId": lot["lotId"], "quantity": float(lot["quantity"]), "entryPrice": cost_basis_price, "fees": entry_fees}]
-            target_price = net_profit_target_price(matched, self.market.fees, _target_pct(lot)) if matched is not None else float(lot["targetPrice"])
+            fifo_allocations = (
+                _public_fifo_allocations(matched.allocations)
+                if matched is not None
+                else [
+                    {
+                        "lotId": lot["lotId"],
+                        "quantity": float(lot["quantity"]),
+                        "entryPrice": cost_basis_price,
+                        "fees": entry_fees,
+                    }
+                ]
+            )
+            target_price = (
+                net_profit_target_price(matched, self.market.fees, _target_pct(lot))
+                if matched is not None
+                else float(lot["targetPrice"])
+            )
             mae, mfe = excursions.get(lot["lotId"], (float(lot.get("maePct") or 0.0), float(lot.get("mfePct") or 0.0)))
             unrealized = Accounting.unrealized_pnl(cost_basis_price, close, float(lot["quantity"]), entry_fees)
-            self.repositories.lots.mark(lot["lotId"], last_price=close, cost_basis_price=cost_basis_price, fifo_allocations=fifo_allocations, target_price=target_price, entry_fees=entry_fees, unrealized_pnl=unrealized, mae_pct=mae, mfe_pct=mfe)
-            self.portfolio.replace_lot({**lot, "lastPrice": close, "costBasisPrice": cost_basis_price, "fifoAllocations": fifo_allocations, "targetPrice": target_price, "unrealizedPnl": unrealized, "maePct": mae, "mfePct": mfe})
+            self.repositories.lots.mark(
+                lot["lotId"],
+                last_price=close,
+                cost_basis_price=cost_basis_price,
+                fifo_allocations=fifo_allocations,
+                target_price=target_price,
+                entry_fees=entry_fees,
+                unrealized_pnl=unrealized,
+                mae_pct=mae,
+                mfe_pct=mfe,
+            )
+            self.portfolio.replace_lot(
+                {
+                    **lot,
+                    "lastPrice": close,
+                    "costBasisPrice": cost_basis_price,
+                    "fifoAllocations": fifo_allocations,
+                    "targetPrice": target_price,
+                    "unrealizedPnl": unrealized,
+                    "maePct": mae,
+                    "mfePct": mfe,
+                }
+            )
 
     # ---- views ----------------------------------------------------------------------------
 
@@ -449,12 +714,21 @@ class PaperBroker:
         with self._lock:
             account = self.repositories.accounts.get(self.market.market) or self.account
             open_lots = self.portfolio.all_open()
-            closed = [lot for lot in self.repositories.lots.list(account["accountId"], limit=5_000) if lot["status"] != "OPEN"]
-            return {**Accounting.summary(account, open_lots, closed, timezone=self.market.timezone, now=self.clock()), "executionPolicy": self.policy.public(), "filled": self.filled, "rejected": self.rejected}
+            closed = [
+                lot for lot in self.repositories.lots.list(account["accountId"], limit=5_000) if lot["status"] != "OPEN"
+            ]
+            return {
+                **Accounting.summary(account, open_lots, closed, timezone=self.market.timezone, now=self.clock()),
+                "executionPolicy": self.policy.public(),
+                "filled": self.filled,
+                "rejected": self.rejected,
+            }
 
     def positions(self) -> list[dict[str, Any]]:
         with self._lock:
-            return sorted(self.portfolio.all_open(), key=lambda lot: (lot["symbol"], lot["entryTimestamp"], lot["lotNumber"]))
+            return sorted(
+                self.portfolio.all_open(), key=lambda lot: (lot["symbol"], lot["entryTimestamp"], lot["lotNumber"])
+            )
 
 
 def _public_fifo_allocations(allocations) -> list[dict[str, Any]]:

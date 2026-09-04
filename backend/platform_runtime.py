@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -101,7 +101,8 @@ class PlatformRuntime:
                 pending = self.database.pending_versions()
                 if pending:
                     raise RuntimeError(
-                        "Platform schema migrations pending: " + ", ".join(pending)
+                        "Platform schema migrations pending: "
+                        + ", ".join(pending)
                         + ". Run `python -m backend.data.migrate` or set PLATFORM_AUTO_MIGRATE=true."
                     )
             interrupted = self.runner().recover()
@@ -148,6 +149,7 @@ class PlatformRuntime:
                 if broker is not None:
                     worker.engine.publish = broker.on_signal
                     if binding.timeframe != "1d":
+
                         def forward_candle(symbol, row, stamp, *, _broker=broker, _timeframe=binding.timeframe):
                             _broker.on_completed_candle(symbol, row, stamp, timeframe=_timeframe)
 
@@ -162,7 +164,9 @@ class PlatformRuntime:
                             symbols.update(_broker.tracked_symbols())
                         return sorted(symbols)
 
-                    def forward_market_candle(symbol, row, stamp, *, _engine=worker.engine, _broker=broker if track_broker else None):
+                    def forward_market_candle(
+                        symbol, row, stamp, *, _engine=worker.engine, _broker=broker if track_broker else None
+                    ):
                         _engine.track_market_candle(symbol, row, stamp)
                         if _broker is not None:
                             _broker.on_market_candle(symbol, row, stamp, execution_timeframe="5m")
@@ -172,13 +176,24 @@ class PlatformRuntime:
                 with self._lock:
                     self._workers[key] = worker
                 worker.start()
-                logger.info("started_live_signal_worker", market=market, strategy=binding.strategy_id, timeframe=binding.timeframe)
+                logger.info(
+                    "started_live_signal_worker",
+                    market=market,
+                    strategy=binding.strategy_id,
+                    timeframe=binding.timeframe,
+                )
 
     # ---- paper trading -----------------------------------------------------------
 
     def paper_repositories(self) -> PaperRepositories:
         database = self.require_database()
-        return PaperRepositories(PaperAccountRepository(database), PaperOrderRepository(database), PaperLotRepository(database), PaperTradeRepository(database), PaperPendingEntryRepository(database))
+        return PaperRepositories(
+            PaperAccountRepository(database),
+            PaperOrderRepository(database),
+            PaperLotRepository(database),
+            PaperTradeRepository(database),
+            PaperPendingEntryRepository(database),
+        )
 
     def paper_broker(self, market: str) -> PaperBroker:
         key = market.strip().upper()
@@ -203,7 +218,24 @@ class PlatformRuntime:
             whole_units=(key == "NSE"),
             price_model="NEXT_OPEN",
         )
-        broker = PaperBroker(market=spec, repositories=self.paper_repositories(), policy=policy, timeframe=primary.timeframe, clock=self.clock)
+
+        def resolve_policy(signal: Mapping[str, Any]) -> ExecutionPolicy:
+            strategy_id = str(signal.get("strategyId") or primary.strategy_id)
+            configured = self.strategy_configs().active(spec.market, strategy_id)
+            values = dict((configured or {}).get("riskSettings") or {})
+            signal_timeframe = str(signal.get("timeframe") or primary.timeframe)
+            if signal_timeframe == "1d" and values.get("priceModel") == "SIGNAL_CLOSE":
+                values["priceModel"] = "NEXT_OPEN"
+            return ExecutionPolicy.from_mapping(values, whole_units=(key == "NSE"), price_model="NEXT_OPEN")
+
+        broker = PaperBroker(
+            market=spec,
+            repositories=self.paper_repositories(),
+            policy=policy,
+            policy_resolver=resolve_policy,
+            timeframe=primary.timeframe,
+            clock=self.clock,
+        )
         with self._lock:
             self._brokers.setdefault(key, broker)
             return self._brokers[key]
@@ -273,7 +305,9 @@ class PlatformRuntime:
             status_repository=self.engine_status(),
             clock=self.clock,
             poll_seconds=float(os.environ.get(f"{market}_SIGNAL_POLL_SECONDS", "120" if market == "NSE" else "60")),
-            lookback_days=int(os.environ.get(f"{market}_SIGNAL_LOOKBACK_DAYS", "180" if selected.timeframe == "1d" else "2")),
+            lookback_days=int(
+                os.environ.get(f"{market}_SIGNAL_LOOKBACK_DAYS", "180" if selected.timeframe == "1d" else "2")
+            ),
         )
 
     def worker_status(self, market: str) -> dict[str, Any] | None:
@@ -384,7 +418,9 @@ def _backtest_workers() -> int:
     return value
 
 
-def install_platform(app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[], dict[str, Any]] | None = None) -> None:
+def install_platform(
+    app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[], dict[str, Any]] | None = None
+) -> None:
     services = BacktestServices(registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner)
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs).routes)
@@ -394,7 +430,11 @@ def install_platform(app: FastAPI, runtime: PlatformRuntime, *, overview: Callab
             screener_runs=lambda market: ScreenerRunRepository(runtime.require_database()).list(market, limit=1),
             backtest_runs=lambda market: runtime.runs().list(market, limit=5),
             engine_health=lambda market: {
-                "stored": [row for row in runtime.engine_status().list() if row["market"] == market and row["engine"].startswith("live-signals-v2")],
+                "stored": [
+                    row
+                    for row in runtime.engine_status().list()
+                    if row["market"] == market and row["engine"].startswith("live-signals-v2")
+                ],
                 "workers": runtime.worker_statuses(market),
             },
             paper_summary=lambda market: runtime.paper_broker(market).summary(),
@@ -402,6 +442,10 @@ def install_platform(app: FastAPI, runtime: PlatformRuntime, *, overview: Callab
             active_universe=lambda market: runtime.universes().active(market),
         ).routes
     )
-    app.router.routes.extend(create_signal_router(signals=runtime.signals, engine_status=runtime.engine_status, worker_statuses=runtime.worker_statuses).routes)
+    app.router.routes.extend(
+        create_signal_router(
+            signals=runtime.signals, engine_status=runtime.engine_status, worker_statuses=runtime.worker_statuses
+        ).routes
+    )
     app.router.routes.extend(create_paper_trading_router(runtime.paper_broker).routes)
     app.router.routes.extend(create_screener_router(runtime.screener()).routes)

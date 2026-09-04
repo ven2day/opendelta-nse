@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Mapping
+from typing import Any
 
 from backend.markets.base import FeeModel, Fill
 
@@ -28,6 +29,10 @@ class ExecutionPolicy:
     price_model: str = "NEXT_OPEN"
     stop_loss_pct: float | None = None
     maximum_holding_bars: int | None = None
+    maximum_open_positions: int = 5
+    maximum_daily_trades: int = 5
+    maximum_daily_loss_pct: float = 2.0
+    maximum_total_exposure_pct: float = 50.0
     whole_units: bool = True  # shares are whole; crypto quantities may be fractional
 
     def validate(self) -> "ExecutionPolicy":
@@ -35,7 +40,11 @@ class ExecutionPolicy:
             raise ValueError("sizing_mode must be FIXED_QUANTITY or FIXED_CAPITAL")
         if self.price_model not in PRICE_MODELS:
             raise ValueError("price_model must be SIGNAL_CLOSE or NEXT_OPEN")
-        if self.initial_quantity <= 0 or self.capital_per_lot <= 0 or (self.minimum_quantity is not None and self.minimum_quantity <= 0):
+        if (
+            self.initial_quantity <= 0
+            or self.capital_per_lot <= 0
+            or (self.minimum_quantity is not None and self.minimum_quantity <= 0)
+        ):
             raise ValueError("Quantities and capital per lot must be positive")
         if not 0 < self.additional_quantity_pct <= 100:
             raise ValueError("additional_quantity_pct must be in (0, 100]")
@@ -47,16 +56,35 @@ class ExecutionPolicy:
             raise ValueError("stop_loss_pct must be between 0 and 100")
         if self.maximum_holding_bars is not None and self.maximum_holding_bars < 1:
             raise ValueError("maximum_holding_bars must be at least 1")
+        if self.maximum_open_positions < 1:
+            raise ValueError("maximum_open_positions must be at least 1")
+        if self.maximum_daily_trades < 1:
+            raise ValueError("maximum_daily_trades must be at least 1")
+        if not 0 < self.maximum_daily_loss_pct <= 100:
+            raise ValueError("maximum_daily_loss_pct must be in (0, 100]")
+        if not 0 < self.maximum_total_exposure_pct <= 100:
+            raise ValueError("maximum_total_exposure_pct must be in (0, 100]")
         return self
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any] | None, **defaults: Any) -> "ExecutionPolicy":
         aliases = {
-            "sizingMode": "sizing_mode", "initialQuantity": "initial_quantity", "capitalPerLot": "capital_per_lot",
-            "allowAdditionalBuys": "allow_additional_buys", "additionalQuantityPct": "additional_quantity_pct",
-            "additionalSizingMode": "additional_sizing_mode", "minimumQuantity": "minimum_quantity",
-            "maximumEntriesPerCycle": "maximum_entries_per_cycle", "priceModel": "price_model",
-            "stopLossPct": "stop_loss_pct", "maximumHoldingBars": "maximum_holding_bars", "wholeUnits": "whole_units",
+            "sizingMode": "sizing_mode",
+            "initialQuantity": "initial_quantity",
+            "capitalPerLot": "capital_per_lot",
+            "allowAdditionalBuys": "allow_additional_buys",
+            "additionalQuantityPct": "additional_quantity_pct",
+            "additionalSizingMode": "additional_sizing_mode",
+            "minimumQuantity": "minimum_quantity",
+            "maximumEntriesPerCycle": "maximum_entries_per_cycle",
+            "priceModel": "price_model",
+            "stopLossPct": "stop_loss_pct",
+            "maximumHoldingBars": "maximum_holding_bars",
+            "wholeUnits": "whole_units",
+            "maximumOpenPositions": "maximum_open_positions",
+            "maximumDailyTrades": "maximum_daily_trades",
+            "maximumDailyLossPct": "maximum_daily_loss_pct",
+            "maximumTotalExposurePct": "maximum_total_exposure_pct",
         }
         kwargs: dict[str, Any] = dict(defaults)
         for key, value in (values or {}).items():
@@ -68,11 +96,22 @@ class ExecutionPolicy:
 
     def public(self) -> dict[str, Any]:
         return {
-            "sizingMode": self.sizing_mode, "initialQuantity": self.initial_quantity, "capitalPerLot": self.capital_per_lot,
-            "allowAdditionalBuys": self.allow_additional_buys, "additionalQuantityPct": self.additional_quantity_pct,
-            "additionalSizingMode": self.additional_sizing_mode, "minimumQuantity": self.effective_minimum_quantity,
-            "maximumEntriesPerCycle": self.maximum_entries_per_cycle, "priceModel": self.price_model,
-            "stopLossPct": self.stop_loss_pct, "maximumHoldingBars": self.maximum_holding_bars, "wholeUnits": self.whole_units,
+            "sizingMode": self.sizing_mode,
+            "initialQuantity": self.initial_quantity,
+            "capitalPerLot": self.capital_per_lot,
+            "allowAdditionalBuys": self.allow_additional_buys,
+            "additionalQuantityPct": self.additional_quantity_pct,
+            "additionalSizingMode": self.additional_sizing_mode,
+            "minimumQuantity": self.effective_minimum_quantity,
+            "maximumEntriesPerCycle": self.maximum_entries_per_cycle,
+            "priceModel": self.price_model,
+            "stopLossPct": self.stop_loss_pct,
+            "maximumHoldingBars": self.maximum_holding_bars,
+            "wholeUnits": self.whole_units,
+            "maximumOpenPositions": self.maximum_open_positions,
+            "maximumDailyTrades": self.maximum_daily_trades,
+            "maximumDailyLossPct": self.maximum_daily_loss_pct,
+            "maximumTotalExposurePct": self.maximum_total_exposure_pct,
         }
 
     # ---- sizing ------------------------------------------------------------------
@@ -108,8 +147,14 @@ class ExecutionPolicy:
     def sell(fees: FeeModel, price: float, quantity: float) -> Fill:
         return fees.sell(price, quantity)
 
-    def targets(self, entry_price: float, target_pct: float, entry_time: datetime, bar_minutes: int) -> tuple[float, float | None, datetime | None]:
+    def targets(
+        self, entry_price: float, target_pct: float, entry_time: datetime, bar_minutes: int
+    ) -> tuple[float, float | None, datetime | None]:
         target = round(entry_price * (1 + target_pct / 100), 4)
         stop = round(entry_price * (1 - self.stop_loss_pct / 100), 4) if self.stop_loss_pct is not None else None
-        expires = entry_time + timedelta(minutes=bar_minutes * self.maximum_holding_bars) if self.maximum_holding_bars else None
+        expires = (
+            entry_time + timedelta(minutes=bar_minutes * self.maximum_holding_bars)
+            if self.maximum_holding_bars
+            else None
+        )
         return target, stop, expires

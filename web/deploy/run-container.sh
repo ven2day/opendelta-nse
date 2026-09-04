@@ -44,7 +44,7 @@ curl -fsS -o /dev/null "http://127.0.0.1:${candidate_port}/login"
 
 candidate_health="starting"
 for _ in {1..30}; do
-  candidate_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' opendelta-candidate)"
+  candidate_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' opendelta-candidate 2>/dev/null || echo not-found)"
   if [[ "${candidate_health}" == "healthy" ]]; then
     break
   fi

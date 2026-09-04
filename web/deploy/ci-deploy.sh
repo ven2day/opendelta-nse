@@ -8,8 +8,17 @@
 set -Eeuo pipefail
 
 REPO_DIR="/root/repos/opendelta-nse"
-CANDIDATE_PORT=3100
 log() { echo "[ci-deploy] $*"; }
+
+# Alternate between two candidate ports so a new candidate never collides
+# with whatever port the currently-live dashboard container is already
+# bound to (promote-candidate.sh leaves that port live indefinitely).
+current_port="$(docker port opendelta 3000/tcp 2>/dev/null | sed -n 's/.*:\([0-9]*\)$/\1/p' || true)"
+if [[ "${current_port}" == "3100" ]]; then
+  CANDIDATE_PORT=3101
+else
+  CANDIDATE_PORT=3100
+fi
 
 cd "${REPO_DIR}"
 git fetch origin main

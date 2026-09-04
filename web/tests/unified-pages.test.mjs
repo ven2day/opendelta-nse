@@ -45,7 +45,7 @@ async function login(worker) {
 
 function navigationLabels(html) {
   const nav = html.match(/<nav class="platform-topnav"[\s\S]*?<\/nav>/)?.[0] ?? "";
-  return Array.from(nav.matchAll(/<span>([^<]+)<\/span>/g), (match) => match[1]);
+  return Array.from(nav.matchAll(/<a[^>]*aria-label="([^"]+)"/g), (match) => match[1]);
 }
 
 function marketSelectorLinks(html) {
@@ -71,7 +71,7 @@ test("every unified route requires login and renders one topbar market selector"
     assert.match(html, /data-ui-version="unified-v2"/);
     // The topbar clock is seeded after mount so server and client markup match (no hydration error #418).
     assert.match(html, /--:--:--/);
-    assert.match(html, /Paper research only/);
+    assert.doesNotMatch(html, /Paper research only|Broker disabled/);
     assert.doesNotMatch(html, /class="global-header"/, `${route.path} must not embed the legacy header`);
     assert.doesNotMatch(html, /Vento NSE/);
     assert.deepEqual(marketSelectorLinks(html), [`${route.path}?market=NSE`, `${route.path}?market=CRYPTO`], `${route.path} topbar market selector`);

@@ -1,0 +1,29 @@
+[Unit]
+Description=OpenDelta Dhan market-data collector
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0755 /var/lib/opendelta/data
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/dhan
+ExecStartPre=-/usr/bin/docker rm -f opendelta-data-refresh
+ExecStart=/usr/bin/docker run --rm --name opendelta-data-refresh \
+  --env-file /etc/opendelta-dhan.env \
+  --env NSE_DATA_FILE=/var/lib/opendelta/data/nse_symbols_rsi_volume.csv \
+  --env SYMBOLS_FILE=/var/lib/opendelta/data/symbols.csv \
+  --mount type=bind,source=/var/lib/opendelta/data,target=/var/lib/opendelta/data \
+  --mount type=bind,source=/var/lib/opendelta/dhan,target=/var/lib/opendelta/dhan \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --pids-limit 128 \
+  --memory 1g \
+  opendelta-collector:current
+ExecStartPost=/usr/bin/test -s /var/lib/opendelta/data/nse_symbols_rsi_volume.csv
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=multi-user.target

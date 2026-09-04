@@ -603,7 +603,7 @@ class CryptoMarketService:
 def service_from_environment(
     canonical_writer: CanonicalCandleWriter | None = None,
 ) -> CryptoMarketService:
-    default_root = Path(os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")).expanduser() / "crypto-market"
+    default_root = Path(os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/opendelta/backtest")).expanduser() / "crypto-market"
     root = Path(os.environ.get("CRYPTO_MARKET_DIR", str(default_root))).expanduser()
     if not root.is_absolute():
         raise RuntimeError("CRYPTO_MARKET_DIR must be an absolute path")

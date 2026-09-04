@@ -2,10 +2,10 @@
 set -euo pipefail
 
 set -a
-source /etc/vento-nse.env
+source /etc/opendelta.env
 set +a
 
-base_url="${1:-https://nse.ventoday.com}"
+base_url="${1:-https://delta.ventoday.com}"
 cookie_jar="$(mktemp)"
 health_response="$(mktemp)"
 signals_response="$(mktemp)"

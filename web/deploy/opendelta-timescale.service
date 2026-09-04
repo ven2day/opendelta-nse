@@ -6,13 +6,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStartPre=-/usr/bin/docker network create vento-nse-internal
-ExecStartPre=-/usr/bin/docker volume create vento-nse-timescale-data
-ExecStartPre=-/usr/bin/docker rm -f vento-nse-timescale
-ExecStart=/usr/bin/docker run --rm --name vento-nse-timescale \
-  --network vento-nse-internal \
-  --env-file /etc/vento-nse-timescale.env \
-  --mount type=volume,source=vento-nse-timescale-data,target=/var/lib/postgresql/data \
+ExecStartPre=-/usr/bin/docker network create opendelta-internal
+ExecStartPre=-/usr/bin/docker volume create opendelta-timescale-data
+ExecStartPre=-/usr/bin/docker rm -f opendelta-timescale
+ExecStart=/usr/bin/docker run --rm --name opendelta-timescale \
+  --network opendelta-internal \
+  --env-file /etc/opendelta-timescale.env \
+  --mount type=volume,source=opendelta-timescale-data,target=/var/lib/postgresql/data \
   --health-cmd "pg_isready -U opendelta -d opendelta" \
   --health-interval 10s \
   --health-timeout 5s \
@@ -23,7 +23,7 @@ ExecStart=/usr/bin/docker run --rm --name vento-nse-timescale \
   --pids-limit 512 \
   --memory 2g \
   timescale/timescaledb:2.29.2-pg17
-ExecStop=/usr/bin/docker stop -t 60 vento-nse-timescale
+ExecStop=/usr/bin/docker stop -t 60 opendelta-timescale
 Restart=always
 RestartSec=10s
 TimeoutStartSec=2min

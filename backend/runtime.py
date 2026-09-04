@@ -49,7 +49,7 @@ def get_canonical_market_data_writer() -> TimescaleDualWriter:
 
 def create_store() -> HistoricalDataStore:
     config = DhanConfig.from_environment()
-    cache_directory = Path(os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")).expanduser()
+    cache_directory = Path(os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/opendelta/backtest")).expanduser()
     if not cache_directory.is_absolute():
         raise RuntimeError("BACKTEST_CACHE_DIR must be an absolute path")
     return HistoricalDataStore(config, cache_directory, get_canonical_market_data_writer())
@@ -66,7 +66,7 @@ def get_application_settings_repository() -> ApplicationSettingsRepository:
     global _application_settings_repository
     if _application_settings_repository is None:
         default_root = Path(
-            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")
+            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/opendelta/backtest")
         ).expanduser() / "application-settings"
         root = Path(os.environ.get("APPLICATION_SETTINGS_DIR", str(default_root))).expanduser()
         if not root.is_absolute():
@@ -88,7 +88,7 @@ def get_oi_repository() -> OiRegimeRepository:
     global _oi_repository
     if _oi_repository is None:
         default_root = Path(
-            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/vento-nse/backtest")
+            os.environ.get("BACKTEST_CACHE_DIR", "/var/lib/opendelta/backtest")
         ).expanduser() / "nifty-oi"
         root = Path(os.environ.get("NIFTY_OI_DIR", str(default_root))).expanduser()
         if not root.is_absolute():
@@ -103,7 +103,7 @@ def get_market_data_refresh_service() -> MarketDataRefreshService:
         output_file = Path(
             os.environ.get(
                 "LIVE_MARKET_DATA_FILE",
-                "/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv",
+                "/var/lib/opendelta/data/nse_symbols_rsi_volume.csv",
             )
         ).expanduser()
         _market_data_refresh_service = MarketDataRefreshService(output_file)

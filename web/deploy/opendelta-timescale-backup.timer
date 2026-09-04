@@ -5,7 +5,7 @@ Description=Run the OpenDelta TimescaleDB backup every day
 OnCalendar=*-*-* 02:30:00 UTC
 Persistent=true
 RandomizedDelaySec=15min
-Unit=vento-nse-timescale-backup.service
+Unit=opendelta-timescale-backup.service
 
 [Install]
 WantedBy=timers.target

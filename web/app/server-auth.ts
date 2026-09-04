@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-const SESSION_COOKIE = "vento_nse_session";
+const SESSION_COOKIE = "opendelta_session";
 const SESSION_TTL_SECONDS = 12 * 60 * 60;
 
 type AuthConfig = {

@@ -28,7 +28,7 @@ Unfinished in-process screener runs are marked `FAILED` during service startup.
 ## Bootstrap
 
 1. Install the private database service with
-   `sudo /opt/vento-nse/current/web/deploy/install-timescale-service.sh`. The
+   `sudo /opt/opendelta/current/web/deploy/install-timescale-service.sh`. The
    installer creates a protected credential and updates
    `MARKET_DATA_DATABASE_URL`; it never prints the credential.
 2. Export the exact official NSE trading dates for the complete approved range
@@ -38,7 +38,7 @@ Unfinished in-process screener runs are marked `FAILED` during service startup.
 4. Review the calendar metadata, requested range, symbol mappings, and job
    counts before passing `--enqueue` to the bootstrap script.
 5. Deploy and enable the worker with
-   `sudo /opt/vento-nse/current/web/deploy/install-market-data-worker.sh`.
+   `sudo /opt/opendelta/current/web/deploy/install-market-data-worker.sh`.
 6. Confirm `/platform/data-health` reports the canonical store and dual writer.
 
 The NSE calendar must contain every date in the requested backfill range. A

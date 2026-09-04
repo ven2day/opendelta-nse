@@ -1,9 +1,9 @@
 # Deployment Guide
 
 Production runs three Docker containers on one Ubuntu host behind nginx and
-Cloudflare: the dashboard (`vento-nse-dashboard`), the backtest/platform API
-(`vento-nse-backtest`), and TimescaleDB (`vento-nse-timescale`), plus the
-post-close Dhan collector (`vento-nse-data`) and the market-data worker. All
+Cloudflare: the dashboard (`opendelta-dashboard`), the backtest/platform API
+(`opendelta-backtest`), and TimescaleDB (`opendelta-timescale`), plus the
+post-close Dhan collector (`opendelta-data`) and the market-data worker. All
 units are systemd services whose templates live in `web/deploy/`.
 
 ## Table of contents
@@ -18,29 +18,29 @@ units are systemd services whose templates live in `web/deploy/`.
 
 ## Environment files
 
-- `/etc/vento-nse.env` — UI login only: `APP_USERNAME`, `APP_PASSWORD`, `AUTH_SECRET` (32+ random characters).
-- `/etc/vento-nse-dhan.env` — Dhan credentials, `MARKET_DATA_DATABASE_URL`, provider URLs. Mode `0600`, never passed to the dashboard container, never copied into a release archive or log. Template: `web/deploy/vento-nse-dhan.env.example`.
+- `/etc/opendelta.env` — UI login only: `APP_USERNAME`, `APP_PASSWORD`, `AUTH_SECRET` (32+ random characters).
+- `/etc/opendelta-dhan.env` — Dhan credentials, `MARKET_DATA_DATABASE_URL`, provider URLs. Mode `0600`, never passed to the dashboard container, never copied into a release archive or log. Template: `web/deploy/opendelta-dhan.env.example`.
 
 ## Building a release
 
 ```bash
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
-git archive --format=tar.gz -o "/tmp/vento-nse-deploy-${release_id}.tar.gz" HEAD
+git archive --format=tar.gz -o "/tmp/opendelta-deploy-${release_id}.tar.gz" HEAD
 sudo web/deploy/install-release.sh "${release_id}"     # builds dashboard, collector and backtest images; tags :current
 ```
 
-`install-release.sh` unpacks the archive under `/opt/vento-nse/releases/<id>`,
-builds all images and points `/opt/vento-nse/current` at the release.
+`install-release.sh` unpacks the archive under `/opt/opendelta/releases/<id>`,
+builds all images and points `/opt/opendelta/current` at the release.
 
 ## Backtest / platform service
 
 ```bash
 sudo web/deploy/install-backtest-service.sh   # installs/updates the systemd unit
-sudo systemctl restart vento-nse-backtest.service
+sudo systemctl restart opendelta-backtest.service
 curl -fsS http://127.0.0.1:3200/health
 ```
 
-The unit runs `vento-nse-backtest:current` read-only with dropped
+The unit runs `opendelta-backtest:current` read-only with dropped
 capabilities, a PID limit and a memory limit (`--memory 4g`,
 `BACKTEST_WORKERS=5` today). The image copies the legacy modules, `opendelta/`
 and `backend/`.
@@ -49,7 +49,7 @@ and `backend/`.
 
 TimescaleDB is installed once with `sudo web/deploy/install-timescale-service.sh`
 (see [timescaledb-production-bootstrap.md](timescaledb-production-bootstrap.md)),
-which writes `MARKET_DATA_DATABASE_URL` into `/etc/vento-nse-dhan.env` and
+which writes `MARKET_DATA_DATABASE_URL` into `/etc/opendelta-dhan.env` and
 applies the candle schema with `python -m backend.data.admin migrate`.
 
 The unified-platform tables are applied explicitly — the service never
@@ -81,7 +81,7 @@ collector.
 ## Enabling the unified platform
 
 Everything is opt-in and defaults to off; production behaviour is unchanged
-until these are set on `vento-nse-backtest.service`:
+until these are set on `opendelta-backtest.service`:
 
 | Variable | Effect |
 | --- | --- |
@@ -117,7 +117,7 @@ a session if either feed is stale or the paper account is missing.
 
 ## Market-data services
 
-The Dhan collector (`vento-nse-data.service` + timer) runs after the NSE close
+The Dhan collector (`opendelta-data.service` + timer) runs after the NSE close
 on weekdays, authenticates with TOTP, validates the data subscription, and
 publishes atomically only when the coverage threshold is met. Historical
 backfill and gap repair use `python -m backend.data.admin` and

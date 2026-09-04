@@ -1,16 +1,16 @@
 [Unit]
-Description=Vento NSE dashboard
+Description=OpenDelta dashboard
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=vento-nse
-Group=vento-nse
-WorkingDirectory=/opt/vento-nse/web
+User=opendelta
+Group=opendelta
+WorkingDirectory=/opt/opendelta/web
 Environment=NODE_ENV=production
 Environment=PORT=3000
-EnvironmentFile=/etc/vento-nse.env
+EnvironmentFile=/etc/opendelta.env
 ExecStart=/usr/bin/npm start
 Restart=on-failure
 RestartSec=5

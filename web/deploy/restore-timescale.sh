@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-backup_directory="/var/backups/vento-nse/timescale"
-container="vento-nse-timescale"
+backup_directory="/var/backups/opendelta/timescale"
+container="opendelta-timescale"
 confirmation="--confirm-restore-opendelta"
 
 if [[ "$#" -ne 2 || "$2" != "${confirmation}" ]]; then
-  echo "Usage: $0 /var/backups/vento-nse/timescale/opendelta-TIMESTAMP.dump ${confirmation}" >&2
+  echo "Usage: $0 /var/backups/opendelta/timescale/opendelta-TIMESTAMP.dump ${confirmation}" >&2
   exit 2
 fi
 
@@ -20,14 +20,14 @@ test -s "${dump_path}"
 docker inspect --format '{{.State.Health.Status}}' "${container}" | grep -qx healthy
 docker exec -i "${container}" pg_restore --list <"${dump_path}" >/dev/null
 
-backup_command="/usr/local/sbin/vento-nse-timescale-backup"
+backup_command="/usr/local/sbin/opendelta-timescale-backup"
 if [[ ! -x "${backup_command}" ]]; then
   backup_command="$(dirname "$0")/backup-timescale.sh"
 fi
 "${backup_command}"
 
 restart_services=()
-for service in vento-nse-market-data-worker.timer vento-nse-backtest.service; do
+for service in opendelta-market-data-worker.timer opendelta-backtest.service; do
   if systemctl is-active --quiet "${service}"; then
     restart_services+=("${service}")
     systemctl stop "${service}"

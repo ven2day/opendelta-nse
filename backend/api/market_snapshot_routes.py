@@ -46,7 +46,7 @@ def create_market_snapshot_router() -> APIRouter:
         path = Path(
             os.environ.get(
                 "LIVE_MARKET_DATA_FILE",
-                "/var/lib/vento-nse/data/nse_symbols_rsi_volume.csv",
+                "/var/lib/opendelta/data/nse_symbols_rsi_volume.csv",
             )
         ).expanduser()
         if not path.is_file():

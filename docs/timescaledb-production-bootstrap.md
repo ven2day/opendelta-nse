@@ -10,7 +10,7 @@ full-market-cycle checks pass, then validate `timescale-fallback` before using
 strict `timescale` mode.
 
 The service uses `timescale/timescaledb:2.29.2-pg17`, a Docker named volume,
-and the existing `vento-nse-internal` network. PostgreSQL port 5432 is not
+and the existing `opendelta-internal` network. PostgreSQL port 5432 is not
 published on the host. Database credentials live only in root-readable server
 environment files.
 
@@ -18,9 +18,9 @@ environment files.
 
 Before installation, confirm:
 
-- `/opt/vento-nse/current` points to the reviewed release;
-- `vento-nse-backtest:current` was built from that release;
-- `/etc/vento-nse-dhan.env` exists and is mode `0600`;
+- `/opt/opendelta/current` points to the reviewed release;
+- `opendelta-backtest:current` was built from that release;
+- `/etc/opendelta-dhan.env` exists and is mode `0600`;
 - Docker and systemd are healthy;
 - sufficient space exists for both the Docker volume and `/var/backups`.
 
@@ -32,21 +32,21 @@ repository.
 Run as root:
 
 ```bash
-/opt/vento-nse/current/web/deploy/install-timescale-service.sh
+/opt/opendelta/current/web/deploy/install-timescale-service.sh
 ```
 
 On first install, the script creates a 64-character random hexadecimal
-password in `/etc/vento-nse-timescale.env`, updates
-`MARKET_DATA_DATABASE_URL` in `/etc/vento-nse-dhan.env`, starts the private
+password in `/etc/opendelta-timescale.env`, updates
+`MARKET_DATA_DATABASE_URL` in `/etc/opendelta-dhan.env`, starts the private
 database, waits for a healthy `pg_isready`, runs migration 001, and enables the
 daily backup timer. Re-running the installer preserves the existing password.
 
 Check the service without exposing the secret:
 
 ```bash
-systemctl status vento-nse-timescale.service
-docker inspect --format '{{.State.Health.Status}}' vento-nse-timescale
-systemctl list-timers vento-nse-timescale-backup.timer
+systemctl status opendelta-timescale.service
+docker inspect --format '{{.State.Health.Status}}' opendelta-timescale
+systemctl list-timers opendelta-timescale-backup.timer
 ```
 
 ## 3. Build the NSE session calendar
@@ -87,7 +87,7 @@ Review both generated files before loading them.
 Prepare the database without queueing any historical work:
 
 ```bash
-sudo /opt/vento-nse/current/web/deploy/bootstrap-market-data.sh \
+sudo /opt/opendelta/current/web/deploy/bootstrap-market-data.sh \
   /secure/path/nse-sessions.csv \
   2024-09-01T00:00:00Z \
   2026-09-01T00:00:00Z
@@ -99,7 +99,7 @@ reviewing that output, queue both the NSE universe and configured OKX
 instruments by repeating the command with `--enqueue`:
 
 ```bash
-sudo /opt/vento-nse/current/web/deploy/bootstrap-market-data.sh \
+sudo /opt/opendelta/current/web/deploy/bootstrap-market-data.sh \
   /secure/path/nse-sessions.csv \
   2024-09-01T00:00:00Z \
   2026-09-01T00:00:00Z \
@@ -113,7 +113,7 @@ repeated queue command is idempotent because job identity is deterministic.
 
 The timer creates a compressed custom-format `pg_dump` at 02:30 UTC each day,
 validates it with `pg_restore --list`, then atomically publishes it below
-`/var/backups/vento-nse/timescale`. The default local retention is 30 days and
+`/var/backups/opendelta/timescale`. The default local retention is 30 days and
 never falls below seven days. Local backups are not an off-host disaster
 recovery copy; replicate the directory using the server's approved encrypted
 backup system.
@@ -121,7 +121,7 @@ backup system.
 Create an on-demand verified backup:
 
 ```bash
-sudo /usr/local/sbin/vento-nse-timescale-backup
+sudo /usr/local/sbin/opendelta-timescale-backup
 ```
 
 Restore is destructive and intentionally requires both an exact backup path
@@ -130,8 +130,8 @@ backup, pauses the worker and backtest service, restores with `--exit-on-error`,
 and restarts services that were previously active:
 
 ```bash
-sudo /usr/local/sbin/vento-nse-timescale-restore \
-  /var/backups/vento-nse/timescale/opendelta-YYYYMMDDTHHMMSSZ.dump \
+sudo /usr/local/sbin/opendelta-timescale-restore \
+  /var/backups/opendelta/timescale/opendelta-YYYYMMDDTHHMMSSZ.dump \
   --confirm-restore-opendelta
 ```
 

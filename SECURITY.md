@@ -21,7 +21,7 @@ reproduction, and the impact. Expect an acknowledgement within a few days.
   CI over every tracked file.
 - Dhan credentials are read in exactly one place (`backend/collector.py`,
   `DhanConfig.from_environment()`); every other module receives an
-  authenticated client. The web app never receives `/etc/vento-nse-dhan.env`.
+  authenticated client. The web app never receives `/etc/opendelta-dhan.env`.
 - Crypto market data uses public OKX/VALR endpoints; no exchange API key is
   required or stored.
 - The platform database URL is read from `MARKET_DATA_DATABASE_URL` only.

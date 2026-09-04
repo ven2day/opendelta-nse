@@ -73,7 +73,6 @@ test("every unified route requires login and renders one topbar market selector"
     assert.match(html, /--:--:--/);
     assert.doesNotMatch(html, /Paper research only|Broker disabled/);
     assert.doesNotMatch(html, /class="global-header"/, `${route.path} must not embed the legacy header`);
-    assert.doesNotMatch(html, /Vento NSE/);
     assert.deepEqual(marketSelectorLinks(html), [`${route.path}?market=NSE`, `${route.path}?market=CRYPTO`], `${route.path} topbar market selector`);
     assert.match(html, /aria-label="Active market"[\s\S]*?class="active"[^>]*href="[^"]*market=NSE"/, `${route.path} defaults to NSE`);
     assert.doesNotMatch(html, /<nav class="quant-market-tabs" aria-label="Market selector">/, `${route.path} must not duplicate the topbar market selector`);

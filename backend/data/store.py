@@ -174,7 +174,7 @@ class HistoricalDataStore:
                     zip(instruments["symbol"], instruments["SEM_SMST_SECURITY_ID"], strict=False)
                 )
             if self._nifty_security_id is None:
-                request = Request(self.config.instrument_master_url, headers={"User-Agent": "vento-nse-backtest/1.0"})
+                request = Request(self.config.instrument_master_url, headers={"User-Agent": "opendelta-backtest/1.0"})
                 try:
                     with urlopen(request, timeout=60) as response:
                         instruments = pd.read_csv(io.BytesIO(response.read()), dtype=str).fillna("")

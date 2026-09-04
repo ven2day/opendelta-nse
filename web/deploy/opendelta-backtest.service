@@ -1,0 +1,47 @@
+[Unit]
+Description=OpenDelta historical backtest API
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/backtest
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/dhan
+ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/opendelta/data
+ExecStartPre=-/usr/bin/docker network create opendelta-internal
+ExecStartPre=-/usr/bin/docker rm -f opendelta-backtest
+ExecStart=/usr/bin/docker run --rm --name opendelta-backtest \
+  --network opendelta-internal \
+  --env-file /etc/opendelta-dhan.env \
+  --env BACKTEST_CACHE_DIR=/var/lib/opendelta/backtest \
+  --env BACKTEST_WORKERS=5 \
+  --env LIVE_SIGNAL_ENGINE_ENABLED=true \
+  --env CRYPTO_SIGNAL_ENGINE_ENABLED=true \
+  --env CRYPTO_MARKET_DIR=/var/lib/opendelta/backtest/crypto-market \
+  --env PLATFORM_DATA_DIR=/var/lib/opendelta/backtest/platform \
+  --env RESEARCH_ENGINE_V2_ENABLED=false \
+  --env LIVE_SIGNAL_DIR=/var/lib/opendelta/backtest/live-signals \
+  --env LIVE_MARKET_DATA_FILE=/var/lib/opendelta/data/nse_symbols_rsi_volume.csv \
+  --env SYMBOLS_FILE=/var/lib/opendelta/data/symbols.csv \
+  --env MARKET_CONTEXT_SECTOR_MAP_FILE=/var/lib/opendelta/data/market-sector-map.csv \
+  --env MARKET_CONTEXT_BREADTH_UNIVERSE_FILE=/var/lib/opendelta/data/market-sector-map.csv \
+  --mount type=bind,source=/var/lib/opendelta/backtest,target=/var/lib/opendelta/backtest \
+  --mount type=bind,source=/var/lib/opendelta/dhan,target=/var/lib/opendelta/dhan \
+  --mount type=bind,source=/var/lib/opendelta/data,target=/var/lib/opendelta/data \
+  --publish 127.0.0.1:3200:8000 \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=128m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --pids-limit 256 \
+  --memory 4g \
+  opendelta-backtest:current
+ExecStop=/usr/bin/docker stop -t 20 opendelta-backtest
+Restart=always
+RestartSec=5
+TimeoutStartSec=5min
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=multi-user.target

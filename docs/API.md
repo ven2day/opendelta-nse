@@ -84,6 +84,26 @@ Signals are unique on `(market, strategyVersion, symbol, timeframe, candleTimest
 
 A signal can open at most one filled paper order per account (database unique index). There is no order-placement client anywhere in the codebase.
 
-## Legacy endpoints
+## Operational (non-v2) routes
 
-The pre-existing routes (`/backtest`, `/live-signals`, `/paper-trades`, `/crypto/*`, `/live-universe/*`, `/market-data`, `/platform/overview|instruments|market-context`, …) remain for the `/legacy/*` pages and the production live-signal engine until the v2 workers are switched on.
+Served directly by the FastAPI service (the web app does not proxy these; they
+back the shared chrome and operations tooling):
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/health` | Liveness + symbol count, uptime, database reachability, candle read mode. |
+| GET | `/platform/overview` | Chrome data-freshness pill: environment, freshness, worker status, `paperOnly: true`. |
+| GET | `/platform/instruments?market=` | Instrument master rows (NSE managed registry, crypto catalogue). |
+| GET | `/platform/market-context?market=` | Session state per market; breadth data is reported as unsupported. |
+| GET/PUT | `/application-settings` | Global current-price range bounding screener/backtest universes. |
+| GET | `/market-data/symbols` | Managed NSE symbol registry with the price filter applied. |
+| GET | `/market-data/status` | Snapshot refresh service state. |
+| GET | `/market-data/csv` | Download the latest RSI/volume snapshot CSV. |
+| POST | `/market-data/refresh` | Start a snapshot refresh run. |
+| POST | `/market-data/symbols` | Add a Dhan-validated NSE symbol and refresh. |
+| GET | `/nifty-oi/history/status` | NIFTY OI import coverage. |
+| GET | `/crypto/*` | Public-exchange crypto catalogue and completed-candle data (OKX/VALR). |
+
+The retired research endpoints (`/backtest`, `/backtest-history`,
+`/live-universe/*`, `/live-signals*`, `/paper-trades`, `/recovery-analysis*`)
+were removed together with their engines; see `docs/adr/0005-legacy-retirement.md`.

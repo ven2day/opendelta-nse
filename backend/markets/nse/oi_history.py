@@ -6,20 +6,22 @@ import math
 import os
 import tempfile
 from bisect import bisect_right
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, datetime, time as clock_time, timedelta
+from datetime import date, datetime, timedelta
+from datetime import time as clock_time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from backend.collector import DhanAPIError, DhanClient, DhanConfig, historical_payload_to_frame
 from backend.markets.nse.oi import (
     DhanInstrumentCatalog,
     download_detailed_instrument_catalog,
     parse_rolling_option_history,
 )
-from backend.collector import DhanAPIError, DhanClient, DhanConfig, historical_payload_to_frame
 from backend.markets.nse.oi_regime import (
     IST,
     NiftyOiConfig,
@@ -31,6 +33,9 @@ from backend.markets.nse.oi_regime import (
     combine_regime_components,
     score_options,
 )
+from backend.observability import get_logger
+
+logger = get_logger("opendelta.market-data.nse-oi-history")
 
 
 HISTORY_IMPORT_VERSION = "nifty-oi-history-1.0.0"
@@ -296,8 +301,8 @@ class HistoricalOiImporter:
             frame.index = pd.DatetimeIndex(frame.index)
             frame.index = frame.index.tz_localize(IST) if frame.index.tz is None else frame.index.tz_convert(IST)
             return frame.sort_index()
-        except (OSError, ValueError, KeyError, pd.errors.ParserError):
-            pass
+        except (OSError, ValueError, KeyError, pd.errors.ParserError) as error:
+            logger.debug("nifty_spot_intraday_cache_miss", path=str(path), reason=type(error).__name__)
         chunks: list[pd.DataFrame] = []
         for chunk_start, chunk_end in _date_chunks(start, end, MAX_INTRADAY_DAYS):
             payload = self.client.historical_intraday(

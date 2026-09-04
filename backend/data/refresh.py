@@ -10,7 +10,10 @@ from typing import Any
 
 import pandas as pd
 
-from backend.collector import ConfigurationError, DhanAPIError, DhanConfig, IST, run_screener
+from backend.collector import IST, ConfigurationError, DhanAPIError, DhanConfig, run_screener
+from backend.observability import get_logger
+
+logger = get_logger("opendelta.market-data.refresh")
 
 
 RefreshProgress = Callable[[int, int], None]
@@ -100,6 +103,7 @@ class MarketDataRefreshService:
                 self._completed_at = self.clock()
                 self._error = message
         except Exception:
+            logger.exception("unexpected_market_data_refresh_failure")
             with self._lock:
                 self._state = "FAILED"
                 self._completed_at = self.clock()

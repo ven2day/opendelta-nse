@@ -2,7 +2,6 @@
 
 import { Coins, Save, Settings2, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
-import { GlobalPriceRangeForm } from "../admin/admin-settings";
 import type { GlobalSettingsPayload } from "../global-settings-shared";
 import { formatDateTime, marketLabel, MARKETS, shortId } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
@@ -11,19 +10,9 @@ import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { GlobalPriceRangeForm } from "./price-range-form";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
-
-const LEGACY_TOOLS: Array<{ href: string; title: string; description: string }> = [
-  { href: "/legacy/screener", title: "Legacy RSI screener", description: "The original NSE RSI and volume dashboard with Dhan refresh controls." },
-  { href: "/legacy/backtest", title: "Legacy NSE backtest", description: "Strong Buy, RSI recovery and ATR exit studies with saved history." },
-  { href: "/legacy/backtest/crypto", title: "Legacy crypto backtest", description: "OKX and VALR completed-candle backtests for crypto and metals." },
-  { href: "/legacy/signals", title: "Legacy NSE signals", description: "Completed-candle RSI recovery signals and manual paper decisions." },
-  { href: "/legacy/signals?view=universe", title: "Legacy live universe", description: "Frozen live-signal universe versions and CSV exports." },
-  { href: "/legacy/signals/crypto", title: "Legacy crypto signals", description: "Paper-only crypto and metals signal monitor." },
-  { href: "/legacy/markets", title: "Legacy markets", description: "Instrument master and market context by provider." },
-  { href: "/admin", title: "Admin price range", description: "Standalone page for the global price range form embedded below." },
-];
 
 export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMarket: PlatformMarket; globalSettings: GlobalSettingsPayload }) {
   const [market, setMarket] = useState<PlatformMarket>(initialMarket);
@@ -119,16 +108,12 @@ export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMa
       </table></div>}
     </Panel>
 
-    <Panel icon={<Coins size={17} />} title="Global price range" description="Applies to the legacy NSE screener, signals and backtest symbol universe. Stored backtest history is not changed.">
+    <Panel icon={<Coins size={17} />} title="Global price range" description="Bounds the symbol universe offered to screeners and backtests by current price. Stored backtest history is not changed.">
       <div className="site-shell quant-embedded-shell"><GlobalPriceRangeForm initialSettings={globalSettings} /></div>
     </Panel>
 
     <Panel icon={<ShieldCheck size={17} />} title="Credentials and broker execution" description="Secrets remain server-side environment values. The platform accepts no user-supplied executable strategies and installs no live order adapter." aside={<StatusBadge tone="good">Orders disabled</StatusBadge>}>
       <div className="quant-panel-body"><p className="quant-inline-note">Every workspace in this application is research or paper only. Broker execution is disabled at the service level and cannot be enabled from the UI.</p></div>
-    </Panel>
-
-    <Panel title="Legacy tools" description="The previous production pages stay reachable while the unified platform is rolled out.">
-      <div className="quant-panel-body"><div className="quant-link-grid">{LEGACY_TOOLS.map((tool) => <a key={tool.href} href={tool.href}><strong>{tool.title}</strong><span>{tool.description}</span></a>)}</div></div>
     </Panel>
   </main>;
 }

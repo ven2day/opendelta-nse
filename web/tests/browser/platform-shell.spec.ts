@@ -17,34 +17,6 @@ async function mockPlatform(page: Page) {
     // The unified pages must render a clear "not configured" state, never crash, when the platform database is absent.
     return route.fulfill({ status: 503, json: { detail: "Platform database is not configured" } });
   });
-  await page.route("**/api/live-signals?**", async (route) => {
-    const action = new URL(route.request().url()).searchParams.get("action");
-    const status = {
-      connectionStatus: "DISCONNECTED",
-      engineStatus: "MARKET_CLOSED",
-      message: "NSE is closed; Dhan live subscriptions resume at the next market session",
-      universeVersion: "LIVE-TEST-001",
-      universeFrozen: true,
-      monitoredSymbols: 300,
-      subscribedSymbols: 300,
-      timeframe: "5m",
-      strategyVersion: "rsi-recovery-1.1.0",
-      lastCompletedCandle: "2026-08-28T15:30:00+05:30",
-      lastMarketDataTimestamp: null,
-      dataAgeSeconds: null,
-      marketSession: "CLOSED",
-      paperOnly: true,
-      liveOrdersEnabled: false,
-      oiFilterMode: "OFF",
-      oiRegime: null,
-      oiHistory: null,
-    };
-    if (action === "signals") return route.fulfill({ json: { signals: [], status, study: { signalsGenerated: 0 } } });
-    if (action === "status") return route.fulfill({ json: status });
-    if (action === "settings") return route.fulfill({ json: { settings: {} } });
-    if (action === "paper") return route.fulfill({ json: { paperTrades: [] } });
-    return route.fulfill({ status: 404, json: { detail: "Unknown test action" } });
-  });
 }
 
 async function login(page: Page) {
@@ -67,10 +39,8 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
   const authenticatedRoutes = [
     "/", "/screener", "/backtest", "/signals", "/paper-trading", "/settings",
     "/?market=CRYPTO", "/screener?market=CRYPTO", "/backtest?market=CRYPTO", "/signals?market=CRYPTO", "/paper-trading?market=CRYPTO",
-    "/admin", "/legacy/screener", "/legacy/markets", "/legacy/signals", "/legacy/signals/crypto",
-    "/legacy/backtest", "/legacy/backtest/crypto",
+    "/admin",
   ];
-  const routesWithEmbeddedHeader = new Set(["/legacy/screener", "/legacy/signals/crypto", "/legacy/backtest", "/legacy/backtest/crypto", "/admin"]);
   const viewports = [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -86,30 +56,14 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-topnav")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
-      if (routesWithEmbeddedHeader.has(route)) {
-        await expect(page.locator(".global-header .brand")).not.toBeVisible();
-        await expect(page.locator(".global-header .top-nav")).not.toBeVisible();
-      }
-      if (route === "/legacy/signals") await expect(page.locator(".global-header")).toHaveCount(0);
       await expect(page.locator(".platform-topnav a span")).toHaveText(["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"]);
-      if (viewport.width === 1440 && !route.startsWith("/legacy") && route !== "/admin") {
+      if (viewport.width === 1440) {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
       }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);
     }
   }
-});
-
-test("legacy NSE Signals presents an expected market-close state without false degradation", async ({ page }) => {
-  await page.goto("/legacy/signals");
-
-  await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByText("Dhan market data")).toBeVisible();
-  await expect(page.getByText("DISCONNECTED", { exact: true })).toBeVisible();
-  await expect(page.getByText("MARKET CLOSED", { exact: true })).toBeVisible();
-  await expect(page.getByText("No signals yet.")).toBeVisible();
-  await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
 });
 
 test("topbar links perform full document navigation in production", async ({ page }) => {
@@ -228,49 +182,6 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   await expect(page.getByText("No trades yet")).toBeVisible();
 });
 
-test("a saved result from a removed strategy is ignored and cannot crash the Backtests page", async ({ page }) => {
-  // Strategies removed from the platform (for example the old opening-range watchlist) may
-  // still be returned by the history API; their records are filtered out client-side and
-  // never rendered.
-  const summary = {
-    id: "legacy-removed-strategy",
-    completedAt: "2026-08-29T15:30:00+05:30",
-    strategyMode: "removed_legacy_strategy",
-    strategyName: "Removed legacy strategy",
-    timeframe: "5m",
-    durationYears: 1,
-    symbolCount: 649,
-  };
-  await page.route("**/api/backtest-history**", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.searchParams.has("id")) {
-      return route.fulfill({ json: {
-        ...summary,
-        response: {
-          metadata: {
-            runId: summary.id,
-            strategyMode: summary.strategyMode,
-            strategyKey: summary.strategyMode,
-          },
-          results: [],
-          errors: [],
-          warnings: [],
-        },
-      } });
-    }
-    return route.fulfill({ json: { runs: [summary], limit: 10 } });
-  });
-
-  await page.goto("/legacy/backtest");
-
-  await expect(page.locator(".platform-topbar")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Recent backtests" })).toBeVisible();
-  await expect(page.getByText("Completed backtests will appear here automatically")).toBeVisible();
-  await expect(page.getByText("Removed legacy strategy")).toHaveCount(0);
-  await expect(page.getByText("Saved result could not be displayed.")).toHaveCount(0);
-  await expect(page.getByText("This page couldn’t load")).toHaveCount(0);
-});
-
 test("desktop navigation stays on one row and the workspace uses the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/screener");
@@ -306,22 +217,6 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
   expect(await page.evaluate(() => window.localStorage.getItem("opendelta-sidebar-open"))).toBeNull();
 });
 
-test("legacy screener session values remain inside the table", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/legacy/screener");
-  await expect(page.getByRole("columnheader", { name: "Session (IST)" })).toBeVisible();
-
-  const sessions = page.locator(".session-cell");
-  expect(await sessions.count()).toBeGreaterThan(0);
-  const labels = await sessions.allTextContents();
-  for (const label of labels) expect(label).not.toContain("· IST");
-
-  const overflow = await sessions.evaluateAll((elements) =>
-    elements.map((element) => element.scrollWidth - element.clientWidth),
-  );
-  for (const pixels of overflow) expect(pixels).toBeLessThanOrEqual(1);
-});
-
 test("theme preference persists while navigating between product areas", async ({ page }) => {
   await page.goto("/");
   const themeToggle = page.getByRole("button", { name: "Switch to light theme" });
@@ -332,7 +227,7 @@ test("theme preference persists while navigating between product areas", async (
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
   await expect(page.getByRole("button", { name: "Switch to dark theme" })).toBeVisible();
 
-  await page.goto("/legacy/markets");
+  await page.goto("/screener");
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");
   await page.reload();
   await expect(page.locator(".platform-frame")).toHaveAttribute("data-theme", "light");

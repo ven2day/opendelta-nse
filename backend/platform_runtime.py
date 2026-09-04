@@ -8,24 +8,20 @@ service that also hosts the legacy endpoints.
 
 from __future__ import annotations
 
-import logging
 import os
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import FastAPI
 
-from datetime import datetime, timezone as _timezone
-
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
-from backend.api.settings_routes import create_settings_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
+from backend.api.settings_routes import create_settings_router
 from backend.api.signal_routes import create_signal_router
-from backend.screener.engine import ScreenerEngine
-from backend.paper_trading.broker import PaperBroker, PaperRepositories
-from backend.paper_trading.execution import ExecutionPolicy
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
@@ -46,6 +42,10 @@ from backend.data.repositories import (
     StrategyConfigRepository,
 )
 from backend.markets.base import CandleSource, market_spec
+from backend.observability import get_logger
+from backend.paper_trading.broker import PaperBroker, PaperRepositories
+from backend.paper_trading.execution import ExecutionPolicy
+from backend.screener.engine import ScreenerEngine
 from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
@@ -53,7 +53,7 @@ from backend.strategies import STRATEGIES
 
 LIVE_TIMEFRAME = "5m"
 
-logger = logging.getLogger("opendelta.platform")
+logger = get_logger("opendelta.platform")
 
 
 class PlatformRuntime:
@@ -73,7 +73,7 @@ class PlatformRuntime:
         self.symbol_catalogues = symbol_catalogues or {}
         self.candle_read_mode = candle_read_mode
         self._screener: ScreenerServices | None = None
-        self.clock = clock or (lambda: datetime.now(_timezone.utc))
+        self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
         self._brokers: dict[str, PaperBroker] = {}
@@ -106,13 +106,13 @@ class PlatformRuntime:
                     )
             interrupted = self.runner().recover()
             if interrupted:
-                logger.warning("Marked %s stale backtest run(s) INTERRUPTED after restart", interrupted)
+                logger.warning("marked_stale_backtest_runs_interrupted", count=interrupted)
             stale_screens = ScreenerRunRepository(self.require_database()).recover_interrupted()
             if stale_screens:
-                logger.warning("Marked %s stale screener run(s) FAILED after restart", stale_screens)
+                logger.warning("marked_stale_screener_runs_failed", count=stale_screens)
             self._start_signal_workers()
-        except Exception as error:
-            logger.error("Unified platform database is unavailable; v2 routes will fail closed: %s", error)
+        except Exception as error:  # noqa: BLE001 - the platform must degrade to disabled, never crash at startup
+            logger.error("platform_database_unavailable", reason=str(error))
             self.disabled_reason = str(error)
             try:
                 self.database.close()
@@ -141,7 +141,7 @@ class PlatformRuntime:
             paper_enabled = _truthy(os.environ.get(f"{market}_PAPER_TRADING_V2_ENABLED", "true"))
             broker = self.paper_broker(market) if paper_enabled else None
             if broker is None:
-                logger.info("%s paper trading v2 is disabled", market)
+                logger.info("paper_trading_v2_disabled", market=market)
             broker_tracking_owner = False
             for binding in self.live_bindings(market):
                 worker = self.build_signal_worker(market, binding=binding)
@@ -172,7 +172,7 @@ class PlatformRuntime:
                 with self._lock:
                     self._workers[key] = worker
                 worker.start()
-                logger.info("Started %s live-signal worker for %s at %s", market, binding.strategy_id, binding.timeframe)
+                logger.info("started_live_signal_worker", market=market, strategy=binding.strategy_id, timeframe=binding.timeframe)
 
     # ---- paper trading -----------------------------------------------------------
 
@@ -193,9 +193,9 @@ class PlatformRuntime:
         risk_settings = dict((active or {}).get("riskSettings") or {})
         if primary.timeframe == "1d" and risk_settings.get("priceModel") == "SIGNAL_CLOSE":
             logger.warning(
-                "%s %s uses 1d signals; overriding non-executable SIGNAL_CLOSE paper pricing with NEXT_OPEN",
-                key,
-                primary.strategy_id,
+                "overriding_signals_close_to_next_open",
+                market=key,
+                strategy=primary.strategy_id,
             )
             risk_settings["priceModel"] = "NEXT_OPEN"
         policy = ExecutionPolicy.from_mapping(
@@ -340,7 +340,7 @@ class PlatformRuntime:
     def runner(self) -> BacktestJobRunner:
         with self._lock:
             if self._runner is None:
-                self._runner = BacktestJobRunner(self.runs(), self._engine)
+                self._runner = BacktestJobRunner(self.runs(), self._engine, max_workers=_backtest_workers())
             return self._runner
 
     def _engine(self, request: BacktestRequest, cancel_event: threading.Event) -> BacktestEngine:
@@ -370,6 +370,18 @@ class PlatformRuntime:
 
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _backtest_workers() -> int:
+    """Concurrent v2 backtest runs; ``BACKTEST_WORKERS`` tunes it in deployment."""
+    raw = os.environ.get("BACKTEST_WORKERS", "1").strip()
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError("BACKTEST_WORKERS must be a whole number") from error
+    if value < 1 or value > 16:
+        raise RuntimeError("BACKTEST_WORKERS must be between 1 and 16")
+    return value
 
 
 def install_platform(app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[], dict[str, Any]] | None = None) -> None:

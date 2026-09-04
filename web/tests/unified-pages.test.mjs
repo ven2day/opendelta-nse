@@ -93,12 +93,14 @@ test("every unified route requires login and renders one topbar market selector"
 
   const settings = await fetchFromWorker(worker, "/settings", { headers: { accept: "text/html", cookie } });
   const settingsHtml = await settings.text();
-  assert.match(settingsHtml, /Legacy tools/);
-  for (const href of ["/legacy/screener", "/legacy/backtest", "/legacy/backtest/crypto", "/legacy/signals", "/legacy/signals/crypto", "/legacy/markets", "/admin"]) {
-    assert.match(settingsHtml, new RegExp(`href="${href.replace(/[/?]/g, (char) => `\\${char}`)}`), `settings links ${href}`);
-  }
   assert.match(settingsHtml, /Global minimum price/);
   assert.match(settingsHtml, /Global maximum price/);
+  assert.doesNotMatch(settingsHtml, /\/legacy\//, "settings no longer links to retired pages");
+
+  // /admin was retired with the legacy shell and now redirects to the unified Settings workspace.
+  const admin = await fetchFromWorker(worker, "/admin", { headers: { accept: "text/html", cookie }, redirect: "manual" });
+  assert.ok([302, 303, 307, 308].includes(admin.status), "/admin must redirect");
+  assert.match(admin.headers.get("location") ?? "", /\/settings$/);
 });
 
 test("the v2 proxy refuses anonymous and malformed requests before touching the service", async () => {

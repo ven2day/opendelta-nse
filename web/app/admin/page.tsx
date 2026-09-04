@@ -1,17 +1,17 @@
 import type { Metadata } from "next";
-import { readGlobalSettings } from "../global-settings-server";
+import { redirect } from "next/navigation";
 import { requireSessionUser } from "../server-auth";
-import { AdminSettings } from "./admin-settings";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Admin settings · OpenDelta",
-  description: "Manage application-wide OpenDelta display and symbol-universe settings.",
+  title: "Admin settings",
+  description: "Application-wide OpenDelta settings live in the unified Settings workspace.",
 };
 
 export default async function AdminPage() {
-  const userName = await requireSessionUser();
-  const settings = await readGlobalSettings();
-  return <AdminSettings initialSettings={settings} userName={userName} signOutHref="/api/logout" />;
+  await requireSessionUser();
+  // The standalone admin shell was retired with the legacy pages; the global
+  // price range now lives in the unified Settings workspace.
+  redirect("/settings");
 }

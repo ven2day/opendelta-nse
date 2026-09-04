@@ -198,6 +198,8 @@ opendelta-nse/
 | `NSE_LIVE_STRATEGY`, `NSE_LIVE_TIMEFRAME` | legacy single-binding variables, used only when the plural JSON variable is absent |
 | `DHAN_*` | Dhan credentials, read only by `backend/collector.py` |
 | `BACKTEST_WORKERS`, `BACKTEST_CACHE_DIR` | legacy backtest service tuning and candle cache |
+| `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
+| `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 
 All v2 features default to off; production behaviour is unchanged until they
 are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
@@ -213,7 +215,7 @@ are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## 🛠️ Tech Stack
 
-**Backend:** Python 3.12, FastAPI, pandas, NumPy, psycopg 3, PostgreSQL 17 / TimescaleDB, pytest, uv
+**Backend:** Python 3.12, FastAPI, pandas, NumPy, psycopg 3, PostgreSQL 17 / TimescaleDB, structlog, pytest, uv
 **Frontend:** TypeScript, React 19, vinext (Vite + React Server Components), Playwright
 **Ops:** Docker, systemd, nginx, Cloudflare, GitHub Actions
 
@@ -226,7 +228,7 @@ guaranteed profitable.
 
 ## 📄 License
 
-Not yet specified. Add a `LICENSE` file to declare one.
+Apache-2.0 — see [LICENSE](LICENSE).
 
 ## 👤 Author
 

@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Settings",
-  description: "Strategy configuration, risk defaults, the global price range and links to legacy tools.",
+  description: "Strategy configuration, risk defaults and the global price range.",
 };
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ market?: string }> }) {

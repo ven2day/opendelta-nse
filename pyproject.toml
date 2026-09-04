@@ -1,6 +1,9 @@
 [project]
-name = "rsi"
+name = "opendelta"
 version = "0.1.0"
+description = "OpenDelta — NSE & Crypto trading research platform (screener, backtest, live signals, paper trading)."
+readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.116,<1",
@@ -8,6 +11,7 @@ dependencies = [
     "pandas>=3.0.5",
     "pyarrow>=21,<22",
     "psycopg[binary,pool]>=3.2,<4",
+    "structlog>=25.0,<26",
     "uvicorn>=0.35,<1",
     "websockets>=15,<16",
 ]
@@ -15,7 +19,9 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx2>=2,<3",
+    "mypy>=1.15,<2",
     "pytest>=8,<9",
+    "ruff>=0.11,<1",
 ]
 
 [tool.setuptools.packages.find]
@@ -23,3 +29,27 @@ include = ["backend*"]
 
 [tool.setuptools.package-data]
 "backend.data.sql" = ["*.sql"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["backend", "tests", "scripts", "benchmarks"]
+
+[tool.ruff.lint]
+# E/F/W: pyflakes + pycodestyle, B: bugbear, UP: pyupgrade,
+# ARG: unused arguments, BLE: blind exceptions, C4: comprehensions,
+# I: isort, SIM: simplify. The judge remains explicit per file/line via noqa.
+select = ["E", "F", "W", "B", "UP", "ARG", "BLE", "C4", "I", "SIM"]
+ignore = ["E501"]  # long lines are allowed; readability wins over wrapping
+
+[tool.ruff.lint.per-file-ignores]
+"backend/compat/*" = ["UP", "B"]  # legacy engines are preserved, not modernised
+"benchmarks/*" = ["B", "BLE"]     # benchmark scripts are run rarely, correctness of the engine is the unit
+"tests/*" = ["BLE001"]            # tests assert on raised exceptions liberally
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = ["backend/compat/", "benchmarks/"]

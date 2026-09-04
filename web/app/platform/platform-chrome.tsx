@@ -32,12 +32,12 @@ type NavigationItem = {
   match: (path: string) => boolean;
 };
 
-/** The complete main navigation, in display order. Legacy tools map onto their modern counterpart. */
+/** The complete main navigation, in display order. */
 export const navigation: NavigationItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (path) => path === "/" || path.startsWith("/legacy/markets") },
-  { href: "/screener", label: "Screener", icon: ScanSearch, match: (path) => path.startsWith("/screener") || path.startsWith("/legacy/screener") },
-  { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") || path.startsWith("/legacy/backtest") },
-  { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") || path.startsWith("/legacy/signals") },
+  { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (path) => path === "/" },
+  { href: "/screener", label: "Screener", icon: ScanSearch, match: (path) => path.startsWith("/screener") },
+  { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") },
+  { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
   { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },
   { href: "/settings", label: "Settings", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
 ];
@@ -48,19 +48,8 @@ export function usesPlatformShell(pathname: string): boolean {
   return pathname !== "/login" && !pathname.startsWith("/api/");
 }
 
-function isLegacyMarketPath(path: string): boolean {
-  return path.startsWith("/legacy/backtest") || path.startsWith("/legacy/signals");
-}
-
-/** Legacy backtest/signals pages encode the market in the path; every modern page reads `?market=`. */
-function marketFor(path: string, selected?: string | null): PlatformMarket {
-  if (isLegacyMarketPath(path)) return path.includes("/crypto") ? "CRYPTO" : "NSE";
-  return parseMarket(selected);
-}
-
+/** Every page reads the market from `?market=`; the topbar switcher rewrites it in place. */
 function marketHref(path: string, search: string, market: PlatformMarket): string {
-  if (path.startsWith("/legacy/backtest")) return market === "CRYPTO" ? "/legacy/backtest/crypto" : "/legacy/backtest";
-  if (path.startsWith("/legacy/signals")) return market === "CRYPTO" ? "/legacy/signals/crypto" : "/legacy/signals";
   const params = new URLSearchParams(search);
   params.set("market", market);
   return `${path}?${params.toString()}`;
@@ -92,7 +81,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
   });
   const shellEnabled = usesPlatformShell(pathname);
   const search = searchParams.toString();
-  const market = marketFor(pathname, searchParams.get("market"));
+  const market = parseMarket(searchParams.get("market"));
 
   useEffect(() => {
     if (!shellEnabled) return;

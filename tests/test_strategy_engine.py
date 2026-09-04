@@ -1,20 +1,22 @@
 """Phase 2 guarantees for the shared strategy engine.
 
-Proves, on deterministic synthetic candles (and on real cached candles when
-they are available on this machine):
+Proves, on deterministic synthetic candles:
 
-1. Backtest and live evaluation agree bar-for-bar for identical candles.
+1. Backtest indicator tables and live evaluation agree bar-for-bar for
+   identical candles.
 2. An incomplete candle can never produce a signal.
-3. Entries happen at the next candle's open.
-4. Evaluation is causal: a prefix of history yields the same decision as the
+3. Evaluation is causal: a prefix of history yields the same decision as the
    full history does for that bar, so future candles cannot leak in.
-5. Strategies are discovered through the registry and carry a versioned,
+4. Strategies are discovered through the registry and carry a versioned,
    validated configuration snapshot; no code switches on a strategy name.
+
+Next-candle-open entry execution is guaranteed by the backtest engine tests
+(``tests/test_backtest_engine.py``) and the paper-trading execution tests
+(``tests/test_paper_trading.py``).
 """
 
 from __future__ import annotations
 
-import gzip
 import re
 import unittest
 from datetime import datetime, timedelta
@@ -29,10 +31,8 @@ from backend.core.models import MarketContext, SignalDecision, normalize_candles
 from backend.strategies import STRATEGIES, StrongBuyV1
 from backend.strategies.base import Strategy, resolve_config
 from backend.strategies.registry import StrategyRegistry
-from backend.strategies.strong_buy_compat import StrongBuyConfig, calculate_strong_buy_indicators, simulate_strong_buy_symbol
 
 IST = "Asia/Kolkata"
-CANDLE_CACHE = Path("/var/lib/vento-nse/backtest")
 
 
 def synthetic_nse_candles(days: int = 12, seed: int = 7) -> pd.DataFrame:
@@ -69,27 +69,16 @@ class StrongBuyEquivalenceTests(unittest.TestCase):
         cls.candles = synthetic_nse_candles()
         cls.config = cls.strategy.resolve({})
         cls.table = cls.strategy.compute_indicators(cls.candles, cls.config, IST)
-        cls.backtest = simulate_strong_buy_symbol("SYN", cls.candles, timeframe="5m", config=StrongBuyConfig(), run_id="fixed")
         cls.warmup = cls.strategy.required_history(cls.config)
 
     def test_synthetic_history_actually_produces_signals(self) -> None:
         self.assertGreaterEqual(int(self.table["StrongBuy"].sum()), 3)
-        self.assertGreaterEqual(len(self.backtest["signals"]), 3)
-
-    def test_shared_indicator_table_matches_the_legacy_strong_buy_table_exactly(self) -> None:
-        legacy = calculate_strong_buy_indicators(self.candles, StrongBuyConfig())
-        assert_frame_equal(legacy, self.table, check_exact=True)
 
     def test_backtest_and_live_evaluation_agree_for_identical_candles(self) -> None:
-        """Every backtest signal bar is a live BUY and every live BUY is a backtest signal."""
-        backtest_signal_bars = {
-            self.table.index.get_loc(pd.Timestamp(signal["signalTimestamp"]))
-            for signal in self.backtest["signals"]
-        }
-        strong_bars = set(np.flatnonzero(self.table["StrongBuy"].to_numpy()))
-        self.assertEqual(backtest_signal_bars, strong_bars)
+        """Every StrongBuy bar in the backtest table is a live BUY and every live BUY is a table bar."""
+        backtest_signal_bars = set(np.flatnonzero(self.table["StrongBuy"].to_numpy()))
         rng = np.random.default_rng(1)
-        sample_bars = sorted(strong_bars | set(rng.choice(np.arange(self.warmup, len(self.table)), 40, replace=False).tolist()))
+        sample_bars = sorted(backtest_signal_bars | set(rng.choice(np.arange(self.warmup, len(self.table)), 40, replace=False).tolist()))
         for bar in sample_bars:
             live = self.strategy.evaluate(self.candles.iloc[: bar + 1], context(), {})
             self.assertEqual(live.candle_timestamp, self.table.index[bar].to_pydatetime())
@@ -119,15 +108,6 @@ class StrongBuyEquivalenceTests(unittest.TestCase):
         self.assertNotEqual(decision.candle_timestamp, self.table.index[signal_bar].to_pydatetime())
         self.assertEqual(normalize_candles(flagged, IST).index[-1], self.table.index[signal_bar - 1])
 
-    def test_entry_uses_the_next_candle_open(self) -> None:
-        signals_by_lot = {signal["lotId"]: signal for signal in self.backtest["signals"] if signal["lotId"]}
-        self.assertGreaterEqual(len(self.backtest["lots"]), 1)
-        for lot in self.backtest["lots"]:
-            signal_bar = self.table.index.get_loc(pd.Timestamp(signals_by_lot[lot["lotId"]]["signalTimestamp"]))
-            self.assertEqual(lot["entryBarIndex"], signal_bar + 1)
-            self.assertEqual(lot["entryTimestamp"], self.table.index[signal_bar + 1].isoformat())
-            self.assertAlmostEqual(lot["entryPrice"], round(float(self.table["Open"].iloc[signal_bar + 1]), 4))
-
     def test_insufficient_history_never_signals(self) -> None:
         decision = self.strategy.evaluate(self.candles.iloc[: self.warmup - 1], context(), {})
         self.assertEqual(decision.decision, "NONE")
@@ -146,28 +126,7 @@ class StrongBuyEquivalenceTests(unittest.TestCase):
         self.assertEqual(public["candleTimestamp"], decision.candle_timestamp.isoformat())
 
 
-@unittest.skipUnless((CANDLE_CACHE / "RELIANCE-5-1y.csv.gz").exists(), "real candle cache not present")
-class RealCandleEquivalenceTests(unittest.TestCase):
-    def test_shared_pipeline_is_identical_on_real_nse_candles(self) -> None:
-        strategy = STRATEGIES.get("ema_vwap_strong_buy")
-        for symbol in ("RELIANCE", "HDFCBANK"):
-            with gzip.open(CANDLE_CACHE / f"{symbol}-5-1y.csv.gz") as fh:
-                candles = pd.read_csv(fh, parse_dates=["Timestamp"]).set_index("Timestamp")
-            assert_frame_equal(
-                calculate_strong_buy_indicators(candles, StrongBuyConfig()),
-                strategy.compute_indicators(candles, strategy.resolve({}), IST),
-                check_exact=True,
-            )
-
-
 class IndicatorLibraryTests(unittest.TestCase):
-    def test_wilder_rma_and_rsi_match_recovery_backtest_exactly(self) -> None:
-        from backend.compat.recovery_backtest import calculate_wilder_rma, calculate_wilder_rsi
-
-        close = synthetic_nse_candles(days=3)["Close"]
-        pd.testing.assert_series_equal(indicators.wilder_rma(close, 14), calculate_wilder_rma(close, 14), check_exact=True)
-        pd.testing.assert_series_equal(indicators.wilder_rsi(close, 14), calculate_wilder_rsi(close, 14), check_exact=True)
-
     def test_session_vwap_resets_per_session_in_the_market_timezone(self) -> None:
         candles = synthetic_nse_candles(days=2)
         vwap = indicators.session_vwap(candles, IST)
@@ -220,13 +179,18 @@ class RegistryAndConfigTests(unittest.TestCase):
         resolved = resolve_config(strategy.config_schema, {"target_pct": 2})
         self.assertIsInstance(resolved["target_pct"], float)
 
-    def test_lot_sizing_matches_the_legacy_strong_buy_configuration(self) -> None:
+    def test_lot_sizing_follows_the_configured_additional_lot_policy(self) -> None:
         strategy = STRATEGIES.get("ema_vwap_strong_buy")
-        for overrides in ({}, {"additional_quantity_pct": 25.0}, {"additional_sizing_mode": "FIXED_PERCENTAGE_OF_FIRST_LOT"}):
-            cfg = strategy.resolve(overrides)
-            legacy = StrongBuyConfig(**overrides)
-            for entry in range(6):
-                self.assertEqual(StrongBuyV1.lot_quantity(cfg, entry), legacy.quantity(entry), overrides)
+        # Default policy: each new lot is 50% smaller than the previous one.
+        reducing = strategy.resolve({})
+        self.assertEqual(StrongBuyV1.lot_quantity(reducing, 0), reducing["initial_quantity"])
+        self.assertLess(StrongBuyV1.lot_quantity(reducing, 1), StrongBuyV1.lot_quantity(reducing, 0))
+        # Fixed-percentage policy: every additional lot is the same share of the first.
+        fixed = strategy.resolve({"additional_sizing_mode": "FIXED_PERCENTAGE_OF_FIRST_LOT", "additional_quantity_pct": 25.0})
+        self.assertEqual(StrongBuyV1.lot_quantity(fixed, 1), StrongBuyV1.lot_quantity(fixed, 2))
+        for entry in range(6):
+            self.assertGreaterEqual(StrongBuyV1.lot_quantity(reducing, entry), 1)
+            self.assertGreaterEqual(StrongBuyV1.lot_quantity(fixed, entry), 1)
 
     def test_market_and_timeframe_compatibility_is_enforced(self) -> None:
         strategy = STRATEGIES.get("ema_vwap_strong_buy")

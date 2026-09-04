@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "web" / "deploy"
@@ -43,6 +46,10 @@ def test_backup_is_verified_and_restore_is_explicitly_guarded() -> None:
     assert "--clean --if-exists --no-owner --exit-on-error" in restore
 
 
+@pytest.mark.skipif(
+    sys.platform.startswith("win") or shutil.which("bash") is None,
+    reason="the deploy shell scripts are syntax-checked on POSIX CI where bash exists",
+)
 def test_all_timescale_shell_assets_parse() -> None:
     scripts = [
         "backup-timescale.sh",

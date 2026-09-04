@@ -9,8 +9,7 @@ base_url="${1:-http://127.0.0.1:3100}"
 
 cookie_jar="$(mktemp)"
 dashboard_html="$(mktemp)"
-live_csv="$(mktemp)"
-trap 'rm -f "${cookie_jar}" "${dashboard_html}" "${live_csv}"' EXIT
+trap 'rm -f "${cookie_jar}" "${dashboard_html}"' EXIT
 
 anonymous_status="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/")"
 [[ "${anonymous_status}" == "307" ]]
@@ -48,41 +47,7 @@ curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/strategies" > "${dashboard_html
 jq -e '(.strategies | length) > 0 and (.strategies[0].configSchema | type == "object")' "${dashboard_html}" >/dev/null
 echo "verified unified platform API proxy"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/legacy/screener" > "${dashboard_html}"
-grep -q 'Yesterday RSI' "${dashboard_html}"
-grep -q 'Current RSI' "${dashboard_html}"
-grep -q 'Yesterday price' "${dashboard_html}"
-grep -q 'Current close' "${dashboard_html}"
-grep -q 'Change (₹)' "${dashboard_html}"
-grep -q 'Recent levels' "${dashboard_html}"
-grep -q 'Confirmed 1-day pivots' "${dashboard_html}"
-! grep -q 'Awaiting confirmed daily pivots' "${dashboard_html}"
-grep -q '24h volume' "${dashboard_html}"
-grep -q 'RSI &gt; 50' "${dashboard_html}"
-grep -q 'RSI slicer' "${dashboard_html}"
-grep -q 'Minimum current RSI' "${dashboard_html}"
-grep -q 'Maximum current RSI' "${dashboard_html}"
-grep -q 'Price slicer' "${dashboard_html}"
-grep -q 'Minimum current price' "${dashboard_html}"
-grep -q 'Maximum current price' "${dashboard_html}"
-grep -q 'Dhan market data' "${dashboard_html}"
-grep -q 'Refresh all NSE data from Dhan' "${dashboard_html}"
-grep -q 'Add NSE symbol' "${dashboard_html}"
-! grep -q 'Export CSV' "${dashboard_html}"
-grep -Eq '[0-9]{2} [A-Z][a-z]{2} [0-9]{2}:[0-9]{2} (AM|PM)' "${dashboard_html}"
-! grep -q 'Last refresh' "${dashboard_html}"
-! grep -q 'NSE ready' "${dashboard_html}"
-! grep -q 'All prices' "${dashboard_html}"
-! grep -q 'Extra large' "${dashboard_html}"
-grep -q 'IST' "${dashboard_html}"
-grep -q 'Backtest' "${dashboard_html}"
-grep -q 'OpenDelta' "${dashboard_html}"
-grep -q '₹' "${dashboard_html}"
-! grep -q 'Vento NSE' "${dashboard_html}"
-! grep -q '>2h volume<' "${dashboard_html}"
-! grep -q '>4h volume<' "${dashboard_html}"
-echo "verified dashboard HTML"
-
+curl -fsS -b "${cookie_jar}" "${base_url}/" > "${dashboard_html}"
 mapfile -t browser_assets < <(
   grep -oE '(src|href)="[^"]+\.(js|css)(\?[^"]*)?"' "${dashboard_html}" \
     | sed -E 's/^(src|href)="([^"]+)"$/\2/' \
@@ -99,111 +64,51 @@ for asset in "${browser_assets[@]}"; do
 done
 echo "verified browser JavaScript and stylesheet assets"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/api/market-data?format=csv" > "${live_csv}"
-grep -q '^rank,symbol,company_name,trading_date,previous_date,previous_close,entry_price,change_percent,previous_rsi_14,rsi_14,volume_24h,support_1_price,support_1_time,support_2_price,support_2_time,resistance_1_price,resistance_1_time,resistance_2_price,resistance_2_time' "${live_csv}"
-registry_count="$(awk 'END { print NR - 1 }' /var/lib/vento-nse/data/symbols.csv)"
-[[ "$(awk 'END { print NR - 1 }' "${live_csv}")" -eq "${registry_count}" ]]
-
-session_count="$(awk -F, 'NR > 1 && $4 != "" { sessions[$4] = 1 } END { print length(sessions) }' "${live_csv}")"
-[[ "${session_count}" -eq 1 ]]
-echo "verified live market CSV"
-
-curl -fsS -b "${cookie_jar}" "${base_url}/legacy/backtest" > "${dashboard_html}"
-grep -q 'Historical backtest' "${dashboard_html}"
-grep -q 'Run backtest' "${dashboard_html}"
-grep -q 'Investment rules' "${dashboard_html}"
-grep -Eq 'All .*[1-9][0-9]*.* symbols' "${dashboard_html}"
-! grep -q 'Top-5 Opening Range Breakout' "${dashboard_html}"
-! grep -q '>Market-Aligned VWAP Pullback Scalper</button>' "${dashboard_html}"
-! grep -q '>Market-Aligned RSI Scalper</button>' "${dashboard_html}"
-! grep -q 'Failure Engine' "${dashboard_html}"
-grep -q '5m' "${dashboard_html}"
-grep -q '4h' "${dashboard_html}"
-grep -q '1d' "${dashboard_html}"
-grep -q 'OpenDelta' "${dashboard_html}"
-grep -q '₹' "${dashboard_html}"
-! grep -q 'Vento NSE' "${dashboard_html}"
-echo "verified backtest HTML"
-
-curl -fsS -b "${cookie_jar}" "${base_url}/legacy/signals" > "${dashboard_html}"
-grep -q 'OpenDelta' "${dashboard_html}"
-! grep -q 'class="global-header"' "${dashboard_html}"
-echo "verified legacy signals HTML"
-
-curl -fsS -b "${cookie_jar}" "${base_url}/api/live-signals?action=status" > "${dashboard_html}"
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/signals/health?market=NSE" > "${dashboard_html}"
 jq -e '
   .paperOnly == true and
   .liveOrdersEnabled == false and
-  .universeFrozen == true and
-  (.universeVersion | type == "string" and length > 0) and
-  (.monitoredSymbols > 0) and
-  (.subscribedSymbols == .monitoredSymbols) and
-  (
-    (.marketSession == "CLOSED" and .engineStatus == "MARKET_CLOSED") or
-    (
-      .marketSession == "OPEN" and
-      .connectionStatus == "CONNECTED" and
-      (.engineStatus == "READY" or .engineStatus == "RECOVERING")
-    )
-  )
+  (.engines | type == "array") and
+  (.workers | type == "array")
 ' "${dashboard_html}" >/dev/null
-echo "verified paper-only NSE live-signal runtime contract"
+echo "verified paper-only v2 signal health contract"
 
 universe_status="$(curl -sS -o "${dashboard_html}" -w '%{http_code}' \
-  "${base_url}/api/live-universe?action=config")"
+  "${base_url}/api/v2/screener/universes?market=NSE")"
 [[ "${universe_status}" == "401" ]]
-echo "verified live-universe API authentication"
+echo "verified screener universes API authentication"
 
-market_data_status="$(curl -sS -o "${dashboard_html}" -w '%{http_code}' \
-  "${base_url}/api/market-data")"
-[[ "${market_data_status}" == "401" ]]
-
-curl -fsS -b "${cookie_jar}" "${base_url}/api/market-data" > "${dashboard_html}"
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/screener/universes?market=NSE" > "${dashboard_html}"
 jq -e '
-  (.state == "IDLE" or .state == "RUNNING" or .state == "SUCCEEDED" or .state == "FAILED") and
-  (.running | type == "boolean") and
-  (.lastRefreshTimestamp | type == "string")
+  (.universes | type == "array") and
+  (.active | type == "object")
 ' "${dashboard_html}" >/dev/null
-echo "verified authenticated market-data status proxy"
-
-curl -fsS \
-  -H "x-opendelta-proxy-token: ${BACKTEST_PROXY_TOKEN}" \
-  "${base_url}/api/live-universe?action=config" > "${dashboard_html}"
-jq -e '
-  .defaults.topN == 300 and
-  .defaults.minimumPrice == 500 and
-  .defaults.maximumPrice == 2000 and
-  .defaults.rankingMode == "QUALITY" and
-  .defaults.minimumBuyObservations == 50
-' "${dashboard_html}" >/dev/null
-echo "verified live-universe API proxy"
+echo "verified screener universes API proxy"
 
 backtest_status="$(curl -sS -o "${dashboard_html}" -w '%{http_code}' \
   -b "${cookie_jar}" \
   -H 'Content-Type: application/json' \
-  --data '{"symbols":["NOTINUNIVERSE"]}' \
-  "${base_url}/api/backtest")"
+  --data '{"market":"NSE","strategyId":"ema_vwap_strong_buy","symbols":[],"timeframe":"5m","startDate":"2026-01-01","endDate":"2026-01-02"}' \
+  "${base_url}/api/v2/backtests")"
 if [[ "${backtest_status}" != "422" ]]; then
   echo "backtest API verification returned HTTP ${backtest_status}" >&2
   head -c 500 "${dashboard_html}" >&2
   echo >&2
   exit 1
 fi
-grep -q 'symbols.csv' "${dashboard_html}"
-echo "verified authenticated backtest API proxy"
+grep -q 'detail' "${dashboard_html}"
+echo "verified authenticated backtest API validation"
 
 proxy_status="$(curl -sS -o "${dashboard_html}" -w '%{http_code}' \
-  -H 'Content-Type: application/json' \
   -H "x-opendelta-proxy-token: ${BACKTEST_PROXY_TOKEN}" \
-  --data '{"symbols":[]}' \
-  "${base_url}/api/backtest")"
-if [[ "${proxy_status}" != "422" ]]; then
-  echo "trusted backtest proxy verification returned HTTP ${proxy_status}" >&2
+  "${base_url}/api/v2/strategies")"
+if [[ "${proxy_status}" != "200" ]]; then
+  echo "trusted proxy verification returned HTTP ${proxy_status}" >&2
   head -c 500 "${dashboard_html}" >&2
   echo >&2
   exit 1
 fi
-grep -q 'detail' "${dashboard_html}"
-echo "verified trusted backtest proxy"
+jq -e '(.strategies | length) > 0' "${dashboard_html}" >/dev/null
+echo "verified trusted v2 proxy"
 
 echo "container verification passed"

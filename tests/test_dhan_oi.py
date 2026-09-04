@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-import struct
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from urllib.error import HTTPError
@@ -18,9 +18,21 @@ from backend.markets.nse.oi import (
     parse_option_chain,
     parse_rolling_option_history,
 )
-from backend.compat.live_signals import DhanFeedPacket, parse_dhan_feed_packets
 from backend.collector import DhanClient, DhanConfig
 from backend.markets.nse.oi_regime import OiRegimeRepository
+
+
+@dataclass(frozen=True)
+class _FeedPacket:
+    """Duck-typed market feed packet; ``on_market_feed`` reads attributes only."""
+
+    security_id: str
+    timestamp: datetime
+    price: float | None = None
+    cumulative_volume: int | None = None
+    open_interest: int | None = None
+    bid: float | None = None
+    ask: float | None = None
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -88,31 +100,10 @@ def test_futures_quote_canonical_mapping() -> None:
     assert row.source_timestamp == STAMP
 
 
-def test_full_feed_packet_parses_oi_depth_and_received_time() -> None:
-    packet = bytearray(82)
-    packet[0] = 8
-    struct.pack_into("<H", packet, 1, 82)
-    packet[3] = 2
-    struct.pack_into("<I", packet, 4, 900)
-    struct.pack_into("<f", packet, 8, 100.5)
-    struct.pack_into("<I", packet, 14, int(STAMP.timestamp()))
-    struct.pack_into("<I", packet, 22, 5_000)
-    struct.pack_into("<I", packet, 34, 10_000)
-    struct.pack_into("<f", packet, 74, 100.0)
-    struct.pack_into("<f", packet, 78, 101.0)
-    rows = parse_dhan_feed_packets(bytes(packet), STAMP)
-    assert len(rows) == 1
-    assert rows[0].security_id == "900"
-    assert rows[0].open_interest == 10_000
-    assert rows[0].bid == 100
-    assert rows[0].ask == 101
-    assert rows[0].timestamp == STAMP
-
-
 def test_reconnect_invalidation_discards_pre_disconnect_oi(tmp_path: Path) -> None:
     service = DhanNiftyOiService(None, OiRegimeRepository(tmp_path), tmp_path, clock=lambda: STAMP)  # type: ignore[arg-type]
     service._live_underlying_id = "13"
-    service.on_market_feed(DhanFeedPacket(8, 2, "13", STAMP, price=25_050, cumulative_volume=1_000))
+    service.on_market_feed(_FeedPacket("13", STAMP, price=25_050, cumulative_volume=1_000))
     assert service._live_events
     service.invalidate_live_state()
     assert service._live_events == {}

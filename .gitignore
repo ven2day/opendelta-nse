@@ -29,7 +29,6 @@ web/coverage/
 
 # Runtime state, caches, reports, and exports
 run/
-data/
 reports/
 outputs/
 work/
@@ -39,11 +38,18 @@ work/
 Lastdata.csv
 nse_yesterday_losers_rsi_20_40.csv
 
+# Dhan/NSE historical data drops and derived artifacts (the committed CSVs in data/ remain canonical)
+data/*.parquet
+data/*.csv.gz
+data/*-live.csv
+
+# Generated frontend data artifacts (regenerated from data/ by `npm run data:sync` at build time)
+web/app/data/
+web/public/nse_symbols_rsi_volume.csv
+web/public/live/
+
 # IDE and OS metadata
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-
-# The runtime data directories above must not hide the platform persistence package.
-!backend/data/

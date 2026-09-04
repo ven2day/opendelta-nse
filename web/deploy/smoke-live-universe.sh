@@ -7,8 +7,9 @@ set +a
 
 base_url="${1:-https://nse.ventoday.com}"
 cookie_jar="$(mktemp)"
-response="$(mktemp)"
-trap 'rm -f "${cookie_jar}" "${response}"' EXIT
+universes_response="$(mktemp)"
+presets_response="$(mktemp)"
+trap 'rm -f "${cookie_jar}" "${universes_response}" "${presets_response}"' EXIT
 
 curl -fsS -o /dev/null -c "${cookie_jar}" \
   -H 'Content-Type: application/x-www-form-urlencoded' \
@@ -16,40 +17,26 @@ curl -fsS -o /dev/null -c "${cookie_jar}" \
   --data-urlencode "password=${APP_PASSWORD}" \
   "${base_url}/api/login"
 
-curl -fsS -b "${cookie_jar}" "${base_url}/signals?view=universe" | grep -q 'Live Signal Universe'
-
-curl -fsS -b "${cookie_jar}" \
-  -H 'Content-Type: application/json' \
-  --data '{
-    "topN": 300,
-    "minimumPrice": 500,
-    "maximumPrice": 2000,
-    "rankingMode": "QUALITY",
-    "minimumBuyObservations": 50,
-    "manualPins": [],
-    "manualExclusions": [],
-    "dynamicPriceFilter": false
-  }' \
-  "${base_url}/api/live-universe?action=rebuild" > "${response}"
+curl -fsS -b "${cookie_jar}" "${base_url}/screener?market=NSE" | grep -q 'Screener'
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/screener/universes?market=NSE" > "${universes_response}"
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/screener/presets?market=NSE" > "${presets_response}"
 
 jq -e '
-  .status == "PREVIEW" and
-  .configuration.topN == 300 and
-  .configuration.minimumPrice == 500 and
-  .configuration.maximumPrice == 2000 and
-  .configuration.rankingMode == "QUALITY" and
-  .statistics.totalNseSymbols == 750 and
-  .statistics.dataQualityEligible == 749 and
-  .statistics.selected <= 300 and
-  .source.strategyVersion == "rsi-recovery-1.1.0" and
-  .requiresConfirmation == true
-' "${response}" >/dev/null
+  (.universes | type == "array") and
+  (.active | type == "object")
+' "${universes_response}" >/dev/null
 
-jq -c '{
-  requested: .statistics.requestedTopN,
-  priceEligible: .statistics.priceEligible,
-  selected: .statistics.selected,
-  priceAsOf: .source.priceAsOf,
-  strategy: .source.strategyVersion,
-  requiresConfirmation
-}' "${response}"
+jq -e '
+  (.presets | type == "array") and
+  ((.presets | length) > 0) and
+  (.presets[0].presetId | type == "string") and
+  ((.presets[0].symbols | length) > 0)
+' "${presets_response}" >/dev/null
+
+jq -n \
+  --slurpfile universes "${universes_response}" \
+  --slurpfile presets "${presets_response}" \
+  '{
+    savedUniverses: ($universes[0].universes | length),
+    presets: [$presets[0].presets[] | { presetId, symbolCount: (.symbols | length) }]
+  }'

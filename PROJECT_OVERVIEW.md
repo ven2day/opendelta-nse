@@ -55,7 +55,7 @@ benchmarks/       legacy engine benchmarks and baselines
 
 ## Technology stack
 
-Python 3.12, FastAPI, pandas/NumPy, psycopg 3, PostgreSQL/TimescaleDB;
+Python 3.12, FastAPI, pandas/NumPy, psycopg 3, PostgreSQL/TimescaleDB, structlog;
 TypeScript, React 19, vinext (Vite), Playwright; Docker, systemd, nginx,
 GitHub Actions.
 
@@ -66,4 +66,4 @@ No broker or exchange order client exists. Dhan credentials are read only by
 
 ## License
 
-Not yet specified — see the README.
+Apache-2.0 — see [LICENSE](LICENSE).

@@ -18,26 +18,41 @@ login_status="$(curl -sS -o /dev/null -w '%{http_code}' \
   "${base_url}/api/login")"
 [[ "${login_status}" == "303" ]]
 
-# EMA/VWAP Strong Buy is the only strategy that can start a new backtest, and it
-# requires completed 5-minute candles, so this smoke test always exercises it.
+# Unified platform backtest: submit a v2 run for one NSE symbol over the last
+# 90 days, then poll until the stored run reaches a terminal state.
+start_date="$(date -u -d '90 days ago' +%F)"
+end_date="$(date -u +%F)"
+
 curl -fsS \
   -b "${cookie_jar}" \
   -H 'Content-Type: application/json' \
-  --data '{"symbols":["LUPIN"],"durationYears":1,"timeframe":"5m","strategyMode":"ema_vwap_strong_buy","strategyKey":"ema_vwap_strong_buy"}' \
-  "${base_url}/api/backtest" > "${response}"
+  --data "{\"market\":\"NSE\",\"strategyId\":\"ema_vwap_strong_buy\",\"symbols\":[\"LUPIN\"],\"timeframe\":\"5m\",\"startDate\":\"${start_date}\",\"endDate\":\"${end_date}\"}" \
+  "${base_url}/api/v2/backtests" > "${response}"
+
+run_id="$(jq -r '.runId // empty' "${response}")"
+[[ -n "${run_id}" ]]
+
+status="QUEUED"
+for _ in $(seq 1 120); do
+  curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/backtests/${run_id}" > "${response}"
+  status="$(jq -r '.status' "${response}")"
+  case "${status}" in
+    COMPLETE|FAILED|CANCELLED) break ;;
+  esac
+  sleep 5
+done
+[[ "${status}" == "COMPLETE" ]]
 
 jq -e '
-  (.metadata.strategyMode == "ema_vwap_strong_buy") and
-  (.results | length == 1) and
-  (.results[0].symbol == "LUPIN") and
-  (.results[0].bars > 200)
+  .market == "NSE" and
+  .strategyId == "ema_vwap_strong_buy" and
+  (.symbolsProcessed >= 1) and
+  (.metrics | type == "object")
 ' "${response}" >/dev/null
 
 jq -c '{
-  symbol: .results[0].symbol,
-  bars: .results[0].bars,
-  strongBuySignals: .results[0].strongBuySignals,
-  executedLots: .results[0].executedLots,
-  targetHits: .results[0].targetHits,
-  errors: .errors
+  runId,
+  status,
+  symbolsProcessed,
+  metrics
 }' "${response}"

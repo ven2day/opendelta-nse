@@ -6,11 +6,13 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime, time as clock_time, timedelta
+from datetime import date, datetime, timedelta
+from datetime import time as clock_time
 from pathlib import Path
 from statistics import median
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -26,13 +28,16 @@ from backend.markets.nse.oi_regime import (
     _change_pct,
     combine_regime_components,
     insufficient_regime,
+    option_contract_is_eligible,
     score_futures,
     score_options,
     score_spot_trend,
     select_atm_strikes,
     select_expiry,
-    option_contract_is_eligible,
 )
+from backend.observability import get_logger
+
+logger = get_logger("opendelta.market-data.nse-oi")
 
 
 DETAILED_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
@@ -100,8 +105,8 @@ class DhanInstrumentCatalog:
             try:
                 candidate = float(strike.at[index])
                 strike_value = candidate if math.isfinite(candidate) else None
-            except (TypeError, ValueError):
-                pass
+            except (TypeError, ValueError) as error:
+                logger.debug("non_numeric_option_strike", row=index, reason=str(error))
             records.append(DhanInstrument(
                 security_id=security.at[index],
                 exchange=exchange.at[index].upper(),
@@ -177,8 +182,8 @@ def download_detailed_instrument_catalog(
     try:
         if cache_file.exists() and now() - cache_file.stat().st_mtime < 12 * 60 * 60:
             return DhanInstrumentCatalog.from_csv(cache_file.read_bytes())
-    except OSError:
-        pass
+    except OSError as error:
+        logger.debug("instrument_catalog_cache_unreadable", path=str(cache_file), reason=str(error))
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
@@ -578,7 +583,7 @@ class DhanNiftyOiService:
             if security_id not in tracked:
                 return
             event = {
-                "timestamp": _as_ist(getattr(packet, "timestamp")),
+                "timestamp": _as_ist(packet.timestamp),
                 "price": getattr(packet, "price", None),
                 "volume": getattr(packet, "cumulative_volume", None),
                 "open_interest": getattr(packet, "open_interest", None),

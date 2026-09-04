@@ -10,7 +10,6 @@ import {
   Radio,
   ScanSearch,
   Settings2,
-  ShieldCheck,
   Sun,
   Wallet,
 } from "lucide-react";
@@ -165,8 +164,9 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
             {navigation.map((item) => {
               const { href, label, icon: Icon, match } = item;
               return (
-                <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-current={match(pathname) ? "page" : undefined}>
-                  <Icon size={15} /><span>{label}</span>
+                <a key={href} href={navigationHref(item, market)} className={match(pathname) ? "active" : ""} aria-label={label} title={label} aria-current={match(pathname) ? "page" : undefined}>
+                  <Icon size={17} aria-hidden="true" />
+                  <span className="platform-nav-label" aria-hidden="true">{label}</span>
                 </a>
               );
             })}
@@ -181,9 +181,6 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
             </button>
             <a className="platform-icon-action platform-signout" href="/api/logout" aria-label="Sign out" title="Sign out"><LogOut size={17} /></a>
           </div>
-          <span className="platform-safety-chip" title="Paper research only · Broker execution disabled">
-            <ShieldCheck size={15} /><strong><span>Paper research only</span><i>Paper only</i></strong><small>Broker disabled</small>
-          </span>
         </header>
       </div>
       <div className="platform-content" id="main-content">{children}</div>

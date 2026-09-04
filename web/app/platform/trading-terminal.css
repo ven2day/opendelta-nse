@@ -191,31 +191,36 @@
 .platform-topnav {
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
-  align-self: stretch;
+  flex: 0 0 auto;
+  align-self: center;
   align-items: center;
-  gap: 0;
+  gap: 2px;
   overflow: visible;
-  border-left: 1px solid var(--od-border);
-  border-right: 1px solid var(--od-border);
+  border: 1px solid var(--od-border);
+  border-radius: 7px;
+  padding: 2px;
+  background: var(--od-surface);
   scrollbar-width: thin;
 }
 
 .platform-topnav a {
   position: relative;
   display: inline-flex;
-  min-height: 58px;
-  min-width: 0;
-  flex: 1 1 auto;
+  width: auto;
+  min-width: 40px;
+  min-height: 34px;
+  flex: 0 0 auto;
   justify-content: center;
   align-items: center;
-  border-bottom: 2px solid transparent;
-  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  padding: 0 11px;
   color: var(--od-muted);
   font-size: 12px;
   font-weight: 650;
   text-decoration: none;
   white-space: nowrap;
+  transition: color 140ms ease, background 140ms ease;
 }
 
 .platform-topnav a:hover {
@@ -224,7 +229,6 @@
 }
 
 .platform-topnav a.active {
-  border-bottom-color: var(--od-accent);
   color: var(--od-accent);
   background: var(--od-accent-soft);
 }
@@ -233,27 +237,21 @@
 .platform-topnav a.active svg { color: var(--od-accent); }
 
 .platform-nav-label {
-  position: absolute;
-  top: calc(100% + 7px);
-  left: 50%;
-  z-index: 80;
-  transform: translate(-50%, -4px);
-  border: 1px solid var(--od-border-strong);
-  border-radius: 6px;
-  padding: 5px 8px;
-  color: var(--od-text);
-  background: var(--od-surface-raised);
-  box-shadow: var(--od-shadow);
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  margin-left: 0;
+  color: currentcolor;
   font-size: 11px;
   line-height: 1;
   opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: max-width 180ms ease, margin-left 180ms ease, opacity 120ms ease;
 }
 
 .platform-topnav a:hover .platform-nav-label,
 .platform-topnav a:focus-visible .platform-nav-label {
-  transform: translate(-50%, 0);
+  max-width: 100px;
+  margin-left: 7px;
   opacity: 1;
 }
 
@@ -851,8 +849,8 @@
   .platform-topbar { min-height: 104px; flex-wrap: wrap; align-content: stretch; }
   .platform-identity { width: auto; flex-basis: auto; }
   .platform-identity div { display: none; }
-  .platform-topnav { order: 10; width: 100%; height: 46px; flex: 0 0 100%; border: 0; border-top: 1px solid var(--od-border); }
-  .platform-topnav a { min-height: 46px; }
+  .platform-topnav { order: 10; width: 100%; height: 46px; flex: 0 0 100%; justify-content: center; border: 0; border-top: 1px solid var(--od-border); border-radius: 0; padding: 4px 0; background: transparent; }
+  .platform-topnav a { min-height: 36px; }
   .platform-content { padding-top: 104px; }
   .platform-content .global-header { top: 104px; }
   .quant-screener-layout { grid-template-columns: 1fr; }

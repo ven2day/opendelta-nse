@@ -112,8 +112,22 @@ export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMa
       <div className="site-shell quant-embedded-shell"><GlobalPriceRangeForm initialSettings={globalSettings} /></div>
     </Panel>
 
-    <Panel icon={<ShieldCheck size={17} />} title="Credentials and broker execution" description="Secrets remain server-side environment values. The platform accepts no user-supplied executable strategies and installs no live order adapter." aside={<StatusBadge tone="good">Orders disabled</StatusBadge>}>
-      <div className="quant-panel-body"><p className="quant-inline-note">Every workspace in this application is research or paper only. Broker execution is disabled at the service level and cannot be enabled from the UI.</p></div>
+    <Panel
+      icon={<ShieldCheck size={17} />}
+      title={market === "CRYPTO" ? "Crypto connections and keys" : "Credentials and broker execution"}
+      description={market === "CRYPTO"
+        ? "Public OKX and VALR market data and paper trading do not require exchange API keys. Provider endpoints and any future secrets remain server-managed."
+        : "Secrets remain server-side environment values. The platform accepts no user-supplied executable strategies and installs no live order adapter."}
+      aside={<StatusBadge tone="good">Orders disabled</StatusBadge>}
+    >
+      <div className="quant-panel-body">
+        {market === "CRYPTO" ? <dl className="quant-facts">
+          <div><dt>Strategy</dt><dd>Editable above</dd></div>
+          <div><dt>Risk and sizing</dt><dd>Editable above</dd></div>
+          <div><dt>Market-data keys</dt><dd>Not required</dd></div>
+          <div><dt>Trading keys</dt><dd>Not accepted</dd></div>
+        </dl> : <p className="quant-inline-note">Every workspace in this application is research or paper only. Broker execution is disabled at the service level and cannot be enabled from the UI.</p>}
+      </div>
     </Panel>
   </main>;
 }

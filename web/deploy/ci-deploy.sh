@@ -29,9 +29,13 @@ previous_backtest_image="$(docker inspect --format '{{.Image}}' opendelta-backte
 systemctl restart opendelta-backtest.service
 
 backtest_healthy=false
-for _ in $(seq 1 30); do
-  if [[ "$(docker inspect --format '{{.State.Health.Status}}' opendelta-backtest 2>/dev/null)" == "healthy" ]]; then
+for _ in $(seq 1 90); do
+  status="$(docker inspect --format '{{.State.Health.Status}}' opendelta-backtest 2>/dev/null)"
+  if [[ "${status}" == "healthy" ]]; then
     backtest_healthy=true
+    break
+  fi
+  if [[ "${status}" == "unhealthy" ]]; then
     break
   fi
   sleep 1

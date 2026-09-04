@@ -10,44 +10,44 @@ if [[ ! "$candidate_port" =~ ^[0-9]+$ ]] || (( candidate_port < 1024 || candidat
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-backup_dir="/root/vento-nse-backups/${timestamp}"
-nginx_site="/etc/nginx/sites-available/nse.ventoday.com.conf"
+backup_dir="/root/opendelta-backups/${timestamp}"
+nginx_site="/etc/nginx/sites-available/delta.ventoday.com.conf"
 nginx_candidate="$(mktemp)"
-previous_container="vento-nse-previous-${timestamp}"
+previous_container="opendelta-previous-${timestamp}"
 old_renamed=false
 candidate_renamed=false
 
-candidate_binding="$(docker port vento-nse-candidate 3000/tcp 2>/dev/null || true)"
+candidate_binding="$(docker port opendelta-candidate 3000/tcp 2>/dev/null || true)"
 if [[ "$candidate_binding" != "127.0.0.1:${candidate_port}" ]]; then
-  echo "vento-nse-candidate is not published on 127.0.0.1:${candidate_port}" >&2
+  echo "opendelta-candidate is not published on 127.0.0.1:${candidate_port}" >&2
   rm -f "$nginx_candidate"
   exit 1
 fi
 
 curl -fsS -o /dev/null "http://127.0.0.1:${candidate_port}/login"
 
-candidate_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' vento-nse-candidate)"
+candidate_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' opendelta-candidate)"
 if [[ "${candidate_health}" != "healthy" ]]; then
-  echo "vento-nse-candidate is not healthy: ${candidate_health}" >&2
+  echo "opendelta-candidate is not healthy: ${candidate_health}" >&2
   rm -f "$nginx_candidate"
   exit 1
 fi
 
 install -d -m 0700 "${backup_dir}"
-cp -a "${nginx_site}" "${backup_dir}/nse.ventoday.com.conf"
+cp -a "${nginx_site}" "${backup_dir}/delta.ventoday.com.conf"
 
 rollback() {
   status=$?
   if [[ ${status} -ne 0 ]]; then
     if [[ "$candidate_renamed" == true ]]; then
-      docker rename vento-nse vento-nse-candidate >/dev/null 2>&1 || true
-      docker update --restart no vento-nse-candidate >/dev/null 2>&1 || true
+      docker rename opendelta opendelta-candidate >/dev/null 2>&1 || true
+      docker update --restart no opendelta-candidate >/dev/null 2>&1 || true
     fi
     if [[ "$old_renamed" == true ]]; then
-      docker rename "$previous_container" vento-nse >/dev/null 2>&1 || true
-      docker start vento-nse >/dev/null 2>&1 || true
+      docker rename "$previous_container" opendelta >/dev/null 2>&1 || true
+      docker start opendelta >/dev/null 2>&1 || true
     fi
-    cp -a "${backup_dir}/nse.ventoday.com.conf" "${nginx_site}"
+    cp -a "${backup_dir}/delta.ventoday.com.conf" "${nginx_site}"
     nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
   fi
   rm -f "$nginx_candidate"
@@ -56,7 +56,7 @@ rollback() {
 trap rollback EXIT
 
 sed "s#http://127.0.0.1:3100#http://127.0.0.1:${candidate_port}#g" \
-  "/opt/vento-nse/releases/${release_id}/web/deploy/nse.ventoday.com.nginx.conf" \
+  "/opt/opendelta/releases/${release_id}/web/deploy/delta.ventoday.com.nginx.conf" \
   > "$nginx_candidate"
 
 install -m 0644 \
@@ -66,18 +66,18 @@ install -m 0644 \
 nginx -t
 systemctl reload nginx
 curl -fsS -o /dev/null \
-  --resolve nse.ventoday.com:443:127.0.0.1 \
-  https://nse.ventoday.com/login
+  --resolve delta.ventoday.com:443:127.0.0.1 \
+  https://delta.ventoday.com/login
 
-docker update --restart unless-stopped vento-nse-candidate >/dev/null
-docker rename vento-nse "$previous_container"
+docker update --restart unless-stopped opendelta-candidate >/dev/null
+docker rename opendelta "$previous_container"
 old_renamed=true
-docker rename vento-nse-candidate vento-nse
+docker rename opendelta-candidate opendelta
 candidate_renamed=true
-ln -sfn "/opt/vento-nse/releases/${release_id}" /opt/vento-nse/current
+ln -sfn "/opt/opendelta/releases/${release_id}" /opt/opendelta/current
 curl -fsS -o /dev/null \
-  --resolve nse.ventoday.com:443:127.0.0.1 \
-  https://nse.ventoday.com/login
+  --resolve delta.ventoday.com:443:127.0.0.1 \
+  https://delta.ventoday.com/login
 
 docker stop "$previous_container" >/dev/null
 

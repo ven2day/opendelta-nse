@@ -20,7 +20,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const host =
     requestHeaders.get("x-forwarded-host") ??
     requestHeaders.get("host") ??
-    "nse.ventoday.com";
+    "delta.ventoday.com";
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
   const origin = `${protocol}://${host}`;
   const title = "OpenDelta · Quant Research Platform";

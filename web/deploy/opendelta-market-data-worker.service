@@ -1,0 +1,27 @@
+[Unit]
+Description=OpenDelta canonical market-data backfill and repair worker
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/dhan
+ExecStartPre=-/usr/bin/docker network create opendelta-internal
+ExecStartPre=-/usr/bin/docker rm -f opendelta-market-data-worker
+ExecStart=/usr/bin/docker run --rm --name opendelta-market-data-worker \
+  --network opendelta-internal \
+  --env-file /etc/opendelta-dhan.env \
+  --mount type=bind,source=/var/lib/opendelta/dhan,target=/var/lib/opendelta/dhan \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --pids-limit 128 \
+  --memory 1g \
+  opendelta-backtest:current \
+  python -m backend.data.worker
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=multi-user.target

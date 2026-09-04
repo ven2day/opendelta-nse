@@ -17,12 +17,12 @@ def read(name: str) -> str:
 
 
 def test_timescale_service_is_private_persistent_and_pinned() -> None:
-    unit = read("vento-nse-timescale.service")
+    unit = read("opendelta-timescale.service")
     assert "timescale/timescaledb:2.29.2-pg17" in unit
     assert "timescale/timescaledb:latest" not in unit
-    assert "--network vento-nse-internal" in unit
-    assert "vento-nse-timescale-data,target=/var/lib/postgresql/data" in unit
-    assert "--env-file /etc/vento-nse-timescale.env" in unit
+    assert "--network opendelta-internal" in unit
+    assert "opendelta-timescale-data,target=/var/lib/postgresql/data" in unit
+    assert "--env-file /etc/opendelta-timescale.env" in unit
     assert not re.search(r"(?:^|\s)(?:-p|--publish)(?:\s|=)", unit)
 
 
@@ -32,7 +32,7 @@ def test_installer_protects_credentials_and_runs_migration() -> None:
     assert "openssl rand -hex 32" in installer
     assert 'chmod 0600 "${database_environment}" "${application_environment}"' in installer
     assert "python -m backend.data.admin migrate" in installer
-    assert "enable --now vento-nse-timescale-backup.timer" in installer
+    assert "enable --now opendelta-timescale-backup.timer" in installer
 
 
 def test_backup_is_verified_and_restore_is_explicitly_guarded() -> None:
@@ -42,7 +42,7 @@ def test_backup_is_verified_and_restore_is_explicitly_guarded() -> None:
     assert "pg_restore --list" in backup
     assert "opendelta-*.dump" in backup
     assert "--confirm-restore-opendelta" in restore
-    assert "vento-nse-timescale-backup" in restore
+    assert "opendelta-timescale-backup" in restore
     assert "--clean --if-exists --no-owner --exit-on-error" in restore
 
 

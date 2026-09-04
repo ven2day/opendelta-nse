@@ -6,7 +6,7 @@ OnBootSec=2min
 OnUnitInactiveSec=10min
 Persistent=true
 AccuracySec=1min
-Unit=vento-nse-market-data-worker.service
+Unit=opendelta-market-data-worker.service
 
 [Install]
 WantedBy=timers.target

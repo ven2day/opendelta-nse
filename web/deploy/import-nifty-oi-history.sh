@@ -8,11 +8,11 @@ fi
 
 from_date="$1"
 to_date="$2"
-environment_file="${DHAN_ENV_FILE:-/etc/vento-nse-dhan.env}"
-expiry_schedule_file="${NIFTY_EXPIRY_SCHEDULE_FILE:-/etc/vento-nse-nifty-expiry-schedule.json}"
-backtest_root="${BACKTEST_DATA_ROOT:-/var/lib/vento-nse/backtest}"
-dhan_root="${DHAN_DATA_ROOT:-/var/lib/vento-nse/dhan}"
-image="${NIFTY_OI_IMPORT_IMAGE:-vento-nse-backtest:current}"
+environment_file="${DHAN_ENV_FILE:-/etc/opendelta-dhan.env}"
+expiry_schedule_file="${NIFTY_EXPIRY_SCHEDULE_FILE:-/etc/opendelta-nifty-expiry-schedule.json}"
+backtest_root="${BACKTEST_DATA_ROOT:-/var/lib/opendelta/backtest}"
+dhan_root="${DHAN_DATA_ROOT:-/var/lib/opendelta/dhan}"
+image="${NIFTY_OI_IMPORT_IMAGE:-opendelta-backtest:current}"
 settings_file="${backtest_root}/live-signals/settings.json"
 
 test -f "${environment_file}"
@@ -28,10 +28,10 @@ install -d -o 10001 -g 10001 -m 0700 "${backtest_root}" "${dhan_root}"
 
 flock -n "${backtest_root}/.nifty-oi-history-import.lock" \
   docker run --rm \
-    --name vento-nse-oi-history-import \
+    --name opendelta-oi-history-import \
     --env-file "${environment_file}" \
-    --mount "type=bind,source=${backtest_root},target=/var/lib/vento-nse/backtest" \
-    --mount "type=bind,source=${dhan_root},target=/var/lib/vento-nse/dhan" \
+    --mount "type=bind,source=${backtest_root},target=/var/lib/opendelta/backtest" \
+    --mount "type=bind,source=${dhan_root},target=/var/lib/opendelta/dhan" \
     --mount "type=bind,source=${expiry_schedule_file},target=/run/nifty-expiry-schedule.json,readonly" \
     --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,size=128m \
@@ -44,6 +44,6 @@ flock -n "${backtest_root}/.nifty-oi-history-import.lock" \
       --from-date "${from_date}" \
       --to-date "${to_date}" \
       --strikes-each-side 5 \
-      --output /var/lib/vento-nse/backtest/nifty-oi \
-      --cache /var/lib/vento-nse/dhan/nifty-oi-history-cache \
+      --output /var/lib/opendelta/backtest/nifty-oi \
+      --cache /var/lib/opendelta/dhan/nifty-oi-history-cache \
       --expiry-schedule /run/nifty-expiry-schedule.json

@@ -2,7 +2,7 @@
 
 ## Project status
 
-Production at <https://nse.ventoday.com>. The unified NSE + Crypto platform
+Production at <https://delta.ventoday.com>. The unified NSE + Crypto platform
 (screener, backtest, live signals, paper trading on one strategy evaluator)
 is complete on the `feature/unified-trading-platform` branch and gated off in
 production by environment flags until it is deliberately enabled.

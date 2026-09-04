@@ -178,7 +178,7 @@ def main() -> None:
     backfill_arguments(nse)
     okx = commands.add_parser("enqueue-okx-configured")
     default_crypto_root = Path(
-        os.environ.get("CRYPTO_MARKET_DIR", "/var/lib/vento-nse/backtest/crypto-market")
+        os.environ.get("CRYPTO_MARKET_DIR", "/var/lib/opendelta/backtest/crypto-market")
     ).expanduser()
     okx.add_argument("--database", type=Path, default=default_crypto_root / "market.sqlite3")
     backfill_arguments(okx)

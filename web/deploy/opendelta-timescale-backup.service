@@ -1,11 +1,11 @@
 [Unit]
 Description=Back up the OpenDelta TimescaleDB database
-After=vento-nse-timescale.service
-Requires=vento-nse-timescale.service
+After=opendelta-timescale.service
+Requires=opendelta-timescale.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/vento-nse/current/web/deploy/backup-timescale.sh
+ExecStart=/opt/opendelta/current/web/deploy/backup-timescale.sh
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

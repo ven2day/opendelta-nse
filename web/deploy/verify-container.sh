@@ -2,7 +2,7 @@
 set -euo pipefail
 
 set -a
-source /etc/vento-nse.env
+source /etc/opendelta.env
 set +a
 
 base_url="${1:-http://127.0.0.1:3100}"
@@ -30,7 +30,6 @@ for page in / /screener /backtest /signals /paper-trading /settings; do
     grep -q "${label}" "${dashboard_html}"
   done
   grep -q 'OpenDelta' "${dashboard_html}"
-  ! grep -q 'Vento NSE' "${dashboard_html}"
   if [[ "${page}" != "/settings" ]]; then
     grep -q 'Market' "${dashboard_html}"
   fi

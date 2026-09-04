@@ -1,12 +1,12 @@
 [Unit]
-Description=Refresh Vento NSE Dhan market data hourly during market hours
+Description=Refresh OpenDelta Dhan market data hourly during market hours
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 09..15:20:00 Asia/Kolkata
 OnCalendar=Mon..Fri *-*-* 16:15:00 Asia/Kolkata
 Persistent=true
 AccuracySec=1min
-Unit=vento-nse-data.service
+Unit=opendelta-data.service
 
 [Install]
 WantedBy=timers.target

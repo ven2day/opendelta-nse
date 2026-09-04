@@ -114,7 +114,7 @@ class DhanConfig:
 
         token_cache_file = _absolute_path_from_environment(
             "DHAN_TOKEN_CACHE_FILE",
-            "/var/lib/vento-nse/dhan/token_cache.json",
+            "/var/lib/opendelta/dhan/token_cache.json",
         )
         output_file = _absolute_path_from_environment(
             "NSE_DATA_FILE",
@@ -705,7 +705,7 @@ def build_company_name_map(instruments: pd.DataFrame) -> dict[str, str]:
 
 
 def download_instrument_master(url: str) -> pd.DataFrame:
-    request = Request(url, headers={"User-Agent": "vento-nse-data/1.0"})
+    request = Request(url, headers={"User-Agent": "opendelta-data/1.0"})
     try:
         with urlopen(request, timeout=60) as response:
             return parse_instrument_master(response.read())

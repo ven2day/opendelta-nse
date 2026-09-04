@@ -15,7 +15,7 @@ from backend.backtest import BacktestEngine, BacktestRequest, ExecutionSettings,
 from backend.markets.base import market_spec
 from backend.strategies import STRATEGIES
 
-CANDLE_CACHE = Path("/var/lib/vento-nse/backtest")
+CANDLE_CACHE = Path("/var/lib/opendelta/backtest")
 FILES = sorted(CANDLE_CACHE.glob("*-5-1y.csv.gz")) if CANDLE_CACHE.exists() else []
 
 

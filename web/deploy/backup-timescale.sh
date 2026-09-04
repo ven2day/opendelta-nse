@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-backup_directory="/var/backups/vento-nse/timescale"
-container="vento-nse-timescale"
+backup_directory="/var/backups/opendelta/timescale"
+container="opendelta-timescale"
 retention_days="${TIMESCALE_BACKUP_RETENTION_DAYS:-30}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 final_path="${backup_directory}/opendelta-${timestamp}.dump"

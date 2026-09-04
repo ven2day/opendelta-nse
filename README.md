@@ -16,7 +16,7 @@
 
 ## 🎯 Overview
 
-**OpenDelta** runs at <https://nse.ventoday.com>. It selects a universe of
+**OpenDelta** runs at <https://delta.ventoday.com>. It selects a universe of
 symbols, backtests a strategy over completed candles, watches live markets for
 the same signals, and simulates execution in separate NSE (INR) and Crypto
 (USDT) paper accounts — with exactly one strategy implementation used by all
@@ -106,7 +106,7 @@ server before storing the exact symbol list with the run.
 - Python 3.12 and [uv](https://github.com/astral-sh/uv)
 - Node.js 22
 - PostgreSQL/TimescaleDB (optional locally; the `/v2` pages report "not configured" without it)
-- Dhan API credentials for NSE data (see `web/deploy/vento-nse-dhan.env.example`)
+- Dhan API credentials for NSE data (see `web/deploy/opendelta-dhan.env.example`)
 
 ### Backend
 
@@ -222,7 +222,7 @@ are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 ## 🔒 Security
 
 No live order execution exists and tests enforce it. Credentials stay in
-`/etc/vento-nse-dhan.env` on the host and are never committed; see
+`/etc/opendelta-dhan.env` on the host and are never committed; see
 [SECURITY.md](SECURITY.md). No strategy in this repository is represented as
 guaranteed profitable.
 

@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir \
       "pandas>=3.0.5,<4" \
       "pyarrow>=21,<22" \
       "psycopg[binary,pool]>=3.2,<4" \
+      "structlog>=25.5,<26" \
       "uvicorn>=0.35,<1" \
       "websockets>=15,<16" \
     && groupadd --gid 10001 backtest \

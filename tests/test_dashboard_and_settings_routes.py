@@ -6,13 +6,13 @@ import unittest
 import uuid
 from typing import Any
 
-from fastapi import HTTPException
-
 from backend.api.dashboard_routes import create_dashboard_router
-from backend.api.signal_routes import create_signal_router
 from backend.api.settings_routes import StrategyConfigRequest, create_settings_router
+from backend.api.signal_routes import create_signal_router
 from backend.data.database import DatabaseUnavailable
 from backend.strategies import STRATEGIES
+from fastapi import HTTPException
+
 from test_backtest_routes import endpoints
 
 
@@ -21,14 +21,26 @@ class FakeConfigs:
         self.rows: list[dict[str, Any]] = []
 
     def active(self, market: str, strategy_id: str):
-        return next((dict(r) for r in self.rows if r["market"] == market and r["strategyId"] == strategy_id and r["active"]), None)
+        return next(
+            (dict(r) for r in self.rows if r["market"] == market and r["strategyId"] == strategy_id and r["active"]),
+            None,
+        )
 
     def save(self, *, market, strategy_id, strategy_version, name, configuration, risk_settings, activate):
         if activate:
             for row in self.rows:
                 if row["market"] == market and row["strategyId"] == strategy_id:
                     row["active"] = False
-        row = {"configId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "name": name, "configuration": dict(configuration), "riskSettings": dict(risk_settings), "active": activate}
+        row = {
+            "configId": str(uuid.uuid4()),
+            "market": market,
+            "strategyId": strategy_id,
+            "strategyVersion": strategy_version,
+            "name": name,
+            "configuration": dict(configuration),
+            "riskSettings": dict(risk_settings),
+            "active": activate,
+        }
         self.rows.append(row)
         return dict(row)
 
@@ -44,16 +56,30 @@ class SettingsRouteTests(unittest.TestCase):
     def test_catalogue_includes_risk_defaults_for_dynamic_forms(self) -> None:
         payload = self.api["GET /v2/strategies"](market=None)
         self.assertEqual(payload["riskDefaults"]["sizingMode"], "FIXED_QUANTITY")
+        self.assertEqual(payload["riskDefaults"]["maximumDailyTrades"], 5)
+        self.assertEqual(payload["riskDefaults"]["maximumDailyLossPct"], 2.0)
+        self.assertEqual(payload["riskSchema"]["maximumOpenPositions"]["minimum"], 1)
+        self.assertEqual(payload["riskSchema"]["maximumTotalExposurePct"]["maximum"], 100.0)
         self.assertEqual(payload["strategies"][0]["configSchema"]["target_pct"]["default"], 1.0)
 
     def test_save_validates_through_the_strategy_and_activates_per_market(self) -> None:
-        saved = self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="NSE", name="tight", configuration={"target_pct": 0.5}, riskSettings={"stopLossPct": 1.0, "initialQuantity": 50}))
+        saved = self.api["POST /v2/strategies/{strategy_id}/config"](
+            "ema_vwap_strong_buy",
+            StrategyConfigRequest(
+                market="NSE",
+                name="tight",
+                configuration={"target_pct": 0.5},
+                riskSettings={"stopLossPct": 1.0, "initialQuantity": 50},
+            ),
+        )
         self.assertTrue(saved["active"])
         self.assertEqual(saved["configuration"]["target_pct"], 0.5)
         self.assertEqual(saved["configuration"]["ema_fast"], 9)  # full snapshot, not just the override
         self.assertEqual(saved["riskSettings"]["stopLossPct"], 1.0)
         self.assertEqual(saved["strategyVersion"], STRATEGIES.get("ema_vwap_strong_buy").version)
-        again = self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="NSE", name="loose", configuration={"target_pct": 2.0}))
+        again = self.api["POST /v2/strategies/{strategy_id}/config"](
+            "ema_vwap_strong_buy", StrategyConfigRequest(market="NSE", name="loose", configuration={"target_pct": 2.0})
+        )
         self.assertTrue(again["active"])
         self.assertEqual([row["active"] for row in self.configs.rows], [False, True])
         effective = self.api["GET /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", market="nse")
@@ -66,10 +92,15 @@ class SettingsRouteTests(unittest.TestCase):
 
     def test_invalid_configuration_unknown_strategy_and_missing_storage(self) -> None:
         with self.assertRaises(HTTPException) as bad:
-            self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="NSE", configuration={"ema_fast": 50, "ema_slow": 10}))
+            self.api["POST /v2/strategies/{strategy_id}/config"](
+                "ema_vwap_strong_buy",
+                StrategyConfigRequest(market="NSE", configuration={"ema_fast": 50, "ema_slow": 10}),
+            )
         self.assertEqual(bad.exception.status_code, 422)
         with self.assertRaises(HTTPException) as risk:
-            self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="NSE", riskSettings={"stopLossPct": 500}))
+            self.api["POST /v2/strategies/{strategy_id}/config"](
+                "ema_vwap_strong_buy", StrategyConfigRequest(market="NSE", riskSettings={"stopLossPct": 500})
+            )
         self.assertEqual(risk.exception.status_code, 422)
         with self.assertRaises(HTTPException) as unknown:
             self.api["GET /v2/strategies/{strategy_id}/config"]("nope", market="NSE")
@@ -82,7 +113,9 @@ class SettingsRouteTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as missing:
             api["GET /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", market="NSE")
         self.assertEqual(missing.exception.status_code, 503)
-        self.assertEqual(len(api["GET /v2/strategies"](market="CRYPTO")["strategies"]), 1)  # catalogue never needs the database
+        self.assertEqual(
+            len(api["GET /v2/strategies"](market="CRYPTO")["strategies"]), 1
+        )  # catalogue never needs the database
 
 
 class DashboardRouteTests(unittest.TestCase):
@@ -95,7 +128,10 @@ class DashboardRouteTests(unittest.TestCase):
                 overview=lambda: {"dataFreshness": {"status": "FRESH"}},
                 screener_runs=lambda market: [{"runId": "r1", "market": market, "status": "COMPLETE"}],
                 backtest_runs=lambda market: [],
-                engine_health=lambda market: {"stored": [], "workers": [{"status": "READY", "strategyId": "rsi_dip_ladder_v1", "timeframe": "1d"}]},
+                engine_health=lambda market: {
+                    "stored": [],
+                    "workers": [{"status": "READY", "strategyId": "rsi_dip_ladder_v1", "timeframe": "1d"}],
+                },
                 paper_summary=broken,
                 paper_positions=lambda market: [],
                 active_universe=lambda market: {"name": "Liquid", "symbols": ["TCS"]},
@@ -163,4 +199,6 @@ class SignalRouteTests(unittest.TestCase):
             },
         )
         health = api["GET /v2/signals/health"](market="NSE")
-        self.assertEqual([item["strategyId"] for item in health["workers"]["NSE"]], ["rsi_dip_ladder_v1", "scalping_v1"])
+        self.assertEqual(
+            [item["strategyId"] for item in health["workers"]["NSE"]], ["rsi_dip_ladder_v1", "scalping_v1"]
+        )

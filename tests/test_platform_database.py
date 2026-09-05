@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 
 from backend.backtest.result_writer import DatabaseResultWriter
 from backend.data.database import Database
-from backend.data.repositories import BacktestRunRepository, BacktestTradeRepository, LiveSignalRepository
+from backend.data.repositories import BacktestRunRepository, BacktestTradeRepository, LiveSignalRepository, StrategyConfigRepository, StrategyDeploymentRepository
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 
@@ -54,6 +54,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "004_paper_pending_entries",
                 "005_dhan_fifo_cost_basis",
                 "006_live_signal_strategy_identity",
+                "007_strategy_deployments",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -68,6 +69,7 @@ class PlatformDatabaseTests(unittest.TestCase):
             "screener_results",
             "saved_universes",
             "strategy_configs",
+            "strategy_deployments",
             "backtest_runs",
             "backtest_trades",
             "live_signals",
@@ -105,6 +107,15 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
         self.assertIsNone(duplicate)
+
+    def test_strategy_deployment_pins_the_active_configuration(self) -> None:
+        active = StrategyConfigRepository(self.database).save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", name="deployment-test", configuration={"target_pct": 1.0}, risk_settings={"priceModel": "NEXT_OPEN"}, activate=True)
+        deployments = StrategyDeploymentRepository(self.database)
+        paper = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], timeframe="5m", mode="PAPER")
+        self.assertEqual((paper["mode"], paper["configId"]), ("PAPER", active["configId"]))
+        stopped = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], timeframe="5m", mode="OFF")
+        self.assertEqual(stopped["deploymentId"], paper["deploymentId"])
+        self.assertEqual(deployments.get("CRYPTO", "ema_vwap_strong_buy")["mode"], "OFF")
 
     def test_run_lifecycle_and_progress(self) -> None:
         record = self._run()

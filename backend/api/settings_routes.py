@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
-from backend.data.repositories import StrategyConfigRepository
+from backend.data.repositories import StrategyConfigRepository, StrategyDeploymentRepository
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.strategies.registry import StrategyRegistry
 
@@ -95,8 +95,17 @@ class StrategyConfigRequest(BaseModel):
     activate: bool = True
 
 
+class StrategyDeploymentRequest(BaseModel):
+    market: str = Field(pattern="^(NSE|CRYPTO)$")
+    timeframe: str = Field(min_length=1, max_length=12)
+    mode: str = Field(pattern="^(OFF|SIGNALS|PAPER)$")
+
+
 def create_settings_router(
-    registry: StrategyRegistry, *, configs: Callable[[], StrategyConfigRepository] | None = None
+    registry: StrategyRegistry, *, configs: Callable[[], StrategyConfigRepository] | None = None,
+    deployments: Callable[[], StrategyDeploymentRepository] | None = None,
+    deployment_status: Callable[[str, str], dict[str, Any]] | None = None,
+    deployment_changed: Callable[[str], None] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v2", tags=["settings"])
 
@@ -119,6 +128,14 @@ def create_settings_router(
             return registry.get(strategy_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+
+    def _deployments() -> StrategyDeploymentRepository:
+        if deployments is None:
+            raise HTTPException(status_code=503, detail="Strategy deployment storage is not configured")
+        try:
+            return deployments()
+        except DatabaseUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
 
     @router.get("/strategies")
     def list_strategies(market: str | None = Query(default=None)) -> dict[str, Any]:
@@ -161,7 +178,7 @@ def create_settings_router(
             risk = ExecutionPolicy.from_mapping(request.riskSettings, whole_units=(request.market == "NSE")).public()
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        return _repository().save(
+        saved = _repository().save(
             market=request.market,
             strategy_id=strategy.strategy_id,
             strategy_version=strategy.version,
@@ -170,5 +187,39 @@ def create_settings_router(
             risk_settings=risk,
             activate=request.activate,
         )
+        if request.activate and deployment_changed is not None:
+            deployment_changed(request.market)
+        return saved
+
+    @router.get("/strategies/{strategy_id}/deployment")
+    def get_deployment(strategy_id: str, market: str = Query(...)) -> dict[str, Any]:
+        strategy = _strategy(strategy_id)
+        key = _market(market)
+        if key not in strategy.supported_markets:
+            raise HTTPException(status_code=422, detail=f"{strategy.strategy_id} does not support {key}")
+        if deployment_status is not None:
+            return deployment_status(key, strategy.strategy_id)
+        saved = _deployments().get(key, strategy.strategy_id)
+        if saved is not None:
+            return saved
+        timeframes = list(strategy.supported_timeframes)
+        return {"deploymentId": None, "market": key, "strategyId": strategy.strategy_id, "strategyVersion": strategy.version, "configId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
+
+    @router.post("/strategies/{strategy_id}/deployment")
+    def save_deployment(strategy_id: str, request: StrategyDeploymentRequest) -> dict[str, Any]:
+        strategy = _strategy(strategy_id)
+        if request.market not in strategy.supported_markets:
+            raise HTTPException(status_code=422, detail=f"{strategy.strategy_id} does not support {request.market}")
+        if request.timeframe not in strategy.supported_timeframes:
+            raise HTTPException(status_code=422, detail=f"{strategy.strategy_id} does not support the {request.timeframe} timeframe")
+        if request.market == "NSE" and request.timeframe == "4h":
+            raise HTTPException(status_code=422, detail="NSE 4h is currently backtest-only")
+        active = _repository().active(request.market, strategy.strategy_id)
+        if request.mode != "OFF" and active is None:
+            raise HTTPException(status_code=409, detail="Save and activate a configuration before starting this strategy")
+        saved = _deployments().save(market=request.market, strategy_id=strategy.strategy_id, strategy_version=strategy.version, config_id=(active or {}).get("configId"), timeframe=request.timeframe, mode=request.mode)
+        if deployment_changed is not None:
+            deployment_changed(request.market)
+        return saved
 
     return router

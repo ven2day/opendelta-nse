@@ -91,6 +91,19 @@ export type StrategyConfigResponse = {
   effectiveRiskSettings: ConfigValues;
   all: StrategyConfig[];
 };
+export type StrategyDeploymentMode = "OFF" | "SIGNALS" | "PAPER";
+export type StrategyDeployment = {
+  deploymentId?: string | null;
+  market: PlatformMarket;
+  strategyId: string;
+  strategyVersion: string;
+  configId?: string | null;
+  timeframe: string;
+  mode: StrategyDeploymentMode;
+  source: "DATABASE" | "ENVIRONMENT" | "DEFAULT";
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
 
 export type BacktestMetrics = {
   totalSignals?: number | null;

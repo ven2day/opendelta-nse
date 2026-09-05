@@ -63,7 +63,7 @@ class StartupPolicyTests(unittest.TestCase):
     def test_auto_migrate_applies_pending_migrations_when_opted_in(self) -> None:
         stub = _StubDatabase(pending=["001"])
         runtime = PlatformRuntime(database=stub, candle_sources={})  # type: ignore[arg-type]
-        with patch.dict(os.environ, {"PLATFORM_AUTO_MIGRATE": "true"}), patch.object(PlatformRuntime, "runner") as runner:
+        with patch.dict(os.environ, {"PLATFORM_AUTO_MIGRATE": "true"}), patch.object(PlatformRuntime, "runner") as runner, patch.object(PlatformRuntime, "_start_signal_workers"):
             runner.return_value.recover.return_value = 0
             runtime.start()
         self.assertTrue(stub.migrated)

@@ -82,6 +82,7 @@ class SignalEngine:
         repository: SignalPersistence,
         clock: Callable[[], datetime],
         publish: Callable[[dict[str, Any]], None] | None = None,
+        generation_enabled: bool = True,
         stale_after_seconds: float = 900.0,
     ) -> None:
         self.market = market
@@ -94,6 +95,7 @@ class SignalEngine:
         self.repository = repository
         self.clock = clock
         self.publish = publish or (lambda signal: None)
+        self.generation_enabled = generation_enabled
         self.stale_after_seconds = stale_after_seconds
         self.history = CandleHistory(strategy.required_history(self.configuration) + HISTORY_BUFFER_BARS)
         self._lock = threading.RLock()
@@ -170,6 +172,8 @@ class SignalEngine:
         )
 
     def _evaluate(self, symbol: str, stamp: pd.Timestamp) -> dict[str, Any] | None:
+        if not self.generation_enabled:
+            return None
         context = MarketContext(market=self.market.market, symbol=symbol, timeframe=self.timeframe, timezone=self.market.timezone, as_of=stamp.to_pydatetime())
         decision = self.strategy.evaluate(self.history.get(symbol), context, self.configuration)
         with self._lock:
@@ -230,6 +234,7 @@ class SignalEngine:
                 "riskSettings": self.risk.public(),
                 "paperOnly": True,
                 "liveOrdersEnabled": False,
+                "generationEnabled": self.generation_enabled,
             }
 
 

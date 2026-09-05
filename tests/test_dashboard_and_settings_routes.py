@@ -7,7 +7,7 @@ import uuid
 from typing import Any
 
 from backend.api.dashboard_routes import create_dashboard_router
-from backend.api.settings_routes import StrategyConfigRequest, create_settings_router
+from backend.api.settings_routes import StrategyConfigRequest, StrategyDeploymentRequest, create_settings_router
 from backend.api.signal_routes import create_signal_router
 from backend.data.database import DatabaseUnavailable
 from backend.strategies import STRATEGIES
@@ -48,10 +48,26 @@ class FakeConfigs:
         return [dict(r) for r in self.rows if market is None or r["market"] == market]
 
 
+class FakeDeployments:
+    def __init__(self) -> None:
+        self.rows: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def get(self, market, strategy_id):
+        row = self.rows.get((market, strategy_id))
+        return dict(row) if row else None
+
+    def save(self, *, market, strategy_id, strategy_version, config_id, timeframe, mode):
+        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "configId": config_id, "timeframe": timeframe, "mode": mode, "source": "DATABASE"}
+        self.rows[(market, strategy_id)] = row
+        return dict(row)
+
+
 class SettingsRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.configs = FakeConfigs()
-        self.api = endpoints(create_settings_router(STRATEGIES, configs=lambda: self.configs))
+        self.deployments = FakeDeployments()
+        self.changed: list[str] = []
+        self.api = endpoints(create_settings_router(STRATEGIES, configs=lambda: self.configs, deployments=lambda: self.deployments, deployment_changed=self.changed.append))
 
     def test_catalogue_includes_risk_defaults_for_dynamic_forms(self) -> None:
         payload = self.api["GET /v2/strategies"](market=None)
@@ -116,6 +132,21 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertEqual(
             len(api["GET /v2/strategies"](market="CRYPTO")["strategies"]), 1
         )  # catalogue never needs the database
+
+    def test_strategy_mode_requires_an_active_config_and_reconciles_immediately(self) -> None:
+        current = self.api["GET /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", market="CRYPTO")
+        self.assertEqual((current["mode"], current["timeframe"]), ("OFF", "5m"))
+        with self.assertRaises(HTTPException) as inactive:
+            self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="5m", mode="PAPER"))
+        self.assertEqual(inactive.exception.status_code, 409)
+        self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="CRYPTO", name="paper-default"))
+        paper = self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="5m", mode="PAPER"))
+        self.assertEqual(paper["mode"], "PAPER")
+        self.assertIsNotNone(paper["configId"])
+        self.assertEqual(self.changed, ["CRYPTO", "CRYPTO"])
+        with self.assertRaises(HTTPException) as timeframe:
+            self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="1d", mode="SIGNALS"))
+        self.assertEqual(timeframe.exception.status_code, 422)
 
 
 class DashboardRouteTests(unittest.TestCase):

@@ -122,6 +122,14 @@ class SignalEngineTests(unittest.TestCase):
         self.assertAlmostEqual(signal["targetPrice"], round(signal["signalPrice"] * 1.01, 4))
         self.assertEqual(published, [signal])
 
+    def test_off_mode_advances_candles_without_creating_signals(self) -> None:
+        repository = FakeSignalRepository()
+        engine = make_engine(repository)
+        engine.generation_enabled = False
+        self.assertEqual(self._feed(engine, self.signal_bar), [])
+        self.assertEqual(repository.rows, {})
+        self.assertFalse(engine.snapshot()["generationEnabled"])
+
     def test_replaying_the_same_candle_never_stores_a_duplicate(self) -> None:
         repository = FakeSignalRepository()
         engine = make_engine(repository)

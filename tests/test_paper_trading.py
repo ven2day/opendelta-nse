@@ -350,11 +350,13 @@ def make_broker(
     market: str = "NSE",
     policy: ExecutionPolicy | None = None,
     balance: float | None = None,
+    entry_allowed=None,
 ) -> PaperBroker:
     return PaperBroker(
         market=market_spec(market),
         repositories=repositories or memory_repositories(),
         policy=policy or ExecutionPolicy(price_model="SIGNAL_CLOSE"),
+        entry_allowed=entry_allowed,
         timeframe="5m",
         clock=lambda: datetime(2026, 9, 1, 12, 0, tzinfo=pd.Timestamp.now(tz=IST).tzinfo),
         starting_balance=balance,
@@ -389,6 +391,19 @@ def fifo_target_return_pct(lot: dict[str, Any]) -> float:
 
 
 class SizingAndCostTests(unittest.TestCase):
+    def test_non_paper_mode_blocks_new_and_queued_entries(self) -> None:
+        allowed = True
+        broker = make_broker(policy=ExecutionPolicy(price_model="NEXT_OPEN"), entry_allowed=lambda _signal: allowed)
+        broker.on_signal(ladder_signal("TCS", 100.0, 0))
+        self.assertEqual(len(broker.portfolio.pending_entries["TCS"]), 1)
+        allowed = False
+        row, stamp = candle(5, open_=100.0, high=101.0, low=99.0, close=100.5)
+        broker.on_completed_candle("TCS", row, stamp)
+        self.assertEqual(broker.positions(), [])
+        self.assertEqual(broker.portfolio.pending_entries, {})
+        self.assertIsNone(broker.on_signal(ladder_signal("INFY", 100.0, 10)))
+        self.assertEqual(broker.repositories.orders.rows, [])
+
     def test_forward_paper_trading_defaults_to_next_open(self) -> None:
         self.assertEqual(ExecutionPolicy().price_model, "NEXT_OPEN")
 

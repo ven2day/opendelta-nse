@@ -75,6 +75,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const [selectedRunChoice, setSelectedRunChoice] = useState<string | null>(null);
   const [resultsTab, setResultsTab] = useState<"passed" | "rejected">("passed");
   const [universeName, setUniverseName] = useState("");
+  const [manualIncludes, setManualIncludes] = useState("");
+  const [manualExcludes, setManualExcludes] = useState("");
   const [savingUniverse, setSavingUniverse] = useState(false);
   const [universeNotice, setUniverseNotice] = useState<Notice>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
@@ -163,12 +165,14 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       const universe = await v2Post<Universe>("screener/universes", {
         runId: selectedRunId,
         name: universeName.trim(),
-        manualIncludes: [],
-        manualExcludes: [],
+        manualIncludes: parseSymbols(manualIncludes),
+        manualExcludes: parseSymbols(manualExcludes),
         activate: true,
       });
       setUniverseNotice({ kind: "success", text: `Saved "${universe.name}" with ${universe.symbols.length} symbols${universe.active ? " and selected it for strategies" : ""}.` });
       setUniverseName("");
+      setManualIncludes("");
+      setManualExcludes("");
       refreshUniverses();
     } catch (reason) {
       setUniverseNotice({ kind: "error", text: errorMessage(reason, "The watchlist could not be saved") });
@@ -249,6 +253,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
         <div className="quant-panel-body">
           <div className="quant-form-grid quant-universe-save-grid">
             <label><span>Watchlist name</span><input type="text" required value={universeName} onChange={(event) => setUniverseName(event.target.value)} placeholder={`${marketLabel(market)} liquid candidates`} /></label>
+            <label><span>Always include</span><input type="text" value={manualIncludes} onChange={(event) => setManualIncludes(event.target.value)} placeholder={market === "CRYPTO" ? "BTC-USDT, ETH-USDT" : "RELIANCE, TCS"} /><small>Optional symbols added even if they did not pass the screen</small></label>
+            <label><span>Always exclude</span><input type="text" value={manualExcludes} onChange={(event) => setManualExcludes(event.target.value)} placeholder={market === "CRYPTO" ? "DOGE-USDT" : "ILLQUIDCO"} /><small>Optional symbols removed from this watchlist</small></label>
           </div>
           {universeNotice && <Message kind={universeNotice.kind}>{universeNotice.text}</Message>}
         </div>

@@ -77,7 +77,7 @@ class PlatformRuntime:
         self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
-        self._worker_signatures: dict[str, tuple[str, str | None]] = {}
+        self._worker_signatures: dict[str, tuple[str, str | None, str | None]] = {}
         self._brokers: dict[str, PaperBroker] = {}
         self._lock = threading.Lock()
         self.migrated_versions: list[str] = []
@@ -155,7 +155,7 @@ class PlatformRuntime:
         for binding in self.live_bindings(key):
             active = self.strategy_configs().active(key, binding.strategy_id) if self.database is not None else None
             strategy = STRATEGIES.get(binding.strategy_id)
-            rows.append({"deploymentId": None, "market": key, "strategyId": binding.strategy_id, "strategyVersion": strategy.version, "configId": (active or {}).get("configId"), "timeframe": binding.timeframe, "mode": mode, "source": "ENVIRONMENT", "createdAt": None, "updatedAt": None})
+            rows.append({"deploymentId": None, "market": key, "strategyId": binding.strategy_id, "strategyVersion": strategy.version, "configId": (active or {}).get("configId"), "universeId": None, "timeframe": binding.timeframe, "mode": mode, "source": "ENVIRONMENT", "createdAt": None, "updatedAt": None})
         return rows
 
     def deployment_status(self, market: str, strategy_id: str) -> dict[str, Any]:
@@ -165,7 +165,7 @@ class PlatformRuntime:
                 return row
         strategy = STRATEGIES.get(strategy_id)
         timeframes = list(strategy.supported_timeframes)
-        return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
+        return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
     def reconcile_signal_workers(self, market: str) -> None:
         """Apply saved strategy modes immediately without restarting the service."""
@@ -176,7 +176,7 @@ class PlatformRuntime:
         with self._lock:
             existing = {name: worker for name, worker in self._workers.items() if name.startswith(prefix)}
             signatures = dict(self._worker_signatures)
-        stale = [name for name in existing if name not in desired or signatures.get(name) != (desired[name]["mode"], desired[name].get("configId"))]
+        stale = [name for name in existing if name not in desired or signatures.get(name) != (desired[name]["mode"], desired[name].get("configId"), desired[name].get("universeId"))]
         if set(existing) != set(desired):
             stale = list(existing)
         for name in stale:
@@ -192,7 +192,7 @@ class PlatformRuntime:
                     broker_tracking_owner = broker_tracking_owner or row["timeframe"] == "1d"
                     continue
             binding = LiveStrategyBinding(row["strategyId"], row["timeframe"])
-            worker = self.build_signal_worker(key, binding=binding, generation_enabled=row["mode"] != "OFF")
+            worker = self.build_signal_worker(key, binding=binding, generation_enabled=row["mode"] != "OFF", universe_id=row.get("universeId"))
             if broker is not None:
                 if row["mode"] == "PAPER":
                     worker.engine.publish = broker.on_signal
@@ -215,7 +215,7 @@ class PlatformRuntime:
                 worker.configure_market_tracking(symbols=tracked_symbols, listener=forward_market_candle)
             with self._lock:
                 self._workers[name] = worker
-                self._worker_signatures[name] = (row["mode"], row.get("configId"))
+                self._worker_signatures[name] = (row["mode"], row.get("configId"), row.get("universeId"))
             worker.start()
             logger.info("reconciled_live_signal_worker", market=key, strategy=binding.strategy_id, timeframe=binding.timeframe, mode=row["mode"])
 
@@ -305,6 +305,7 @@ class PlatformRuntime:
         timeframe: str | None = None,
         binding: LiveStrategyBinding | None = None,
         generation_enabled: bool = True,
+        universe_id: str | None = None,
     ) -> MarketSignalWorker:
         spec = market_spec(market)
         selected = binding or (
@@ -331,6 +332,8 @@ class PlatformRuntime:
         universes = self.universes()
 
         def universe() -> list[str]:
+            if universe_id:
+                return universes.symbols(universe_id, market=spec.market)
             symbols = universes.active_symbols(spec.market)
             if symbols:
                 return symbols
@@ -466,7 +469,7 @@ def install_platform(
 ) -> None:
     services = BacktestServices(registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner)
     app.router.routes.extend(create_backtest_router(services).routes)
-    app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
+    app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(
         create_dashboard_router(
             overview=overview or (lambda _market: {}),

@@ -40,7 +40,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
     {loading ? <LoadingState label="Loading dashboard" /> : error ? <RequestErrorState error={error} retry={reload} /> : data && <>
       <section className="quant-overview-strip" aria-label="Market overview">
         <div><span>Market data</span><strong><i data-tone={tone(freshness?.status)} />{readable(freshness?.status)}</strong><small>{freshness?.ageSeconds != null ? formatAge(freshness.ageSeconds) : readable(freshness?.reason)}</small></div>
-        <div><span>Strategy automation</span><strong><i data-tone={worker ? tone(worker.status) : "warn"} />{worker ? readable(worker.status) : "Not configured"}</strong><small>{worker?.connectionStatus ? readable(worker.connectionStatus) : "Choose Signals or Paper in Settings"}</small></div>
+        <div><span>Strategy automation</span><strong><i data-tone={worker ? tone(worker.status) : "warn"} />{worker ? readable(worker.status) : "Not configured"}</strong><small>{worker?.connectionStatus ? readable(worker.connectionStatus) : "Choose Signals or Paper in Strategies"}</small></div>
         <div><span>Active watchlist</span><strong>{universe?.name ?? "None"}</strong><small>{universe ? formatInteger(universe.symbols.length) + " symbols" : "Create in Watchlist"}</small></div>
         <div><span>Open positions</span><strong>{formatInteger(account?.openPositions)}</strong><small>{account ? formatInteger(account.closedLots) + " closed lots" : "Paper account unavailable"}</small></div>
       </section>

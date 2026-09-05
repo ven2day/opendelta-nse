@@ -6,7 +6,7 @@ import { SettingsWorkspace } from "./settings-workspace";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Settings",
+  title: "Strategies",
   description: "Versioned strategy and paper-execution configuration.",
 };
 

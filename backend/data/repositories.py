@@ -535,17 +535,23 @@ class StrategyDeploymentRepository:
             rows = self.database.fetch_all("SELECT * FROM strategy_deployments ORDER BY market, strategy_id")
         return [_public_deployment(row) for row in rows]
 
-    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, timeframe: str, mode: str) -> dict[str, Any]:
+    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, universe_id: str | None, timeframe: str, mode: str) -> dict[str, Any]:
         row = self.database.fetch_one(
             """
-            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, timeframe, mode)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT ON CONSTRAINT strategy_deployments_market_strategy DO UPDATE SET
                 strategy_version = EXCLUDED.strategy_version, config_id = EXCLUDED.config_id,
-                timeframe = EXCLUDED.timeframe, mode = EXCLUDED.mode, updated_at = now()
+                universe_id = EXCLUDED.universe_id, timeframe = EXCLUDED.timeframe,
+                mode = EXCLUDED.mode, updated_at = now()
             RETURNING *
             """,
-            (uuid.uuid4(), market, strategy_id, strategy_version, uuid.UUID(config_id) if config_id else None, timeframe, mode),
+            (
+                uuid.uuid4(), market, strategy_id, strategy_version,
+                uuid.UUID(config_id) if config_id else None,
+                uuid.UUID(universe_id) if universe_id else None,
+                timeframe, mode,
+            ),
         )
         assert row is not None
         return _public_deployment(row)
@@ -558,6 +564,7 @@ def _public_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
         "strategyId": row["strategy_id"],
         "strategyVersion": row["strategy_version"],
         "configId": str(row["config_id"]) if row["config_id"] else None,
+        "universeId": str(row["universe_id"]) if row.get("universe_id") else None,
         "timeframe": row["timeframe"],
         "mode": row["mode"],
         "source": "DATABASE",
@@ -574,13 +581,32 @@ class SavedUniverseRepository:
         row = self.database.fetch_one("SELECT * FROM saved_universes WHERE market = %s AND active", (market,))
         return _public_universe(row) if row else None
 
+    def get(self, universe_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            "SELECT * FROM saved_universes WHERE universe_id = %s",
+            (uuid.UUID(str(universe_id)),),
+        )
+        if row is None:
+            raise KeyError(f"Universe {universe_id} was not found")
+        return _public_universe(row)
+
+    @staticmethod
+    def _symbols(record: Mapping[str, Any]) -> list[str]:
+        excluded = set(record["manualExcludes"])
+        ordered = [symbol for symbol in [*record["symbols"], *record["manualIncludes"]] if symbol not in excluded]
+        return list(dict.fromkeys(ordered))
+
     def active_symbols(self, market: str) -> list[str]:
         record = self.active(market)
         if record is None:
             return []
-        excluded = set(record["manualExcludes"])
-        ordered = [symbol for symbol in [*record["symbols"], *record["manualIncludes"]] if symbol not in excluded]
-        return list(dict.fromkeys(ordered))
+        return self._symbols(record)
+
+    def symbols(self, universe_id: uuid.UUID | str, *, market: str | None = None) -> list[str]:
+        record = self.get(universe_id)
+        if market is not None and record["market"] != market:
+            raise ValueError(f"Universe {universe_id} belongs to {record['market']}, not {market}")
+        return self._symbols(record)
 
     def save(self, *, market: str, name: str, symbols: Sequence[str], source_run_id: str | None = None, manual_includes: Sequence[str] = (), manual_excludes: Sequence[str] = (), activate: bool = True) -> dict[str, Any]:
         universe_id = uuid.uuid4()

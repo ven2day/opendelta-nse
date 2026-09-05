@@ -8,7 +8,14 @@ from datetime import date, datetime, timezone
 
 from backend.backtest.result_writer import DatabaseResultWriter
 from backend.data.database import Database
-from backend.data.repositories import BacktestRunRepository, BacktestTradeRepository, LiveSignalRepository, StrategyConfigRepository, StrategyDeploymentRepository
+from backend.data.repositories import (
+    BacktestRunRepository,
+    BacktestTradeRepository,
+    LiveSignalRepository,
+    SavedUniverseRepository,
+    StrategyConfigRepository,
+    StrategyDeploymentRepository,
+)
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 
@@ -55,6 +62,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "005_dhan_fifo_cost_basis",
                 "006_live_signal_strategy_identity",
                 "007_strategy_deployments",
+                "008_strategy_deployment_universe",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -110,10 +118,13 @@ class PlatformDatabaseTests(unittest.TestCase):
 
     def test_strategy_deployment_pins_the_active_configuration(self) -> None:
         active = StrategyConfigRepository(self.database).save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", name="deployment-test", configuration={"target_pct": 1.0}, risk_settings={"priceModel": "NEXT_OPEN"}, activate=True)
+        universe = SavedUniverseRepository(self.database).save(market="CRYPTO", name="majors", symbols=["BTC-USDT"], manual_includes=["ETH-USDT"], activate=True)
         deployments = StrategyDeploymentRepository(self.database)
-        paper = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], timeframe="5m", mode="PAPER")
+        paper = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], universe_id=universe["universeId"], timeframe="5m", mode="PAPER")
         self.assertEqual((paper["mode"], paper["configId"]), ("PAPER", active["configId"]))
-        stopped = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], timeframe="5m", mode="OFF")
+        self.assertEqual(paper["universeId"], universe["universeId"])
+        self.assertEqual(SavedUniverseRepository(self.database).symbols(universe["universeId"], market="CRYPTO"), ["BTC-USDT", "ETH-USDT"])
+        stopped = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], universe_id=universe["universeId"], timeframe="5m", mode="OFF")
         self.assertEqual(stopped["deploymentId"], paper["deploymentId"])
         self.assertEqual(deployments.get("CRYPTO", "ema_vwap_strong_buy")["mode"], "OFF")
 

@@ -99,12 +99,14 @@ export type StrategyDeployment = {
   strategyId: string;
   strategyVersion: string;
   configId?: string | null;
+  universeId?: string | null;
   timeframe: string;
   mode: StrategyDeploymentMode;
   source: "DATABASE" | "ENVIRONMENT" | "DEFAULT";
   createdAt?: string | null;
   updatedAt?: string | null;
 };
+export type StrategyDeploymentsResponse = { deployments: StrategyDeployment[] };
 
 export type BacktestMetrics = {
   totalSignals?: number | null;

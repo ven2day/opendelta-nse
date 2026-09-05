@@ -6,14 +6,14 @@ process.env.APP_USERNAME = "test-admin";
 process.env.APP_PASSWORD = "test-password-123";
 process.env.AUTH_SECRET = "test-secret-that-is-at-least-32-characters-long";
 
-const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Settings"];
+const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Strategies"];
 const ROUTES = [
   { path: "/", title: "Dashboard" },
   { path: "/screener", title: "Watchlist" },
   { path: "/backtest", title: "Backtest" },
   { path: "/signals", title: "Signals" },
   { path: "/paper-trading", title: "Paper Trading" },
-  { path: "/settings", title: "Settings" },
+  { path: "/settings", title: "Strategies" },
 ];
 
 async function loadWorker() {
@@ -92,7 +92,7 @@ test("every unified route requires login and renders one topbar market selector"
 
   const settings = await fetchFromWorker(worker, "/settings", { headers: { accept: "text/html", cookie } });
   const settingsHtml = await settings.text();
-  assert.match(settingsHtml, /Strategy settings/);
+  assert.match(settingsHtml, /Strategy control/);
   assert.match(settingsHtml, /Connections and safety/);
   assert.doesNotMatch(settingsHtml, /Global minimum price|Global maximum price/);
   assert.doesNotMatch(settingsHtml, /\/legacy\//, "settings no longer links to retired pages");
@@ -222,6 +222,8 @@ test("the screener presents eligible symbols as a watchlist, not trade calls", a
   assert.doesNotMatch(source, />Keep results</);
   assert.doesNotMatch(source, />Manual includes</);
   assert.match(source, /Save and use for signals/);
+  assert.match(source, />Always include</);
+  assert.match(source, />Always exclude</);
   assert.match(source, /not automatic BUY or SELL calls/);
   assert.match(source, /Candidates \(/);
   assert.match(source, /Excluded \(/);
@@ -263,6 +265,9 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.match(source, /aria-label="Strategy mode"/);
   assert.match(source, /\["OFF", "SIGNALS", "PAPER"\]/);
   assert.match(source, /strategies\/\$\{selectedStrategy\.strategyId\}\/deployment/);
+  assert.match(source, /strategy-deployments/);
+  assert.match(source, /universeId: universeId \|\| null/);
+  assert.match(source, />Watchlist</);
   assert.match(source, /Existing paper positions continue to be monitored/);
 });
 

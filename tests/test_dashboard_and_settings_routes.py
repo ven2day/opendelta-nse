@@ -56,18 +56,32 @@ class FakeDeployments:
         row = self.rows.get((market, strategy_id))
         return dict(row) if row else None
 
-    def save(self, *, market, strategy_id, strategy_version, config_id, timeframe, mode):
-        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "configId": config_id, "timeframe": timeframe, "mode": mode, "source": "DATABASE"}
+    def save(self, *, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode):
+        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "configId": config_id, "universeId": universe_id, "timeframe": timeframe, "mode": mode, "source": "DATABASE"}
         self.rows[(market, strategy_id)] = row
         return dict(row)
+
+
+class FakeUniverses:
+    def __init__(self) -> None:
+        self.rows = {
+            "nse-watchlist": {"universeId": "nse-watchlist", "market": "NSE", "name": "NSE liquid"},
+            "crypto-watchlist": {"universeId": "crypto-watchlist", "market": "CRYPTO", "name": "Crypto majors"},
+        }
+
+    def get(self, universe_id):
+        if universe_id not in self.rows:
+            raise KeyError(f"Universe {universe_id} was not found")
+        return dict(self.rows[universe_id])
 
 
 class SettingsRouteTests(unittest.TestCase):
     def setUp(self) -> None:
         self.configs = FakeConfigs()
         self.deployments = FakeDeployments()
+        self.universes = FakeUniverses()
         self.changed: list[str] = []
-        self.api = endpoints(create_settings_router(STRATEGIES, configs=lambda: self.configs, deployments=lambda: self.deployments, deployment_changed=self.changed.append))
+        self.api = endpoints(create_settings_router(STRATEGIES, configs=lambda: self.configs, deployments=lambda: self.deployments, universes=lambda: self.universes, deployment_changed=self.changed.append))
 
     def test_catalogue_includes_risk_defaults_for_dynamic_forms(self) -> None:
         payload = self.api["GET /v2/strategies"](market=None)
@@ -141,10 +155,19 @@ class SettingsRouteTests(unittest.TestCase):
             self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="5m", mode="PAPER"))
         self.assertEqual(inactive.exception.status_code, 409)
         self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="CRYPTO", name="paper-default"))
-        paper = self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="5m", mode="PAPER"))
+        paper = self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="5m", mode="PAPER", universeId="crypto-watchlist"))
         self.assertEqual(paper["mode"], "PAPER")
         self.assertIsNotNone(paper["configId"])
-        self.assertEqual(self.changed, ["CRYPTO", "CRYPTO"])
+        self.assertEqual(paper["universeId"], "crypto-watchlist")
+        listed = self.api["GET /v2/strategy-deployments"](market="CRYPTO")
+        self.assertEqual(len(listed["deployments"]), 2)
+        replacement = self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="CRYPTO", name="paper-revised", configuration={"target_pct": 1.5}))
+        self.assertEqual(self.deployments.get("CRYPTO", "ema_vwap_strong_buy")["configId"], replacement["configId"])
+        self.assertEqual(self.deployments.get("CRYPTO", "ema_vwap_strong_buy")["universeId"], "crypto-watchlist")
+        with self.assertRaises(HTTPException) as wrong_market:
+            self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="5m", mode="SIGNALS", universeId="nse-watchlist"))
+        self.assertEqual(wrong_market.exception.status_code, 422)
+        self.assertEqual(self.changed, ["CRYPTO", "CRYPTO", "CRYPTO"])
         with self.assertRaises(HTTPException) as timeframe:
             self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="1d", mode="SIGNALS"))
         self.assertEqual(timeframe.exception.status_code, 422)

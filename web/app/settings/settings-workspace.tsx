@@ -126,7 +126,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
         <div className="quant-panel-body">
           <div className="quant-form-grid quant-settings-identity">
             <label><span>Strategy</span><select value={selectedStrategy.strategyId} disabled={saving} onChange={(event) => { setStrategyChoice(event.target.value); setNotice(null); }}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select><small>Timeframes {selectedStrategy.supportedTimeframes.join(", ") || "—"}</small></label>
-            <label><span>Configuration name</span><input type="text" value={name} disabled={saving} onChange={(event) => setNameEdits((current) => ({ ...current, [key]: event.target.value }))} /></label>
+            <label><span>Configuration name</span><input type="text" value={name} disabled={saving} onChange={(event) => setNameEdits((current) => ({ ...current, [key]: event.target.value }))} /><small>Saved with each configuration version</small></label>
           </div>
           {config.loading ? <LoadingState label="Loading active configuration" /> : config.error ? <RequestErrorState error={config.error} retry={config.reload} /> : <>
             <dl className="quant-facts">

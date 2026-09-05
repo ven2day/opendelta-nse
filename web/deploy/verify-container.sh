@@ -26,7 +26,7 @@ echo "verified login"
 
 for page in / /screener /backtest /signals /paper-trading /settings; do
   curl -fsS -b "${cookie_jar}" "${base_url}${page}" > "${dashboard_html}"
-  for label in Dashboard Screener Backtest Signals 'Paper Trading' Settings; do
+  for label in Dashboard Watchlist Backtest Signals 'Paper Trading' Settings; do
     grep -q "${label}" "${dashboard_html}"
   done
   grep -q 'OpenDelta' "${dashboard_html}"

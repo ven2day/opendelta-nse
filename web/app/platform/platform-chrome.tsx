@@ -34,7 +34,7 @@ type NavigationItem = {
 /** The complete main navigation, in display order. */
 export const navigation: NavigationItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (path) => path === "/" },
-  { href: "/screener", label: "Screener", icon: ScanSearch, match: (path) => path.startsWith("/screener") },
+  { href: "/screener", label: "Watchlist", icon: ScanSearch, match: (path) => path.startsWith("/screener") },
   { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") },
   { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
   { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },

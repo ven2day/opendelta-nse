@@ -6,10 +6,10 @@ process.env.APP_USERNAME = "test-admin";
 process.env.APP_PASSWORD = "test-password-123";
 process.env.AUTH_SECRET = "test-secret-that-is-at-least-32-characters-long";
 
-const NAVIGATION = ["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"];
+const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Settings"];
 const ROUTES = [
   { path: "/", title: "Dashboard" },
-  { path: "/screener", title: "Screener" },
+  { path: "/screener", title: "Watchlist" },
   { path: "/backtest", title: "Backtest" },
   { path: "/signals", title: "Signals" },
   { path: "/paper-trading", title: "Paper Trading" },
@@ -189,7 +189,7 @@ test("NSE paper positions identify the executable FIFO net target", async () => 
   assert.doesNotMatch(workspace, /Close price for/);
 });
 
-test("workspace headers stay compact and the screener declares both markets", async () => {
+test("workspace headers stay compact and the watchlist declares both markets", async () => {
   const paths = [
     "../app/dashboard-workspace.tsx",
     "../app/screener/screener-workspace.tsx",
@@ -204,11 +204,11 @@ test("workspace headers stay compact and the screener declares both markets", as
     assert.ok(header, `${paths[index]} must use WorkspaceHeader`);
     assert.doesNotMatch(header, /\sdescription=/, `${paths[index]} must not add a page-header description`);
   }
-  assert.match(sources[1], /NSE & Crypto screener/);
+  assert.match(sources[1], /NSE & Crypto watchlist/);
   assert.doesNotMatch(sources[1], /Crypto only/);
 });
 
-test("the screener uses one universe selector and a complete JSON configuration", async () => {
+test("the screener presents eligible symbols as a watchlist, not trade calls", async () => {
   const source = await readFile(new URL("../app/screener/screener-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /className="quant-json-editor"/);
   assert.match(source, /<details className="quant-config-disclosure">/);
@@ -221,7 +221,11 @@ test("the screener uses one universe selector and a complete JSON configuration"
   assert.doesNotMatch(source, />Rank by</);
   assert.doesNotMatch(source, />Keep results</);
   assert.doesNotMatch(source, />Manual includes</);
-  assert.match(source, /Save and activate/);
+  assert.match(source, /Save and use for signals/);
+  assert.match(source, /not automatic BUY or SELL calls/);
+  assert.match(source, /Candidates \(/);
+  assert.match(source, /Excluded \(/);
+  assert.doesNotMatch(source, />Passed \(/);
 });
 
 test("the six workspaces keep primary work visible and secondary detail collapsed", async () => {

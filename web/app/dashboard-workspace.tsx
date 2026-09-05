@@ -40,10 +40,12 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
     {loading ? <LoadingState label="Loading dashboard" /> : error ? <RequestErrorState error={error} retry={reload} /> : data && <>
       <section className="quant-overview-strip" aria-label="Market overview">
         <div><span>Market data</span><strong><i data-tone={tone(freshness?.status)} />{readable(freshness?.status)}</strong><small>{freshness?.ageSeconds != null ? formatAge(freshness.ageSeconds) : readable(freshness?.reason)}</small></div>
-        <div><span>Signal engine</span><strong><i data-tone={tone(worker?.status)} />{readable(worker?.status)}</strong><small>{worker?.connectionStatus ? readable(worker.connectionStatus) : "No worker report"}</small></div>
-        <div><span>Active universe</span><strong>{universe?.name ?? "None"}</strong><small>{universe ? formatInteger(universe.symbols.length) + " symbols" : "Create in Screener"}</small></div>
+        <div><span>Strategy automation</span><strong><i data-tone={worker ? tone(worker.status) : "warn"} />{worker ? readable(worker.status) : "Not configured"}</strong><small>{worker?.connectionStatus ? readable(worker.connectionStatus) : "Choose Signals or Paper in Settings"}</small></div>
+        <div><span>Active watchlist</span><strong>{universe?.name ?? "None"}</strong><small>{universe ? formatInteger(universe.symbols.length) + " symbols" : "Create in Watchlist"}</small></div>
         <div><span>Open positions</span><strong>{formatInteger(account?.openPositions)}</strong><small>{account ? formatInteger(account.closedLots) + " closed lots" : "Paper account unavailable"}</small></div>
       </section>
+
+      {!worker && <section className="quant-dashboard-next-step" aria-label="Strategy setup required"><div><strong>No strategy automation is running</strong><span>Save a strategy configuration, then choose Signals or Paper. Until then the dashboard has no signals or simulated trades to display.</span></div><a className="quant-action-link" href={"/settings" + query}>Configure strategy</a></section>}
 
       <Panel className="quant-primary-panel" icon={<Wallet size={18} />} title="Paper portfolio" description="Current simulated account performance." aside={<a className="quant-action-link" href={"/paper-trading" + query}>View account</a>}>
         <SectionBody section={data.paper}>{(section) => <div className="quant-portfolio-hero">
@@ -57,7 +59,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
           {section.openPositions.length ? <div className="quant-table-scroll"><table className="quant-table">
             <thead><tr><th>Open position</th><th className="numeric">Qty</th><th className="numeric">Entry</th><th className="numeric">Last</th><th className="numeric">Unrealized</th><th>Status</th></tr></thead>
             <tbody>{section.openPositions.slice(0, 5).map((lot) => <tr key={lot.lotId}><td><strong>{lot.symbol}</strong><small>{formatDateTime(lot.entryTimestamp, market)}</small></td><td className="numeric">{formatNumber(lot.quantity, 4)}</td><td className="numeric">{formatNumber(lot.entryPrice)}</td><td className="numeric">{formatNumber(lot.lastPrice)}</td><td className="numeric"><PnlValue value={lot.unrealizedPnl} market={market} currency={section.account.currency} /></td><td><StatusBadge tone={tone(lot.status)}>{readable(lot.status)}</StatusBadge></td></tr>)}</tbody>
-          </table></div> : <EmptyState title="No open paper positions" description="New qualified signals will appear here after simulated execution." />}
+          </table></div> : <div className="quant-compact-empty"><EmptyState title="No open paper positions" description={worker ? "Qualified signals will appear here after simulated execution." : "Start a strategy in Paper mode from Settings to create simulated positions."} /></div>}
         </div>}</SectionBody>
       </Panel>
 
@@ -69,13 +71,13 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
       </Panel>
 
       <details className="quant-secondary-disclosure">
-        <summary><span><Activity size={16} />System details</span><small>Market data, signal engine and screener diagnostics</small></summary>
+        <summary><span><Activity size={16} />System details</span><small>Market data, strategy automation and watchlist diagnostics</small></summary>
         <div className="quant-secondary-grid">
           <Panel icon={<Database size={16} />} title="Market data">
             <SectionBody section={data.marketData}>{(section) => <dl className="quant-facts"><div><dt>Freshness</dt><dd>{readable(section.dataFreshness?.status)}</dd></div><div><dt>Data age</dt><dd>{formatAge(section.dataFreshness?.ageSeconds)}</dd></div><div><dt>Reason</dt><dd className="wrap">{readable(section.dataFreshness?.reason)}</dd></div><div><dt>Job</dt><dd>{readable(section.jobStatus?.status)}</dd></div><div><dt>Connection</dt><dd>{readable(section.jobStatus?.connectionStatus)}</dd></div></dl>}</SectionBody>
           </Panel>
-          <Panel icon={<ScanSearch size={16} />} title="Screener" aside={<a className="quant-action-link" href={"/screener" + query}>Open</a>}>
-            <SectionBody section={data.screener}>{(section) => <dl className="quant-facts"><div><dt>Latest run</dt><dd>{section.latestRun ? readable(section.latestRun.status) : "None"}</dd></div><div><dt>Passed</dt><dd>{section.latestRun ? formatInteger(section.latestRun.symbolsPassed) + " / " + formatInteger(section.latestRun.symbolsTotal) : "—"}</dd></div><div><dt>Active universe</dt><dd>{section.activeUniverse?.name ?? "None"}</dd></div><div><dt>Completed</dt><dd>{formatDateTime(section.latestRun?.completedAt, market)}</dd></div></dl>}</SectionBody>
+          <Panel icon={<ScanSearch size={16} />} title="Watchlist" aside={<a className="quant-action-link" href={"/screener" + query}>Open</a>}>
+            <SectionBody section={data.screener}>{(section) => <dl className="quant-facts"><div><dt>Latest run</dt><dd>{section.latestRun ? readable(section.latestRun.status) : "None"}</dd></div><div><dt>Candidates</dt><dd>{section.latestRun ? formatInteger(section.latestRun.symbolsPassed) + " / " + formatInteger(section.latestRun.symbolsTotal) : "—"}</dd></div><div><dt>Active watchlist</dt><dd>{section.activeUniverse?.name ?? "None"}</dd></div><div><dt>Completed</dt><dd>{formatDateTime(section.latestRun?.completedAt, market)}</dd></div></dl>}</SectionBody>
           </Panel>
           <Panel icon={<Activity size={16} />} title="Signal engine" aside={<a className="quant-action-link" href={"/signals" + query}>Open</a>}>
             <SectionBody section={data.signalEngine}>{(section) => <dl className="quant-facts"><div><dt>Workers</dt><dd>{formatInteger(section.workers.length)}</dd></div><div><dt>Strategies</dt><dd className="wrap">{section.workers.map((item) => humanize(item.strategyId ?? "unknown") + " · " + item.timeframe).join(", ") || "Not running"}</dd></div><div><dt>Data age</dt><dd>{formatAge(section.workers[0]?.dataAgeSeconds ?? section.stored[0]?.dataAgeSeconds)}</dd></div><div><dt>Last candle</dt><dd>{formatDateTime(section.workers[0]?.lastCompletedCandle ?? section.stored[0]?.lastCompletedCandle, market)}</dd></div></dl>}</SectionBody>

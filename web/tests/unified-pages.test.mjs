@@ -241,6 +241,8 @@ test("the screener presents eligible symbols as a watchlist, not trade calls", a
   assert.match(source, /Candidates \(/);
   assert.match(source, /Excluded \(/);
   assert.doesNotMatch(source, />Passed \(/);
+  assert.doesNotMatch(source, /<SymbolTags symbols=\{universe\.symbols\}/);
+  assert.match(source, /<th className="numeric">Action<\/th>/);
 });
 
 test("the six workspaces keep primary work visible and secondary detail collapsed", async () => {

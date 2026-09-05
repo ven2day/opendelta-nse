@@ -56,6 +56,7 @@ class PaperBroker:
         repositories: PaperRepositories,
         policy: ExecutionPolicy,
         policy_resolver: Callable[[Mapping[str, Any]], ExecutionPolicy] | None = None,
+        entry_allowed: Callable[[Mapping[str, Any]], bool] | None = None,
         timeframe: str,
         clock: Callable[[], datetime],
         starting_balance: float | None = None,
@@ -64,6 +65,7 @@ class PaperBroker:
         self.repositories = repositories
         self.policy = policy.validate()
         self.policy_resolver = policy_resolver
+        self.entry_allowed = entry_allowed or (lambda _signal: True)
         self.timeframe = timeframe
         self.bar_minutes = market.minutes(timeframe)
         self.clock = clock
@@ -116,6 +118,8 @@ class PaperBroker:
     def on_signal(self, signal: Mapping[str, Any]) -> dict[str, Any] | None:
         """Consume a stored signal: fill now (SIGNAL_CLOSE) or queue for the next candle open."""
         if signal.get("market") != self.market.market or signal.get("signalType") != "BUY":
+            return None
+        if not self.entry_allowed(signal):
             return None
         with self._lock:
             policy = self._policy_for(signal)
@@ -413,7 +417,10 @@ class PaperBroker:
         with self._lock:
             deferred: list[dict[str, Any]] = []
             for signal in self.portfolio.pending_entries.pop(symbol, []):
-                if pending_timeframe is not None and signal.get("timeframe") != pending_timeframe:
+                if not self.entry_allowed(signal):
+                    if signal.get("pendingEntryId"):
+                        self.repositories.pending.delete(signal["pendingEntryId"])
+                elif pending_timeframe is not None and signal.get("timeframe") != pending_timeframe:
                     deferred.append(signal)
                 elif self._pending_is_executable(signal, stamp, execution_timeframe):
                     self._fill_entry(signal, open_, stamp)
@@ -532,6 +539,8 @@ class PaperBroker:
             "configurationSnapshot": snapshot,
             "entryReason": "LADDER_DIP_ENTRY",
         }
+        if not self.entry_allowed(signal):
+            return
         self._persist_pending_entry(signal, cycle_id=cycle_id, lot_number=int(latest["lotNumber"]) + 1)
 
     def _persist_pending_entry(

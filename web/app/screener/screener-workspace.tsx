@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
+import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversePresetsResponse, UniversesResponse, WatchlistProfileVersion, WatchlistProfilesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, SymbolTags, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
@@ -58,16 +58,25 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const loadRuns = useCallback(() => v2Get<{ runs: ScreenerRun[] }>("screener/runs", { market, limit: 10 }), [market]);
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
   const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
+  const loadProfiles = useCallback(() => v2Get<WatchlistProfilesResponse>("screener/profiles", { market }), [market]);
   const filters = useV2Resource(loadFilters);
   const runs = useV2Resource(loadRuns);
   const universes = useV2Resource(loadUniverses);
   const presets = useV2Resource(loadPresets);
+  const profiles = useV2Resource(loadProfiles);
   const { refresh: refreshRuns } = runs;
   const { refresh: refreshUniverses } = universes;
+  const { refresh: refreshProfiles } = profiles;
 
   const [symbolSource, setSymbolSource] = useState("market");
   const [symbolsText, setSymbolsText] = useState("");
   const [filterJsonEdits, setFilterJsonEdits] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
+  const [selectedProfileIds, setSelectedProfileIds] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
+  const [selectedProfileVersionIds, setSelectedProfileVersionIds] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
+  const [profileNames, setProfileNames] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
+  const [profileDirty, setProfileDirty] = useState<Record<PlatformMarket, boolean>>({ NSE: true, CRYPTO: true });
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileNotice, setProfileNotice] = useState<Notice>(null);
   const [submitting, setSubmitting] = useState(false);
   const [runNotice, setRunNotice] = useState<Notice>(null);
   const [pollingRunId, setPollingRunId] = useState<string | null>(null);
@@ -82,6 +91,10 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const [activatingId, setActivatingId] = useState<string | null>(null);
 
   const defaultFilters = filters.data?.defaults ?? {};
+  const profileVersions = (profiles.data?.profiles ?? []).flatMap((profile) => profile.versions);
+  const selectedProfileVersionId = selectedProfileVersionIds[market];
+  const selectedProfileId = selectedProfileIds[market];
+  const selectedProfileVersion = profileVersions.find((version) => version.profileVersionId === selectedProfileVersionId) ?? null;
   const filterJson = filterJsonEdits[market] || JSON.stringify(compactValues(defaultFilters), null, 2);
   const selectedPreset = presets.data?.presets.find((preset) => preset.presetId === symbolSource) ?? null;
   const effectiveSymbolSource = symbolSource === "market" || symbolSource === "custom" || selectedPreset ? symbolSource : "market";
@@ -128,6 +141,73 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const activeUniverse = universes.data?.active?.[market] ?? universes.data?.universes.find((universe) => universe.active) ?? null;
   const busy = submitting || Boolean(pollingRunId);
 
+  const markProfileDirty = () => {
+    setProfileDirty((current) => ({ ...current, [market]: true }));
+    setProfileNotice(null);
+  };
+
+  const selectProfileVersion = (profileVersionId: string) => {
+    if (!profileVersionId) {
+      setSelectedProfileIds((current) => ({ ...current, [market]: "" }));
+      setSelectedProfileVersionIds((current) => ({ ...current, [market]: "" }));
+      setProfileNames((current) => ({ ...current, [market]: "" }));
+      setProfileDirty((current) => ({ ...current, [market]: true }));
+      setSymbolSource("market");
+      setSymbolsText("");
+      setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) }));
+      setProfileNotice(null);
+      return;
+    }
+    const version = profileVersions.find((item) => item.profileVersionId === profileVersionId);
+    if (!version) return;
+    setSelectedProfileIds((current) => ({ ...current, [market]: version.profileId }));
+    setSelectedProfileVersionIds((current) => ({ ...current, [market]: version.profileVersionId }));
+    setProfileNames((current) => ({ ...current, [market]: version.name }));
+    setProfileDirty((current) => ({ ...current, [market]: false }));
+    setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(version.filters, null, 2) }));
+    setSymbolSource(version.sourceKind === "MARKET" ? "market" : version.sourceKind === "PRESET" ? version.presetId ?? "market" : "custom");
+    setSymbolsText(version.sourceKind === "CUSTOM" ? version.symbols.join(", ") : "");
+    setProfileNotice(null);
+  };
+
+  const profilePayload = () => {
+    const configuration = parseFilterOverrides(filterJson);
+    const sourceKind = selectedPreset ? "PRESET" : effectiveSymbolSource === "custom" ? "CUSTOM" : "MARKET";
+    return {
+      filters: configuration,
+      sourceKind,
+      ...(selectedPreset ? { presetId: selectedPreset.presetId } : {}),
+      ...(sourceKind === "CUSTOM" ? { symbols: parseSymbols(symbolsText) } : {}),
+    };
+  };
+
+  const saveProfileVersion = async () => {
+    setSavingProfile(true);
+    setProfileNotice(null);
+    try {
+      const payload = profilePayload();
+      if (payload.sourceKind === "CUSTOM" && !payload.symbols?.length) throw new Error("Enter at least one custom symbol before saving this profile.");
+      let saved: WatchlistProfileVersion;
+      if (selectedProfileId) {
+        saved = await v2Post<WatchlistProfileVersion>(`screener/profiles/${selectedProfileId}/versions`, payload);
+      } else {
+        const name = profileNames[market].trim();
+        if (!name) throw new Error("Enter a profile name before saving.");
+        saved = await v2Post<WatchlistProfileVersion>("screener/profiles", { market, name, ...payload });
+      }
+      setSelectedProfileIds((current) => ({ ...current, [market]: saved.profileId }));
+      setSelectedProfileVersionIds((current) => ({ ...current, [market]: saved.profileVersionId }));
+      setProfileNames((current) => ({ ...current, [market]: saved.name }));
+      setProfileDirty((current) => ({ ...current, [market]: false }));
+      setProfileNotice({ kind: "success", text: `Saved ${saved.name} · v${saved.version}. Existing strategy watchlists were not changed.` });
+      refreshProfiles();
+    } catch (reason) {
+      setProfileNotice({ kind: "error", text: errorMessage(reason, "The watchlist profile could not be saved") });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   const runScreener = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
@@ -137,7 +217,10 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       if (effectiveSymbolSource === "custom" && !symbols.length) throw new Error("Enter at least one symbol or use a ready-made universe.");
       const configuration = parseFilterOverrides(filterJson);
       if (configuration.rankBy !== undefined && !(filters.data?.rankBy ?? []).includes(String(configuration.rankBy))) throw new Error(`filters.rankBy must be one of: ${(filters.data?.rankBy ?? []).join(", ")}.`);
-      const body = {
+      const body = selectedProfileVersionId && !profileDirty[market] ? {
+        market,
+        profileVersionId: selectedProfileVersionId,
+      } : {
         market,
         filters: configuration,
         ...(selectedPreset ? { presetId: selectedPreset.presetId } : {}),
@@ -223,19 +306,25 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
     <Panel icon={<ScanSearch size={17} />} title="Find candidates" description="Apply eligibility rules to a starting market list.">
       {filters.loading ? <LoadingState label="Loading filter defaults" /> : filters.error ? <RequestErrorState error={filters.error} retry={filters.reload} /> : <form onSubmit={runScreener} noValidate>
         <div className="quant-panel-body">
+          <div className="quant-form-grid quant-screener-profile-grid">
+            <label><span>Saved rule set</span><select aria-label="Watchlist profile version" value={selectedProfileVersionId} disabled={busy || profiles.loading} onChange={(event) => selectProfileVersion(event.target.value)}><option value="">New profile</option>{(profiles.data?.profiles ?? []).map((profile) => <optgroup key={profile.profileId} label={profile.name}>{profile.versions.map((version) => <option key={version.profileVersionId} value={version.profileVersionId}>v{version.version} · {formatDateTime(version.createdAt, market)}</option>)}</optgroup>)}</select>{profiles.error && <small>Saved profiles unavailable: {profiles.error.message}</small>}{selectedProfileVersion && <small>{profileDirty[market] ? `Modified from v${selectedProfileVersion.version}` : `Loaded v${selectedProfileVersion.version}`}</small>}</label>
+            <label><span>Profile name</span><input aria-label="Watchlist profile name" value={profileNames[market]} disabled={busy || Boolean(selectedProfileId)} placeholder={market === "NSE" ? "NSE Intraday Quality" : "Crypto Liquid"} onChange={(event) => { setProfileNames((current) => ({ ...current, [market]: event.target.value })); markProfileDirty(); }} /><small>{selectedProfileId ? "Name is fixed; saving creates the next immutable version." : "Create a reusable named JSON rule set."}</small></label>
+            <button type="button" className="quant-action-link" disabled={busy || savingProfile} onClick={() => void saveProfileVersion()}><Save size={15} />{savingProfile ? "Saving…" : selectedProfileId ? "Save new version" : "Save profile"}</button>
+          </div>
+          {profileNotice && <Message kind={profileNotice.kind}>{profileNotice.text}</Message>}
           <div className="quant-form-grid quant-screener-run-grid">
-            <label><span>Starting universe</span><select value={effectiveSymbolSource} disabled={busy} onChange={(event) => setSymbolSource(event.target.value)}><option value="market">Full {marketLabel(market)} market</option>{(presets.data?.presets ?? []).map((preset) => <option key={preset.presetId} value={preset.presetId}>{preset.name} ({preset.symbols.length})</option>)}<option value="custom">Custom list</option></select>{presets.error && <small>Ready-made universes unavailable: {presets.error.message}</small>}{selectedPreset && <small>Official snapshot · {selectedPreset.symbols.length} symbols · as of {selectedPreset.asOf}</small>}</label>
-            {effectiveSymbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => setSymbolsText(event.target.value)} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
+            <label><span>Starting universe</span><select value={effectiveSymbolSource} disabled={busy} onChange={(event) => { setSymbolSource(event.target.value); markProfileDirty(); }}><option value="market">Full {marketLabel(market)} market</option>{(presets.data?.presets ?? []).map((preset) => <option key={preset.presetId} value={preset.presetId}>{preset.name} ({preset.symbols.length})</option>)}<option value="custom">Custom list</option></select>{presets.error && <small>Ready-made universes unavailable: {presets.error.message}</small>}{selectedPreset && <small>Official snapshot · {selectedPreset.symbols.length} symbols · as of {selectedPreset.asOf}</small>}</label>
+            {effectiveSymbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => { setSymbolsText(event.target.value); markProfileDirty(); }} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
           </div>
           <details className="quant-config-disclosure">
             <summary><span><Braces size={15} />Edit JSON</span><small>Filters and ranking</small></summary>
             <div className="quant-json-editor">
             <div className="quant-json-editor-heading"><span>Screener JSON</span><small>Price, liquidity, volatility, quality, ranking and result limit.</small></div>
-              <textarea aria-label="Screener configuration JSON" spellCheck={false} value={filterJson} disabled={busy} onChange={(event) => setFilterJsonEdits((current) => ({ ...current, [market]: event.target.value }))} />
+              <textarea aria-label="Screener configuration JSON" spellCheck={false} value={filterJson} disabled={busy} onChange={(event) => { setFilterJsonEdits((current) => ({ ...current, [market]: event.target.value })); markProfileDirty(); }} />
               <div className="quant-backtest-config-actions">
                 <button type="button" onClick={() => void navigator.clipboard.writeText(filterJson)}><Copy size={14} />Copy JSON</button>
                 <button type="button" onClick={() => { try { const parsed = parseFilterOverrides(filterJson); setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(parsed, null, 2) })); setRunNotice(null); } catch (reason) { setRunNotice({ kind: "error", text: errorMessage(reason, "Invalid screener configuration") }); } }}>Validate and format</button>
-                <button type="button" onClick={() => setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) }))}>Reset to defaults</button>
+                <button type="button" onClick={() => { setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) })); markProfileDirty(); }}>Reset to defaults</button>
               </div>
             </div>
           </details>

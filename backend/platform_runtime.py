@@ -41,6 +41,7 @@ from backend.data.repositories import (
     ScreenerRunRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
+    WatchlistProfileRepository,
 )
 from backend.markets.base import CandleSource, market_spec
 from backend.observability import get_logger
@@ -401,6 +402,7 @@ class PlatformRuntime:
                     runs=lambda: ScreenerRunRepository(self.require_database()),
                     results=lambda: ScreenerResultRepository(self.require_database()),
                     universes=self.universes,
+                    profiles=lambda: WatchlistProfileRepository(self.require_database()),
                     engine_for=self.screener_engine,
                     catalogue_for=self.symbol_catalogue,
                 )

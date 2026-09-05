@@ -652,6 +652,7 @@ def _public_screener_run(row: Mapping[str, Any]) -> dict[str, Any]:
         "market": row["market"],
         "status": row["status"],
         "filters": row["filters"],
+        "profileVersionId": str(row["profile_version_id"]) if row.get("profile_version_id") else None,
         "symbolsTotal": int(row["symbols_total"]),
         "symbolsPassed": int(row["symbols_passed"]),
         "error": row["error"],
@@ -664,11 +665,11 @@ class ScreenerRunRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def create(self, *, market: str, filters: Mapping[str, Any], symbols_total: int) -> dict[str, Any]:
+    def create(self, *, market: str, filters: Mapping[str, Any], symbols_total: int, profile_version_id: str | None = None) -> dict[str, Any]:
         run_id = uuid.uuid4()
         self.database.execute(
-            "INSERT INTO screener_runs (run_id, market, status, filters, symbols_total) VALUES (%s, %s, 'RUNNING', %s, %s)",
-            (run_id, market, jsonb(dict(filters)), symbols_total),
+            "INSERT INTO screener_runs (run_id, market, status, filters, symbols_total, profile_version_id) VALUES (%s, %s, 'RUNNING', %s, %s, %s)",
+            (run_id, market, jsonb(dict(filters)), symbols_total, uuid.UUID(str(profile_version_id)) if profile_version_id else None),
         )
         return self.get(run_id)
 
@@ -1086,6 +1087,157 @@ class PaperTradeRepository:
             (uuid.UUID(str(account_id)),),
         )
         return [_public_paper_trade(row) for row in rows]
+
+
+def _public_watchlist_profile_version(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "profileVersionId": str(row["profile_version_id"]),
+        "profileId": str(row["profile_id"]),
+        "market": row["market"],
+        "name": row["name"],
+        "version": int(row["version"]),
+        "filters": row["filters"],
+        "sourceKind": row["source_kind"],
+        "presetId": row["preset_id"],
+        "symbols": row["symbols"],
+        "createdAt": _iso(row["version_created_at"]),
+    }
+
+
+class WatchlistProfileRepository:
+    """Immutable, named versions of screener rules and their starting universe."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def _version(self, profile_version_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            """
+            SELECT p.profile_id, p.market, p.name, v.profile_version_id, v.version, v.filters,
+                   v.source_kind, v.preset_id, v.symbols, v.created_at AS version_created_at
+            FROM watchlist_profile_versions v
+            JOIN watchlist_profiles p ON p.profile_id = v.profile_id
+            WHERE v.profile_version_id = %s
+            """,
+            (uuid.UUID(str(profile_version_id)),),
+        )
+        if row is None:
+            raise KeyError(f"Watchlist profile version {profile_version_id} was not found")
+        return _public_watchlist_profile_version(row)
+
+    def get_version(self, profile_version_id: uuid.UUID | str) -> dict[str, Any]:
+        return self._version(profile_version_id)
+
+    def get(self, profile_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            "SELECT profile_id, market, name, created_at FROM watchlist_profiles WHERE profile_id = %s",
+            (uuid.UUID(str(profile_id)),),
+        )
+        if row is None:
+            raise KeyError(f"Watchlist profile {profile_id} was not found")
+        return {
+            "profileId": str(row["profile_id"]),
+            "market": row["market"],
+            "name": row["name"],
+            "createdAt": _iso(row["created_at"]),
+        }
+
+    def create(
+        self,
+        *,
+        market: str,
+        name: str,
+        filters: Mapping[str, Any],
+        source_kind: str,
+        preset_id: str | None = None,
+        symbols: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        profile_id, profile_version_id = uuid.uuid4(), uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM watchlist_profiles WHERE market = %s AND lower(name) = lower(%s)",
+                (market, name),
+            )
+            if cursor.fetchone() is not None:
+                raise ValueError(f'A watchlist profile named "{name}" already exists for {market}')
+            cursor.execute(
+                "INSERT INTO watchlist_profiles (profile_id, market, name) VALUES (%s, %s, %s)",
+                (profile_id, market, name),
+            )
+            cursor.execute(
+                """
+                INSERT INTO watchlist_profile_versions (
+                    profile_version_id, profile_id, version, filters, source_kind, preset_id, symbols
+                ) VALUES (%s, %s, 1, %s, %s, %s, %s)
+                """,
+                (profile_version_id, profile_id, jsonb(dict(filters)), source_kind, preset_id, jsonb(list(symbols))),
+            )
+        return self._version(profile_version_id)
+
+    def add_version(
+        self,
+        profile_id: uuid.UUID | str,
+        *,
+        filters: Mapping[str, Any],
+        source_kind: str,
+        preset_id: str | None = None,
+        symbols: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        key, profile_version_id = uuid.UUID(str(profile_id)), uuid.uuid4()
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT profile_id FROM watchlist_profiles WHERE profile_id = %s FOR UPDATE", (key,))
+            if cursor.fetchone() is None:
+                raise KeyError(f"Watchlist profile {profile_id} was not found")
+            cursor.execute(
+                "SELECT coalesce(max(version), 0) + 1 AS version FROM watchlist_profile_versions WHERE profile_id = %s",
+                (key,),
+            )
+            version = int(cursor.fetchone()["version"])
+            cursor.execute(
+                """
+                INSERT INTO watchlist_profile_versions (
+                    profile_version_id, profile_id, version, filters, source_kind, preset_id, symbols
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (profile_version_id, key, version, jsonb(dict(filters)), source_kind, preset_id, jsonb(list(symbols))),
+            )
+        return self._version(profile_version_id)
+
+    def list(self, market: str | None = None, *, limit: int = 100) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all(
+                """
+                SELECT p.profile_id, p.market, p.name, v.profile_version_id, v.version, v.filters,
+                       v.source_kind, v.preset_id, v.symbols, v.created_at AS version_created_at
+                FROM watchlist_profiles p
+                JOIN watchlist_profile_versions v ON v.profile_id = p.profile_id
+                WHERE p.market = %s
+                ORDER BY lower(p.name), v.version DESC
+                LIMIT %s
+                """,
+                (market, limit),
+            )
+        else:
+            rows = self.database.fetch_all(
+                """
+                SELECT p.profile_id, p.market, p.name, v.profile_version_id, v.version, v.filters,
+                       v.source_kind, v.preset_id, v.symbols, v.created_at AS version_created_at
+                FROM watchlist_profiles p
+                JOIN watchlist_profile_versions v ON v.profile_id = p.profile_id
+                ORDER BY p.market, lower(p.name), v.version DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            version = _public_watchlist_profile_version(row)
+            profile = grouped.setdefault(
+                version["profileId"],
+                {"profileId": version["profileId"], "market": version["market"], "name": version["name"], "versions": []},
+            )
+            profile["versions"].append(version)
+        return list(grouped.values())
 
 
 def _public_universe(row: Mapping[str, Any]) -> dict[str, Any]:

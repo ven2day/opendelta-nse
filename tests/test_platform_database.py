@@ -63,6 +63,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "006_live_signal_strategy_identity",
                 "007_strategy_deployments",
                 "008_strategy_deployment_universe",
+                "009_watchlist_profile_versions",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -76,6 +77,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             "screener_runs",
             "screener_results",
             "saved_universes",
+            "watchlist_profiles",
+            "watchlist_profile_versions",
             "strategy_configs",
             "strategy_deployments",
             "backtest_runs",

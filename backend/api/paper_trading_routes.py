@@ -17,10 +17,6 @@ class PaperAccountRequest(BaseModel):
     startingBalance: float | None = Field(default=None, gt=0)
 
 
-class ManualCloseRequest(BaseModel):
-    price: float = Field(gt=0)
-
-
 def create_paper_trading_router(broker_for: Callable[[str], PaperBroker]) -> APIRouter:
     router = APIRouter(prefix="/v2/paper", tags=["paper-trading"])
 
@@ -75,11 +71,13 @@ def create_paper_trading_router(broker_for: Callable[[str], PaperBroker]) -> API
         return {"market": broker.market.market, "lots": broker.repositories.lots.list(broker.account["accountId"], status=status.strip().upper() if status else None, limit=limit)}
 
     @router.post("/lots/{lot_id}/close")
-    def close_lot(lot_id: str, request: ManualCloseRequest, market: str = Query(...)) -> dict[str, Any]:
+    def close_lot(lot_id: str, market: str = Query(...)) -> dict[str, Any]:
         broker = _broker(market)
         try:
-            return broker.close_lot_manually(lot_id, price=request.price)
+            return broker.close_lot_manually(lot_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     return router

@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { readGlobalSettings } from "../global-settings-server";
 import { parseMarket } from "../platform/platform-client";
 import { requireSessionUser } from "../server-auth";
 import { SettingsWorkspace } from "./settings-workspace";
@@ -8,11 +7,11 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Settings",
-  description: "Strategy configuration, risk defaults and the global price range.",
+  description: "Versioned strategy and paper-execution configuration.",
 };
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ market?: string }> }) {
   await requireSessionUser();
-  const [globalSettings, query] = await Promise.all([readGlobalSettings(), searchParams]);
-  return <SettingsWorkspace initialMarket={parseMarket(query.market)} globalSettings={globalSettings} />;
+  const query = await searchParams;
+  return <SettingsWorkspace initialMarket={parseMarket(query.market)} />;
 }

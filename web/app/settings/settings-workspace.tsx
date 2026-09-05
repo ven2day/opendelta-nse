@@ -1,62 +1,83 @@
 "use client";
 
-import { Coins, Save, Settings2, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { Braces, Save, Settings2, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
-import type { GlobalSettingsPayload } from "../global-settings-shared";
-import { formatDateTime, marketLabel, MARKETS, shortId } from "../platform/format";
+import { formatDateTime, marketLabel, shortId } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
-import { compactValues, schemaDefaults, schemaFromValues, SchemaForm, type ConfigValues } from "../platform/schema-form";
+import { compactValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
-import { GlobalPriceRangeForm } from "./price-range-form";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
+type SettingsDocument = { strategy: ConfigValues; paperExecution: ConfigValues };
 
-export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMarket: PlatformMarket; globalSettings: GlobalSettingsPayload }) {
-  const [market, setMarket] = useState<PlatformMarket>(initialMarket);
+function isObject(value: unknown): value is ConfigValues {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseSettingsDocument(text: string, strategySchema: ConfigSchema, riskSchema: ConfigSchema): SettingsDocument {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Configuration is not valid JSON.");
+  }
+  if (!isObject(parsed)) throw new Error("Configuration must be a JSON object.");
+  const unknown = Object.keys(parsed).filter((key) => key !== "strategy" && key !== "paperExecution");
+  if (unknown.length) throw new Error(`Unknown top-level section${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`);
+  if (!isObject(parsed.strategy)) throw new Error('"strategy" must be a JSON object.');
+  if (!isObject(parsed.paperExecution)) throw new Error('"paperExecution" must be a JSON object.');
+  const strategy = compactValues(parsed.strategy);
+  const paperExecution = compactValues(parsed.paperExecution);
+  validateConfigValues(strategy, strategySchema, "strategy");
+  validateConfigValues(paperExecution, riskSchema, "paperExecution");
+  return { strategy, paperExecution };
+}
+
+export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMarket }) {
+  const market = initialMarket;
   const [strategyChoice, setStrategyChoice] = useState<string | null>(null);
-  const [configEdits, setConfigEdits] = useState<Record<string, ConfigValues>>({});
-  const [riskEdits, setRiskEdits] = useState<Record<string, ConfigValues>>({});
+  const [jsonEdits, setJsonEdits] = useState<Record<string, string>>({});
   const [nameEdits, setNameEdits] = useState<Record<string, string>>({});
-  const [activate, setActivate] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
 
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
-  const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((strategy) => !strategy.supportedMarkets?.length || strategy.supportedMarkets.includes(market)), [strategies.data, market]);
-  const strategy = marketStrategies.find((item) => item.strategyId === strategyChoice) ?? marketStrategies[0] ?? null;
-  const strategyId = strategy?.strategyId ?? null;
+  const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((item) => !item.supportedMarkets?.length || item.supportedMarkets.includes(market)), [strategies.data, market]);
+  const selectedStrategy = marketStrategies.find((item) => item.strategyId === strategyChoice) ?? marketStrategies[0] ?? null;
+  const strategyId = selectedStrategy?.strategyId ?? null;
   const loadConfig = useCallback(() => (strategyId ? v2Get<StrategyConfigResponse>(`strategies/${strategyId}/config`, { market }) : Promise.resolve(null)), [strategyId, market]);
   const config = useV2Resource(loadConfig);
   const { refresh: refreshConfig } = config;
-
   const key = `${market}:${strategyId ?? ""}`;
-  // Prefer the published risk schema (enum fields become selects); infer from defaults only when an older service omits it.
   const riskSchema = useMemo(() => strategies.data?.riskSchema ?? schemaFromValues({ ...(strategies.data?.riskDefaults ?? {}), ...(config.data?.effectiveRiskSettings ?? {}) }), [strategies.data, config.data]);
-  const configuration = strategy ? (configEdits[key] ?? schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults)) : {};
-  const riskSettings = riskEdits[key] ?? schemaDefaults(riskSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
-  const name = nameEdits[key] ?? (config.data?.active?.name ?? (strategy ? `${strategy.name} · ${marketLabel(market)}` : ""));
+  const effectiveDocument = useMemo<SettingsDocument>(() => ({
+    strategy: selectedStrategy ? compactValues(schemaDefaults(selectedStrategy.configSchema, config.data?.effectiveConfiguration, selectedStrategy.defaults)) : {},
+    paperExecution: compactValues(schemaDefaults(riskSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults)),
+  }), [selectedStrategy, config.data, riskSchema, strategies.data]);
+  const configurationJson = jsonEdits[key] ?? JSON.stringify(effectiveDocument, null, 2);
+  const name = nameEdits[key] ?? (config.data?.active?.name ?? (selectedStrategy ? `${selectedStrategy.name} · ${marketLabel(market)}` : ""));
   const active = config.data?.active ?? null;
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (!strategy) return;
+    if (!selectedStrategy) return;
     setSaving(true);
     setNotice(null);
     try {
-      const saved = await v2Post<StrategyConfig>(`strategies/${strategy.strategyId}/config`, {
+      const document = parseSettingsDocument(configurationJson, selectedStrategy.configSchema, riskSchema);
+      const saved = await v2Post<StrategyConfig>(`strategies/${selectedStrategy.strategyId}/config`, {
         market,
-        name: name.trim() || `${strategy.name} · ${marketLabel(market)}`,
-        configuration: compactValues(configuration),
-        riskSettings: compactValues(riskSettings),
-        activate,
+        name: name.trim() || `${selectedStrategy.name} · ${marketLabel(market)}`,
+        configuration: document.strategy,
+        riskSettings: document.paperExecution,
+        activate: true,
       }, { market });
-      setNotice({ kind: "success", text: `Saved "${saved.name}" (${shortId(saved.configId)})${saved.active ? " and activated it" : ""} for ${strategy.name} on ${marketLabel(market)}.` });
-      setConfigEdits((current) => ({ ...current, [key]: saved.configuration ?? configuration }));
-      setRiskEdits((current) => ({ ...current, [key]: saved.riskSettings ?? riskSettings }));
+      setJsonEdits((current) => ({ ...current, [key]: JSON.stringify({ strategy: saved.configuration ?? document.strategy, paperExecution: saved.riskSettings ?? document.paperExecution }, null, 2) }));
+      setNotice({ kind: "success", text: `Saved and activated "${saved.name}" (${shortId(saved.configId)}).` });
       refreshConfig();
     } catch (reason) {
       setNotice({ kind: "error", text: errorMessage(reason, "The configuration could not be saved") });
@@ -65,69 +86,54 @@ export function SettingsWorkspace({ initialMarket, globalSettings }: { initialMa
     }
   };
 
-  return <main className="quant-workspace">
-    <WorkspaceHeader
-      eyebrow="Configuration"
-      title="Platform settings"
-      actions={<div className="quant-header-actions"><StatusBadge tone="good">Orders disabled</StatusBadge><StatusBadge>Environment managed</StatusBadge></div>}
-    />
+  const formatJson = () => {
+    if (!selectedStrategy) return;
+    try {
+      const document = parseSettingsDocument(configurationJson, selectedStrategy.configSchema, riskSchema);
+      setJsonEdits((current) => ({ ...current, [key]: JSON.stringify(document, null, 2) }));
+      setNotice(null);
+    } catch (reason) {
+      setNotice({ kind: "error", text: errorMessage(reason, "Invalid configuration") });
+    }
+  };
 
-    <Panel icon={<Settings2 size={17} />} title="Strategy configuration" description="Forms are generated from each strategy's published schema. Saving with activation makes this the configuration used by the signal engine and new backtests." aside={active ? <StatusBadge tone="good">Active: {active.name}{strategy ? ` · v${strategy.version}` : ""}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
-      {strategies.loading ? <LoadingState label="Loading strategies" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies registered" description={`No strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={save} noValidate>
+  return <main className="quant-workspace">
+    <WorkspaceHeader eyebrow={`${marketLabel(market)} configuration`} title="Settings" actions={<div className="quant-header-actions"><StatusBadge tone="good">Paper only</StatusBadge><StatusBadge>Server-managed keys</StatusBadge></div>} />
+
+    <Panel icon={<Settings2 size={17} />} title="Strategy settings" description="One versioned JSON document controls strategy behaviour and paper execution for this market." aside={active ? <StatusBadge tone="good">Active: {active.name}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
+      {strategies.loading ? <LoadingState label="Loading strategies" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !selectedStrategy ? <EmptyState title="No strategies registered" description={`No strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={save} noValidate>
         <div className="quant-panel-body">
-          <div className="quant-form-grid">
-            <label><span>Market</span><select value={market} onChange={(event) => { setMarket(event.target.value as PlatformMarket); setStrategyChoice(null); }}>{MARKETS.map((item) => <option key={item} value={item}>{marketLabel(item)}</option>)}</select></label>
-            <label><span>Strategy</span><select value={strategy.strategyId} onChange={(event) => setStrategyChoice(event.target.value)}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select><small>Timeframes {strategy.supportedTimeframes.join(", ") || "—"}</small></label>
-            <label><span>Configuration name</span><input type="text" value={name} onChange={(event) => setNameEdits((current) => ({ ...current, [key]: event.target.value }))} /></label>
-            <label className="checkbox"><input type="checkbox" checked={activate} onChange={(event) => setActivate(event.target.checked)} /><span>Activate on save</span></label>
+          <div className="quant-form-grid quant-settings-identity">
+            <label><span>Strategy</span><select value={selectedStrategy.strategyId} disabled={saving} onChange={(event) => { setStrategyChoice(event.target.value); setNotice(null); }}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select><small>Timeframes {selectedStrategy.supportedTimeframes.join(", ") || "—"}</small></label>
+            <label><span>Configuration name</span><input type="text" value={name} disabled={saving} onChange={(event) => setNameEdits((current) => ({ ...current, [key]: event.target.value }))} /></label>
           </div>
           {config.loading ? <LoadingState label="Loading active configuration" /> : config.error ? <RequestErrorState error={config.error} retry={config.reload} /> : <>
             <dl className="quant-facts">
-              <div><dt>Active config</dt><dd>{active ? active.name : "None"}</dd></div>
-              <div><dt>Config id</dt><dd className="mono">{active ? shortId(active.configId) : "—"}</dd></div>
-              <div><dt>Strategy version</dt><dd>v{strategy.version}</dd></div>
+              <div><dt>Market</dt><dd>{marketLabel(market)}</dd></div>
+              <div><dt>Strategy version</dt><dd>v{selectedStrategy.version}</dd></div>
+              <div><dt>Active config</dt><dd>{active ? shortId(active.configId) : "None"}</dd></div>
               <div><dt>Updated</dt><dd>{formatDateTime(active?.updatedAt ?? active?.createdAt, market)}</dd></div>
-              <div><dt>Saved versions</dt><dd>{config.data?.all.length ?? 0}</dd></div>
             </dl>
-            <h3 className="quant-subheading"><SlidersHorizontal size={14} />Strategy parameters</h3>
-            <SchemaForm schema={strategy.configSchema} values={configuration} disabled={saving} onChange={(next) => setConfigEdits((current) => ({ ...current, [key]: next }))} />
-            <h3 className="quant-subheading"><ShieldCheck size={14} />Risk and execution settings</h3>
-            <SchemaForm schema={riskSchema} values={riskSettings} disabled={saving} onChange={(next) => setRiskEdits((current) => ({ ...current, [key]: next }))} />
+            <div className="quant-json-editor">
+              <div className="quant-json-editor-heading"><span><Braces size={15} />Configuration JSON</span><small><code>strategy</code> drives signals/backtests; <code>paperExecution</code> controls simulated sizing and fills.</small></div>
+              <textarea aria-label="Strategy and paper execution JSON" spellCheck={false} value={configurationJson} disabled={saving} onChange={(event) => setJsonEdits((current) => ({ ...current, [key]: event.target.value }))} />
+              <div className="quant-backtest-config-actions"><button type="button" disabled={saving} onClick={formatJson}>Validate and format</button><button type="button" disabled={saving} onClick={() => { setJsonEdits((current) => ({ ...current, [key]: JSON.stringify(effectiveDocument, null, 2) })); setNotice(null); }}>Reset to active</button></div>
+            </div>
           </>}
           {notice && <Message kind={notice.kind}>{notice.text}</Message>}
         </div>
-        <div className="quant-form-actions">
-          <button type="submit" className="primary" disabled={saving || config.loading}><Save size={15} />{saving ? "Saving…" : activate ? "Save and activate" : "Save"}</button>
-          <button type="button" disabled={saving} onClick={() => { setConfigEdits((current) => ({ ...current, [key]: schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults) })); setRiskEdits((current) => ({ ...current, [key]: schemaDefaults(riskSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults) })); }}>Reset to effective values</button>
-          <span>{strategy.name} v{strategy.version} · {marketLabel(market)}</span>
-        </div>
+        <div className="quant-form-actions"><button type="submit" className="primary" disabled={saving || config.loading}><Save size={15} />{saving ? "Saving…" : "Save and activate"}</button><span>Creates a version; previous versions remain in history.</span></div>
       </form>}
-      {config.data && config.data.all.length > 0 && <div className="quant-table-scroll"><table className="quant-table">
-        <thead><tr><th>Name</th><th>Config id</th><th>Status</th><th>Created</th><th>Updated</th></tr></thead>
-        <tbody>{config.data.all.map((item) => <tr key={item.configId} className={item.active ? "active" : ""}><td><strong>{item.name}</strong></td><td className="mono">{shortId(item.configId)}</td><td><StatusBadge tone={item.active ? "good" : "neutral"}>{item.active ? "Active" : "Saved"}</StatusBadge></td><td>{formatDateTime(item.createdAt, market)}</td><td>{formatDateTime(item.updatedAt, market)}</td></tr>)}</tbody>
-      </table></div>}
+      {config.data && config.data.all.length > 0 && <div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Name</th><th>Config id</th><th>Status</th><th>Created</th></tr></thead><tbody>{config.data.all.map((item) => <tr key={item.configId} className={item.active ? "active" : ""}><td><strong>{item.name}</strong></td><td className="mono">{shortId(item.configId)}</td><td><StatusBadge tone={item.active ? "good" : "neutral"}>{item.active ? "Active" : "Saved"}</StatusBadge></td><td>{formatDateTime(item.createdAt, market)}</td></tr>)}</tbody></table></div>}
     </Panel>
 
-    <Panel icon={<Coins size={17} />} title="Global price range" description="Bounds the symbol universe offered to screeners and backtests by current price. Stored backtest history is not changed.">
-      <div className="site-shell quant-embedded-shell"><GlobalPriceRangeForm initialSettings={globalSettings} /></div>
-    </Panel>
-
-    <Panel
-      icon={<ShieldCheck size={17} />}
-      title={market === "CRYPTO" ? "Crypto connections and keys" : "Credentials and broker execution"}
-      description={market === "CRYPTO"
-        ? "Public OKX and VALR market data and paper trading do not require exchange API keys. Provider endpoints and any future secrets remain server-managed."
-        : "Secrets remain server-side environment values. The platform accepts no user-supplied executable strategies and installs no live order adapter."}
-      aside={<StatusBadge tone="good">Orders disabled</StatusBadge>}
-    >
-      <div className="quant-panel-body">
-        {market === "CRYPTO" ? <dl className="quant-facts">
-          <div><dt>Strategy</dt><dd>Editable above</dd></div>
-          <div><dt>Risk and sizing</dt><dd>Editable above</dd></div>
-          <div><dt>Market-data keys</dt><dd>Not required</dd></div>
-          <div><dt>Trading keys</dt><dd>Not accepted</dd></div>
-        </dl> : <p className="quant-inline-note">Every workspace in this application is research or paper only. Broker execution is disabled at the service level and cannot be enabled from the UI.</p>}
-      </div>
+    <Panel icon={<ShieldCheck size={17} />} title="Connections and safety" description="Connection details are informational; secrets cannot be entered in the browser." aside={<StatusBadge tone="good">Live orders disabled</StatusBadge>}>
+      <div className="quant-panel-body"><dl className="quant-facts">
+        <div><dt>Market data</dt><dd>{market === "CRYPTO" ? "OKX public feed" : "Dhan server connection"}</dd></div>
+        <div><dt>Market-data key</dt><dd>{market === "CRYPTO" ? "Not required" : "Server managed"}</dd></div>
+        <div><dt>Trading keys</dt><dd>Not accepted</dd></div>
+        <div><dt>Execution</dt><dd>Paper simulation only</dd></div>
+      </dl></div>
     </Panel>
   </main>;
 }

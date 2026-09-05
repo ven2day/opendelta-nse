@@ -546,11 +546,14 @@ class PaperBroker:
         if stored is not None:
             self.portfolio.pending_entries.setdefault(signal["symbol"], []).append(stored)
 
-    def close_lot_manually(self, lot_id: str, *, price: float, timestamp: datetime | None = None) -> dict[str, Any]:
+    def close_lot_manually(self, lot_id: str, *, timestamp: datetime | None = None) -> dict[str, Any]:
         with self._lock:
             lot = next((item for item in self.portfolio.all_open() if item["lotId"] == lot_id), None)
             if lot is None:
                 raise KeyError(f"Open paper lot {lot_id} was not found")
+            price = float(lot.get("lastPrice") or 0.0)
+            if price <= 0:
+                raise ValueError(f"A current market mark is unavailable for {lot['symbol']}")
             stamp = timestamp or self.clock()
             mae, mfe = Accounting.excursions(
                 float(lot["entryPrice"]), price, price, lot.get("maePct"), lot.get("mfePct")

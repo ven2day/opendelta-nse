@@ -461,6 +461,19 @@ class SizingAndCostTests(unittest.TestCase):
         self.assertAlmostEqual(broker.account["cashBalance"], expected_cash, places=4)
         self.assertEqual([trade["side"] for trade in broker.repositories.trades.rows], ["BUY", "SELL"])
 
+    def test_manual_close_uses_the_stored_market_mark_and_rejects_a_caller_price(self) -> None:
+        broker = make_broker()
+        lot = broker.on_signal(signal(price=100.0))
+        mark = float(broker.positions()[0]["lastPrice"])
+
+        closed = broker.close_lot_manually(lot["lotId"])
+
+        self.assertEqual(closed["status"], "CLOSED")
+        expected_fill = NseFeeModel().sell(mark, float(lot["quantity"]))
+        self.assertEqual(closed["exitPrice"], round(expected_fill.price, 4))
+        with self.assertRaises(TypeError):
+            broker.close_lot_manually("any-lot", price=999_999.0)  # type: ignore[call-arg]
+
 
 class OrderAndLotTests(unittest.TestCase):
     def test_each_strategy_uses_and_persists_its_own_execution_policy(self) -> None:
@@ -595,9 +608,7 @@ class OrderAndLotTests(unittest.TestCase):
         reborn = make_broker(broker.repositories)
         [recovered] = reborn.positions()
         self.assertAlmostEqual(recovered["costBasisPrice"], second["entryPrice"], places=4)
-        closed_after_restart = reborn.close_lot_manually(
-            recovered["lotId"], price=float(recovered["targetPrice"]), timestamp=exit_stamp + timedelta(minutes=5)
-        )
+        closed_after_restart = reborn.close_lot_manually(recovered["lotId"], timestamp=exit_stamp + timedelta(minutes=5))
         self.assertAlmostEqual(closed_after_restart["costBasisPrice"], second["entryPrice"], places=4)
         self.assertEqual(reborn.positions(), [])
 

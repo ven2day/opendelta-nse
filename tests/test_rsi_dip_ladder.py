@@ -69,6 +69,14 @@ class RsiDipLadderTests(unittest.TestCase):
         self.assertIn("4h", self.strategy.supported_timeframes)
         self.assertEqual(market_spec("NSE").minutes("4h"), 240)
 
+    def test_strategy_is_available_for_crypto_with_utc_candles(self) -> None:
+        frame = candles([100, 98, 96, 94, 96, 98, 97]).tz_convert("UTC")
+        context = MarketContext(market="CRYPTO", symbol="BTCUSDT", timeframe="5m", timezone="UTC")
+
+        decision = decision_frame(self.strategy, frame, context, self.config)
+
+        self.assertEqual((decision["Decision"] == "BUY").sum(), 1)
+
     def test_invalid_ladders_and_rsi_thresholds_are_rejected(self) -> None:
         for override in (
             {"rsi_low": 35, "rsi_recovery": 35},

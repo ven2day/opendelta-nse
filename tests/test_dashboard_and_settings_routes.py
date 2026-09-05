@@ -130,7 +130,8 @@ class SettingsRouteTests(unittest.TestCase):
             api["GET /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", market="NSE")
         self.assertEqual(missing.exception.status_code, 503)
         self.assertEqual(
-            len(api["GET /v2/strategies"](market="CRYPTO")["strategies"]), 1
+            [item["strategyId"] for item in api["GET /v2/strategies"](market="CRYPTO")["strategies"]],
+            ["ema_vwap_strong_buy", "rsi_dip_ladder_v1"],
         )  # catalogue never needs the database
 
     def test_strategy_mode_requires_an_active_config_and_reconciles_immediately(self) -> None:

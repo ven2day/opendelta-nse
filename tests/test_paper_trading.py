@@ -801,6 +801,24 @@ class OrderAndLotTests(unittest.TestCase):
 
 
 class AccountTests(unittest.TestCase):
+    def test_crypto_rsi_ladder_uses_fractional_execution_sizing(self) -> None:
+        crypto = make_broker(
+            market="CRYPTO",
+            policy=ExecutionPolicy(
+                sizing_mode="FIXED_CAPITAL",
+                capital_per_lot=1_000,
+                whole_units=False,
+                price_model="SIGNAL_CLOSE",
+            ),
+        )
+        crypto_signal = ladder_signal("BTCUSDT", 60_000.0, 0)
+        crypto_signal["market"] = "CRYPTO"
+
+        lot = crypto.on_signal(crypto_signal)
+
+        assert lot is not None
+        self.assertAlmostEqual(lot["quantity"], 1_000 / 60_000, places=6)
+
     def test_nse_and_crypto_balances_positions_and_settings_stay_separate(self) -> None:
         repositories = memory_repositories()
         nse = make_broker(repositories, market="NSE")

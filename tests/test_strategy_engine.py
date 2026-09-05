@@ -147,7 +147,7 @@ class RegistryAndConfigTests(unittest.TestCase):
     def test_strategy_is_discovered_through_the_registry_with_a_settings_schema(self) -> None:
         self.assertIn("ema_vwap_strong_buy", STRATEGIES)
         self.assertEqual([item.strategy_id for item in STRATEGIES.list("NSE")], ["ema_vwap_strong_buy", "rsi_dip_ladder_v1"])
-        self.assertEqual([item.strategy_id for item in STRATEGIES.list("CRYPTO")], ["ema_vwap_strong_buy"])
+        self.assertEqual([item.strategy_id for item in STRATEGIES.list("CRYPTO")], ["ema_vwap_strong_buy", "rsi_dip_ladder_v1"])
         described = next(item for item in STRATEGIES.describe() if item["strategyId"] == "ema_vwap_strong_buy")
         self.assertEqual(described["name"], "Strong Buy")
         self.assertEqual(described["defaults"]["ema_fast"], 9)

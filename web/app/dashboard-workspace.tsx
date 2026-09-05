@@ -59,7 +59,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
           {section.openPositions.length ? <div className="quant-table-scroll"><table className="quant-table">
             <thead><tr><th>Open position</th><th className="numeric">Qty</th><th className="numeric">Entry</th><th className="numeric">Last</th><th className="numeric">Unrealized</th><th>Status</th></tr></thead>
             <tbody>{section.openPositions.slice(0, 5).map((lot) => <tr key={lot.lotId}><td><strong>{lot.symbol}</strong><small>{formatDateTime(lot.entryTimestamp, market)}</small></td><td className="numeric">{formatNumber(lot.quantity, 4)}</td><td className="numeric">{formatNumber(lot.entryPrice)}</td><td className="numeric">{formatNumber(lot.lastPrice)}</td><td className="numeric"><PnlValue value={lot.unrealizedPnl} market={market} currency={section.account.currency} /></td><td><StatusBadge tone={tone(lot.status)}>{readable(lot.status)}</StatusBadge></td></tr>)}</tbody>
-          </table></div> : <div className="quant-compact-empty"><EmptyState title="No open paper positions" description={worker ? "Qualified signals will appear here after simulated execution." : "Start a strategy in Paper mode from Settings to create simulated positions."} /></div>}
+          </table></div> : <div className="quant-compact-empty"><EmptyState title="No open paper positions" description={worker ? "Qualified signals will appear here after simulated execution." : "Start a strategy in Paper mode from Strategies to create simulated positions."} /></div>}
         </div>}</SectionBody>
       </Panel>
 

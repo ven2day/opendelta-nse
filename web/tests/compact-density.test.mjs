@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const stylesUrl = new URL("../app/platform/trading-terminal.css", import.meta.url);
+const dashboardUrl = new URL("../app/dashboard-workspace.tsx", import.meta.url);
 
 test("shared workspaces use the compact production density contract", async () => {
   const styles = await readFile(stylesUrl, "utf8");
@@ -19,4 +20,17 @@ test("market and section tabs share one aligned control height", async () => {
   assert.match(styles, /\.platform-market-switch a\s*\{[^}]*height:\s*34px;[^}]*align-items:\s*center;/s);
   assert.match(styles, /\.quant-market-tabs,[\s\S]*?\.quant-section-tabs\s*\{[^}]*min-height:\s*34px;[^}]*align-items:\s*stretch;/s);
   assert.match(styles, /\.quant-section-tabs button\s*\{[^}]*min-height:\s*28px;[^}]*align-items:\s*center;[^}]*line-height:\s*1;/s);
+});
+
+test("dashboard collapses empty portfolio and backtest space", async () => {
+  const [styles, dashboard] = await Promise.all([
+    readFile(stylesUrl, "utf8"),
+    readFile(dashboardUrl, "utf8"),
+  ]);
+  assert.match(styles, /\.quant-dashboard-workspace \.quant-panel-heading\s*\{[^}]*min-height:\s*42px;[^}]*padding:\s*7px 10px;/s);
+  assert.match(styles, /\.quant-dashboard-workspace \.quant-portfolio-hero\s*\{[^}]*gap:\s*8px 20px;[^}]*padding:\s*10px 14px;/s);
+  assert.match(styles, /\.quant-dashboard-workspace \.quant-compact-empty \.quant-state\.empty\s*\{[^}]*min-height:\s*0;[^}]*padding:\s*7px 0 0;/s);
+  assert.match(styles, /\.quant-dashboard-workspace > \.quant-panel > \.quant-state\.empty\s*\{[^}]*min-height:\s*58px;/s);
+  assert.match(dashboard, /Paper mode from Strategies/);
+  assert.doesNotMatch(dashboard, /Paper mode from Settings/);
 });

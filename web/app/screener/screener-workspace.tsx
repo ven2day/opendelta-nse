@@ -8,7 +8,7 @@ import { compactValues, validateConfigValues, type ConfigSchema, type ConfigValu
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversePresetsResponse, UniversesResponse, WatchlistProfileVersion, WatchlistProfilesResponse } from "../platform/v2-types";
-import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, SymbolTags, WorkspaceHeader } from "../platform/workspace-ui";
+import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
 const ACTIVE_RUN_STATUSES = new Set(["QUEUED", "RUNNING", "PENDING"]);
@@ -392,15 +392,14 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
 
     <Panel icon={<Layers size={17} />} title="Saved watchlists" description="The active watchlist supplies symbols to backtests and selected live strategies." aside={activeUniverse && <StatusBadge tone="good">Active: {activeUniverse.name}</StatusBadge>}>
       {universes.loading ? <LoadingState label="Loading watchlists" /> : universes.error ? <RequestErrorState error={universes.error} retry={universes.reload} /> : !universes.data?.universes.length ? <EmptyState title="No saved watchlists" description="Save candidate results above to create the first watchlist." /> : <div className="quant-table-scroll"><table className="quant-table">
-        <thead><tr><th>Name</th><th className="numeric">Symbols</th><th>Includes / excludes</th><th>Created</th><th>Status</th><th>Symbols</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th className="numeric">Symbols</th><th>Includes / excludes</th><th>Created</th><th>Status</th><th className="numeric">Action</th></tr></thead>
         <tbody>{universes.data.universes.map((universe) => <tr key={universe.universeId} className={universe.active ? "active" : ""}>
           <td><strong>{universe.name}</strong><small className="mono">{shortId(universe.universeId)}</small></td>
           <td className="numeric">{formatInteger(universe.symbols.length)}</td>
           <td>{formatInteger(universe.manualIncludes?.length ?? 0)} / {formatInteger(universe.manualExcludes?.length ?? 0)}</td>
           <td>{formatDateTime(universe.createdAt, market)}</td>
           <td><StatusBadge tone={universe.active ? "good" : "neutral"}>{universe.active ? "Active" : "Saved"}</StatusBadge></td>
-          <td><SymbolTags symbols={universe.symbols} limit={12} /></td>
-          <td>{!universe.active && <button type="button" disabled={activatingId === universe.universeId} onClick={() => void activate(universe)}>{activatingId === universe.universeId ? "Activating…" : "Activate"}</button>}</td>
+          <td className="numeric">{!universe.active && <button type="button" disabled={activatingId === universe.universeId} onClick={() => void activate(universe)}>{activatingId === universe.universeId ? "Activating…" : "Activate"}</button>}</td>
         </tr>)}</tbody>
       </table></div>}
     </Panel>

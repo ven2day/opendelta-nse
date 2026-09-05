@@ -1,9 +1,9 @@
 "use client";
 
-import { Braces, Copy, Save, Settings2, ShieldCheck } from "lucide-react";
+import { Braces, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
-import type { PlatformMarket } from "../platform/platform-client";
+import { platformGet, platformPost, type PlatformMarket } from "../platform/platform-client";
 import { compactValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
@@ -13,6 +13,8 @@ import styles from "./settings-workspace.module.css";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
 type SettingsDocument = { strategy: ConfigValues; paperExecution: ConfigValues };
+type InstrumentListResponse = { count: number };
+type InstrumentAddResponse = { symbol?: string; instrument?: { providerSymbol: string } };
 
 function isObject(value: unknown): value is ConfigValues {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -47,6 +49,9 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const [timeframeEdits, setTimeframeEdits] = useState<Record<string, string>>({});
   const [universeEdits, setUniverseEdits] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice>(null);
+  const [instrumentSymbol, setInstrumentSymbol] = useState("");
+  const [addingInstrument, setAddingInstrument] = useState(false);
+  const [instrumentNotice, setInstrumentNotice] = useState<Notice>(null);
 
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
@@ -54,6 +59,8 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const deployments = useV2Resource(loadDeployments);
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
   const universes = useV2Resource(loadUniverses);
+  const loadInstruments = useCallback(() => platformGet<InstrumentListResponse>("instruments", { market, limit: "1" }), [market]);
+  const instruments = useV2Resource(loadInstruments);
   const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((item) => !item.supportedMarkets?.length || item.supportedMarkets.includes(market)), [strategies.data, market]);
   const selectedStrategy = marketStrategies.find((item) => item.strategyId === strategyChoice) ?? marketStrategies[0] ?? null;
   const strategyId = selectedStrategy?.strategyId ?? null;
@@ -125,6 +132,28 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
     }
   };
 
+  const addInstrument = async (event: FormEvent) => {
+    event.preventDefault();
+    const symbol = instrumentSymbol.trim().toUpperCase();
+    if (!symbol) {
+      setInstrumentNotice({ kind: "error", text: `Enter a ${marketLabel(market)} symbol.` });
+      return;
+    }
+    setAddingInstrument(true);
+    setInstrumentNotice(null);
+    try {
+      const added = await platformPost<InstrumentAddResponse>("add-instrument", { market, symbol });
+      const canonical = added.symbol ?? added.instrument?.providerSymbol ?? symbol;
+      setInstrumentSymbol("");
+      setInstrumentNotice({ kind: "success", text: `${canonical} is now available to watchlists, backtests and strategies.` });
+      instruments.refresh();
+    } catch (reason) {
+      setInstrumentNotice({ kind: "error", text: errorMessage(reason, "The instrument could not be added") });
+    } finally {
+      setAddingInstrument(false);
+    }
+  };
+
   return <main className="quant-workspace">
     <WorkspaceHeader eyebrow={`${marketLabel(market)} strategy control`} title="Strategies" actions={<div className="quant-header-actions"><StatusBadge tone="good">Paper only</StatusBadge><StatusBadge>Server-managed keys</StatusBadge></div>} />
 
@@ -174,6 +203,18 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
         </div>
       </form>}
       {config.data && config.data.all.length > 0 && <details className="quant-secondary-disclosure"><summary><span>Configuration history</span><small>{config.data.all.length} saved version{config.data.all.length === 1 ? "" : "s"}</small></summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Name</th><th>Config id</th><th>Status</th><th>Created</th></tr></thead><tbody>{config.data.all.map((item) => <tr key={item.configId} className={item.active ? "active" : ""}><td><strong>{item.name}</strong></td><td className="mono">{shortId(item.configId)}</td><td><StatusBadge tone={item.active ? "good" : "neutral"}>{item.active ? "Active" : "Saved"}</StatusBadge></td><td>{formatDateTime(item.createdAt, market)}</td></tr>)}</tbody></table></div></details>}
+      <details className="quant-secondary-disclosure">
+        <summary><span><Plus size={15} />Instrument setup</span><small>{instruments.loading ? "Loading…" : instruments.error ? "Unavailable" : `${instruments.data?.count ?? 0} configured for ${marketLabel(market)}`}</small></summary>
+        <div className="quant-panel-body">
+          <form className={`quant-toolbar ${styles.instrumentControl}`} onSubmit={(event) => void addInstrument(event)}>
+            <div className={styles.instrumentCopy}><strong>Add a {marketLabel(market)} symbol</strong><small>{market === "CRYPTO" ? "Validated against the OKX public instrument catalogue." : "Validated against Dhan's active NSE equity instrument master."}</small></div>
+            <label><span>Symbol</span><input value={instrumentSymbol} disabled={addingInstrument} placeholder={market === "CRYPTO" ? "BTC-USDT" : "RELIANCE"} onChange={(event) => { setInstrumentSymbol(event.target.value); setInstrumentNotice(null); }} /></label>
+            <button type="submit" className="primary" disabled={addingInstrument || !instrumentSymbol.trim()}><Plus size={15} />{addingInstrument ? "Adding…" : "Add symbol"}</button>
+          </form>
+          <small className={styles.instrumentNote}>Adding an instrument makes it available to the market. Choose it in a watchlist before assigning that watchlist to a strategy.</small>
+          {instrumentNotice && <Message kind={instrumentNotice.kind}>{instrumentNotice.text}</Message>}
+        </div>
+      </details>
     </Panel>
 
     <Panel icon={<ShieldCheck size={17} />} title="Connections and safety" description="Connection details are informational; secrets cannot be entered in the browser." aside={<StatusBadge tone="good">Live orders disabled</StatusBadge>}>

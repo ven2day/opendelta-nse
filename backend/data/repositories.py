@@ -1128,6 +1128,20 @@ class WatchlistProfileRepository:
     def get_version(self, profile_version_id: uuid.UUID | str) -> dict[str, Any]:
         return self._version(profile_version_id)
 
+    def get(self, profile_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            "SELECT profile_id, market, name, created_at FROM watchlist_profiles WHERE profile_id = %s",
+            (uuid.UUID(str(profile_id)),),
+        )
+        if row is None:
+            raise KeyError(f"Watchlist profile {profile_id} was not found")
+        return {
+            "profileId": str(row["profile_id"]),
+            "market": row["market"],
+            "name": row["name"],
+            "createdAt": _iso(row["created_at"]),
+        }
+
     def create(
         self,
         *,

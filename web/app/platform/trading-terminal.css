@@ -757,8 +757,8 @@
 .quant-backtest-custom-symbols { display: grid; gap: 5px; margin-top: 10px; }
 .quant-backtest-custom-symbols input { min-height: 36px; border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 9px; color: var(--od-text); background: var(--od-surface-raised); font-size: 14px; }
 .quant-backtest-custom-symbols small { color: var(--od-faint); font-size: 12px; }
-.quant-screener-run-grid,
-.quant-universe-save-grid { grid-template-columns: minmax(220px, 1fr); }
+.quant-screener-run-grid { grid-template-columns: minmax(220px, 1fr); }
+.quant-universe-save-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
 .quant-settings-identity { grid-template-columns: repeat(2, minmax(220px, 1fr)); align-items: start; }
 .quant-settings-identity > label { grid-template-rows: auto 40px auto; align-content: start; }
 .quant-settings-identity input,

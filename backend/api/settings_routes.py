@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
-from backend.data.repositories import StrategyConfigRepository, StrategyDeploymentRepository
+from backend.data.repositories import SavedUniverseRepository, StrategyConfigRepository, StrategyDeploymentRepository
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.strategies.registry import StrategyRegistry
 
@@ -99,11 +99,13 @@ class StrategyDeploymentRequest(BaseModel):
     market: str = Field(pattern="^(NSE|CRYPTO)$")
     timeframe: str = Field(min_length=1, max_length=12)
     mode: str = Field(pattern="^(OFF|SIGNALS|PAPER)$")
+    universeId: str | None = None
 
 
 def create_settings_router(
     registry: StrategyRegistry, *, configs: Callable[[], StrategyConfigRepository] | None = None,
     deployments: Callable[[], StrategyDeploymentRepository] | None = None,
+    universes: Callable[[], SavedUniverseRepository] | None = None,
     deployment_status: Callable[[str, str], dict[str, Any]] | None = None,
     deployment_changed: Callable[[str], None] | None = None,
 ) -> APIRouter:
@@ -136,6 +138,18 @@ def create_settings_router(
             return deployments()
         except DatabaseUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
+
+    def _universes() -> SavedUniverseRepository:
+        if universes is None:
+            raise HTTPException(status_code=503, detail="Watchlist storage is not configured")
+        try:
+            return universes()
+        except DatabaseUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    def _default_deployment(strategy: Any, market: str) -> dict[str, Any]:
+        timeframes = list(strategy.supported_timeframes)
+        return {"deploymentId": None, "market": market, "strategyId": strategy.strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
     @router.get("/strategies")
     def list_strategies(market: str | None = Query(default=None)) -> dict[str, Any]:
@@ -187,6 +201,18 @@ def create_settings_router(
             risk_settings=risk,
             activate=request.activate,
         )
+        if request.activate and deployments is not None:
+            current = _deployments().get(request.market, strategy.strategy_id)
+            if current is not None:
+                _deployments().save(
+                    market=request.market,
+                    strategy_id=strategy.strategy_id,
+                    strategy_version=strategy.version,
+                    config_id=saved["configId"],
+                    universe_id=current.get("universeId"),
+                    timeframe=current["timeframe"],
+                    mode=current["mode"],
+                )
         if request.activate and deployment_changed is not None:
             deployment_changed(request.market)
         return saved
@@ -202,8 +228,18 @@ def create_settings_router(
         saved = _deployments().get(key, strategy.strategy_id)
         if saved is not None:
             return saved
-        timeframes = list(strategy.supported_timeframes)
-        return {"deploymentId": None, "market": key, "strategyId": strategy.strategy_id, "strategyVersion": strategy.version, "configId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
+        return _default_deployment(strategy, key)
+
+    @router.get("/strategy-deployments")
+    def list_deployments(market: str = Query(...)) -> dict[str, Any]:
+        key = _market(market)
+        rows = []
+        for strategy in registry.list(key):
+            if deployment_status is not None:
+                rows.append(deployment_status(key, strategy.strategy_id))
+            else:
+                rows.append(_deployments().get(key, strategy.strategy_id) or _default_deployment(strategy, key))
+        return {"deployments": rows}
 
     @router.post("/strategies/{strategy_id}/deployment")
     def save_deployment(strategy_id: str, request: StrategyDeploymentRequest) -> dict[str, Any]:
@@ -217,7 +253,14 @@ def create_settings_router(
         active = _repository().active(request.market, strategy.strategy_id)
         if request.mode != "OFF" and active is None:
             raise HTTPException(status_code=409, detail="Save and activate a configuration before starting this strategy")
-        saved = _deployments().save(market=request.market, strategy_id=strategy.strategy_id, strategy_version=strategy.version, config_id=(active or {}).get("configId"), timeframe=request.timeframe, mode=request.mode)
+        if request.universeId:
+            try:
+                universe = _universes().get(request.universeId)
+            except (KeyError, ValueError) as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+            if universe["market"] != request.market:
+                raise HTTPException(status_code=422, detail="The selected watchlist belongs to a different market")
+        saved = _deployments().save(market=request.market, strategy_id=strategy.strategy_id, strategy_version=strategy.version, config_id=(active or {}).get("configId"), universe_id=request.universeId, timeframe=request.timeframe, mode=request.mode)
         if deployment_changed is not None:
             deployment_changed(request.market)
         return saved

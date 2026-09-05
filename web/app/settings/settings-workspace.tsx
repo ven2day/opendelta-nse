@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode } from "../platform/v2-types";
+import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 import styles from "./settings-workspace.module.css";
 
@@ -45,10 +45,15 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const [saving, setSaving] = useState(false);
   const [changingMode, setChangingMode] = useState(false);
   const [timeframeEdits, setTimeframeEdits] = useState<Record<string, string>>({});
+  const [universeEdits, setUniverseEdits] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice>(null);
 
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
+  const loadDeployments = useCallback(() => v2Get<StrategyDeploymentsResponse>("strategy-deployments", { market }), [market]);
+  const deployments = useV2Resource(loadDeployments);
+  const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
+  const universes = useV2Resource(loadUniverses);
   const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((item) => !item.supportedMarkets?.length || item.supportedMarkets.includes(market)), [strategies.data, market]);
   const selectedStrategy = marketStrategies.find((item) => item.strategyId === strategyChoice) ?? marketStrategies[0] ?? null;
   const strategyId = selectedStrategy?.strategyId ?? null;
@@ -59,6 +64,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const loadDeployment = useCallback(() => (strategyId ? v2Get<StrategyDeployment>(`strategies/${strategyId}/deployment`, { market }) : Promise.resolve(null)), [strategyId, market]);
   const deployment = useV2Resource(loadDeployment);
   const timeframe = timeframeEdits[key] ?? deployment.data?.timeframe ?? selectedStrategy?.supportedTimeframes[0] ?? "5m";
+  const universeId = universeEdits[key] ?? deployment.data?.universeId ?? "";
   const riskSchema = useMemo(() => strategies.data?.riskSchema ?? schemaFromValues({ ...(strategies.data?.riskDefaults ?? {}), ...(config.data?.effectiveRiskSettings ?? {}) }), [strategies.data, config.data]);
   const effectiveDocument = useMemo<SettingsDocument>(() => ({
     strategy: selectedStrategy ? compactValues(schemaDefaults(selectedStrategy.configSchema, config.data?.effectiveConfiguration, selectedStrategy.defaults)) : {},
@@ -73,9 +79,10 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
     setChangingMode(true);
     setNotice(null);
     try {
-      await v2Post<StrategyDeployment>(`strategies/${selectedStrategy.strategyId}/deployment`, { market, timeframe, mode }, { market });
+      await v2Post<StrategyDeployment>(`strategies/${selectedStrategy.strategyId}/deployment`, { market, timeframe, mode, universeId: universeId || null }, { market });
       setNotice({ kind: "success", text: mode === "OFF" ? "New signals and paper entries stopped." : mode === "SIGNALS" ? "Signals are now running without paper entries." : "Signals and paper trading are now running for this strategy." });
       deployment.refresh();
+      deployments.refresh();
     } catch (reason) {
       setNotice({ kind: "error", text: errorMessage(reason, "The strategy mode could not be changed") });
     } finally {
@@ -119,13 +126,25 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   };
 
   return <main className="quant-workspace">
-    <WorkspaceHeader eyebrow={`${marketLabel(market)} configuration`} title="Settings" actions={<div className="quant-header-actions"><StatusBadge tone="good">Paper only</StatusBadge><StatusBadge>Server-managed keys</StatusBadge></div>} />
+    <WorkspaceHeader eyebrow={`${marketLabel(market)} strategy control`} title="Strategies" actions={<div className="quant-header-actions"><StatusBadge tone="good">Paper only</StatusBadge><StatusBadge>Server-managed keys</StatusBadge></div>} />
 
-    <Panel icon={<Settings2 size={17} />} title="Strategy settings" description="One versioned JSON document controls strategy behaviour and paper execution for this market." aside={active ? <StatusBadge tone="good">Active: {active.name}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
+    <Panel icon={<Settings2 size={17} />} title="Strategy control" description="Select a strategy, assign its timeframe and watchlist, then run signals or paper trading." aside={active ? <StatusBadge tone="good">Active: {active.name}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
       {strategies.loading ? <LoadingState label="Loading strategies" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !selectedStrategy ? <EmptyState title="No strategies registered" description={`No strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={save} noValidate>
         <div className="quant-panel-body">
+          <div className={styles.strategyTable} role="table" aria-label="Strategies">
+            <div className={styles.strategyHeader} role="row"><span>Strategy</span><span>Timeframe</span><span>Watchlist</span><span>Mode</span><span>Status</span></div>
+            {marketStrategies.map((item) => {
+              const row = deployments.data?.deployments.find((candidate) => candidate.strategyId === item.strategyId);
+              const watchlist = universes.data?.universes.find((candidate) => candidate.universeId === row?.universeId);
+              const selected = item.strategyId === selectedStrategy.strategyId;
+              return <div key={item.strategyId} role="row" className={`${styles.strategyRow} ${selected ? styles.selectedRow : ""}`}>
+                <button type="button" className={styles.strategySelect} aria-current={selected ? "true" : undefined} onClick={() => { setStrategyChoice(item.strategyId); setNotice(null); }}><strong>{item.name}</strong><small>v{item.version}</small></button>
+                <span>{row?.timeframe ?? "—"}</span><span>{watchlist?.name ?? "Active market"}</span><span><StatusBadge tone={row?.mode === "PAPER" ? "good" : row?.mode === "SIGNALS" ? "neutral" : "warn"}>{row?.mode ?? "OFF"}</StatusBadge></span><span>{row?.configId ? "Configured" : row?.mode === "OFF" ? "Stopped" : "Needs config"}</span>
+              </div>;
+            })}
+          </div>
           <div className="quant-form-grid quant-settings-identity">
-            <label><span>Strategy</span><select value={selectedStrategy.strategyId} disabled={saving} onChange={(event) => { setStrategyChoice(event.target.value); setNotice(null); }}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select><small>Timeframes {selectedStrategy.supportedTimeframes.join(", ") || "—"}</small></label>
+            <label><span>Selected strategy</span><input type="text" readOnly value={`${selectedStrategy.name} · v${selectedStrategy.version}`} /><small>Timeframes {selectedStrategy.supportedTimeframes.join(", ") || "—"}</small></label>
             <label><span>Configuration name</span><input type="text" value={name} disabled={saving} onChange={(event) => setNameEdits((current) => ({ ...current, [key]: event.target.value }))} /><small>Saved with each configuration version</small></label>
           </div>
           {config.loading ? <LoadingState label="Loading active configuration" /> : config.error ? <RequestErrorState error={config.error} retry={config.reload} /> : <>
@@ -138,6 +157,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
             {deployment.loading ? <LoadingState label="Loading strategy mode" /> : deployment.error ? <RequestErrorState error={deployment.error} retry={deployment.reload} /> : <section className={styles.deploymentControl} aria-label="Strategy deployment">
               <div className={styles.deploymentCopy}><strong>Automation</strong><small>Choose whether this strategy is stopped, creates signals only, or also opens simulated paper positions.</small></div>
               <label><span>Timeframe</span><select value={timeframe} disabled={changingMode} onChange={(event) => setTimeframeEdits((current) => ({ ...current, [key]: event.target.value }))}>{selectedStrategy.supportedTimeframes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+              <label><span>Watchlist</span><select value={universeId} disabled={changingMode || universes.loading} onChange={(event) => setUniverseEdits((current) => ({ ...current, [key]: event.target.value }))}><option value="">Active market watchlist</option>{universes.data?.universes.map((item) => <option key={item.universeId} value={item.universeId}>{item.name} · {item.symbols.length} symbols</option>)}</select></label>
               <div className={styles.modeSwitch} role="group" aria-label="Strategy mode">{(["OFF", "SIGNALS", "PAPER"] as StrategyDeploymentMode[]).map((mode) => <button key={mode} type="button" className={deployment.data?.mode === mode ? styles.active : ""} aria-pressed={deployment.data?.mode === mode} disabled={changingMode || (mode !== "OFF" && !active)} onClick={() => void changeMode(mode)}>{mode === "OFF" ? "Off" : mode === "SIGNALS" ? "Signals" : "Paper"}</button>)}</div>
               <small className={styles.deploymentState}>{!active ? "Save a configuration before starting signals." : deployment.data?.mode === "PAPER" ? "Signals create simulated orders. Real broker orders remain disabled." : deployment.data?.mode === "SIGNALS" ? "Signals are stored, but no new paper entries are opened." : "No new signals or paper entries. Existing paper positions continue to be monitored."}</small>
             </section>}

@@ -58,7 +58,7 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
       await expect(page.locator(".platform-topnav a")).toHaveCount(6);
-      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Settings"]);
+      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Strategies"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
@@ -212,7 +212,7 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
   expect(compactNavigation.width).toBeLessThanOrEqual(270);
   expect(compactNavigation.flexGrow).toBe("0");
   expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40]);
-  const settingsLink = page.getByRole("link", { name: "Settings", exact: true });
+  const settingsLink = page.getByRole("link", { name: "Strategies", exact: true });
   const collapsedWidth = await settingsLink.evaluate((link) => link.getBoundingClientRect().width);
   await settingsLink.hover();
   await expect(settingsLink.locator(".platform-nav-label")).toBeVisible();

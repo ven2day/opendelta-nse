@@ -38,7 +38,7 @@ export const navigation: NavigationItem[] = [
   { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") },
   { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
   { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },
-  { href: "/settings", label: "Settings", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
+  { href: "/settings", label: "Strategies", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
 ];
 
 const OVERVIEW_REFRESH_INTERVAL_MS = 15_000;

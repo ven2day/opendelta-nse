@@ -43,13 +43,14 @@ class ExecutionSettings:
     target_pct: float | None = None  # None -> use the strategy's own target
     stop_loss_pct: float | None = None
     maximum_holding_bars: int | None = None
-    initial_quantity: int = 100
+    initial_quantity: float = 100
     allow_additional_buys: bool = True
     additional_quantity_pct: float = 50.0
     additional_sizing_mode: str = "REDUCE_EVERY_NEW_LOT"
-    minimum_quantity: int = 1
+    minimum_quantity: float = 1
     maximum_entries_per_cycle: int = 10
     batch_size: int = 500
+    whole_units: bool = True
 
     def validate(self) -> "ExecutionSettings":
         if self.target_pct is not None and self.target_pct <= 0:
@@ -58,8 +59,13 @@ class ExecutionSettings:
             raise ValueError("stop_loss_pct must be between 0 and 100")
         if self.maximum_holding_bars is not None and self.maximum_holding_bars < 1:
             raise ValueError("maximum_holding_bars must be at least 1")
-        if self.initial_quantity < 1 or self.minimum_quantity < 1:
+        if self.initial_quantity <= 0 or self.minimum_quantity <= 0:
             raise ValueError("Lot quantities must be positive")
+        if self.whole_units and (
+            not float(self.initial_quantity).is_integer()
+            or not float(self.minimum_quantity).is_integer()
+        ):
+            raise ValueError("NSE lot quantities must be whole numbers")
         if not 0 < self.additional_quantity_pct <= 100:
             raise ValueError("additional_quantity_pct must be in (0, 100]")
         if self.additional_sizing_mode not in {"REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"}:
@@ -70,7 +76,7 @@ class ExecutionSettings:
             raise ValueError("batch_size must be positive")
         return self
 
-    def lot_quantity(self, entry_number: int) -> int:
+    def lot_quantity(self, entry_number: int) -> float | int:
         ratio = self.additional_quantity_pct / 100.0
         if entry_number == 0:
             raw: float = self.initial_quantity
@@ -78,7 +84,9 @@ class ExecutionSettings:
             raw = self.initial_quantity * math.pow(ratio, entry_number)
         else:
             raw = self.initial_quantity * ratio
-        return max(self.minimum_quantity, math.floor(raw))
+        if self.whole_units:
+            return max(int(self.minimum_quantity), math.floor(raw))
+        return max(self.minimum_quantity, round(raw, 8))
 
     def public(self) -> dict[str, Any]:
         return {
@@ -92,19 +100,27 @@ class ExecutionSettings:
             "minimumQuantity": self.minimum_quantity,
             "maximumEntriesPerCycle": self.maximum_entries_per_cycle,
             "batchSize": self.batch_size,
+            "wholeUnits": self.whole_units,
         }
 
     @classmethod
-    def from_mapping(cls, values: Mapping[str, Any] | None) -> "ExecutionSettings":
+    def from_mapping(
+        cls,
+        values: Mapping[str, Any] | None,
+        *,
+        whole_units: bool = True,
+    ) -> "ExecutionSettings":
         aliases = {
             "targetPct": "target_pct", "stopLossPct": "stop_loss_pct", "maximumHoldingBars": "maximum_holding_bars",
             "initialQuantity": "initial_quantity", "allowAdditionalBuys": "allow_additional_buys",
             "additionalQuantityPct": "additional_quantity_pct", "additionalSizingMode": "additional_sizing_mode",
             "minimumQuantity": "minimum_quantity", "maximumEntriesPerCycle": "maximum_entries_per_cycle", "batchSize": "batch_size",
         }
-        kwargs: dict[str, Any] = {}
+        kwargs: dict[str, Any] = {"whole_units": whole_units}
         for key, value in (values or {}).items():
             name = aliases.get(key, key)
+            if name == "whole_units":
+                raise ValueError("whole_units is determined by the selected market")
             if name not in cls.__dataclass_fields__:
                 raise ValueError(f"Unknown execution setting {key!r}")
             kwargs[name] = value
@@ -142,7 +158,7 @@ class _Lot:
     entry_bar: int
     entry_timestamp: datetime
     entry_price: float
-    quantity: int
+    quantity: float
     target_price: float
     target_pct: float
     stop_price: float | None

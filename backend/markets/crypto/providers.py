@@ -105,18 +105,27 @@ class OkxPublicProvider:
         *,
         base_url: str = "https://www.okx.com",
         transport: JsonTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.transport = transport or PublicJsonClient().get
+        self.sleep = sleep
 
     def _request(self, path: str, parameters: Mapping[str, Any]) -> list[Any]:
-        payload = self.transport(_query_url(self.base_url, path, parameters))
-        if not isinstance(payload, dict) or str(payload.get("code")) != "0":
-            raise MarketProviderError("OKX returned an invalid public-market response")
-        data = payload.get("data")
-        if not isinstance(data, list):
-            raise MarketProviderError("OKX public-market response has no data array")
-        return data
+        for attempt in range(3):
+            payload = self.transport(_query_url(self.base_url, path, parameters))
+            if isinstance(payload, dict) and str(payload.get("code")) == "0":
+                data = payload.get("data")
+                if not isinstance(data, list):
+                    raise MarketProviderError("OKX public-market response has no data array")
+                return data
+            code = str(payload.get("code")) if isinstance(payload, dict) else "unknown"
+            message = str(payload.get("msg") or "invalid public-market response") if isinstance(payload, dict) else "invalid public-market response"
+            if code in {"50011", "50061"} and attempt < 2:
+                self.sleep(0.5 * (attempt + 1))
+                continue
+            raise MarketProviderError(f"OKX request failed ({code}): {message}")
+        raise MarketProviderError("OKX request failed after retries")
 
     @staticmethod
     def _instrument(row: Mapping[str, Any]) -> MarketInstrument:
@@ -210,6 +219,9 @@ class OkxPublicProvider:
             cursor = next_cursor
             if len(rows) < 300:
                 break
+            # A 20-day 5m screen needs about 20 pages per symbol. Pace those
+            # pages so an ordinary screener run stays within OKX's IP limit.
+            self.sleep(0.11)
         return [item for item in _unique_candles(result) if item.complete]
 
 

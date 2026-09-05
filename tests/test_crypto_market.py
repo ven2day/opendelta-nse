@@ -121,6 +121,21 @@ def test_okx_instrument_catalog_and_completed_candle_parsing() -> None:
     assert candles[0].complete is True
 
 
+def test_okx_retries_a_rate_limited_public_request() -> None:
+    responses = [
+        {"code": "50011", "msg": "Requests too frequent"},
+        {"code": "0", "data": []},
+    ]
+    delays: list[float] = []
+    provider = OkxPublicProvider(
+        transport=lambda _url: responses.pop(0),
+        sleep=delays.append,
+    )
+
+    assert provider._request("/api/v5/market/history-candles", {}) == []
+    assert delays == [0.5]
+
+
 def test_valr_catalog_and_bucket_contract() -> None:
     opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=10)
     urls: list[str] = []

@@ -25,6 +25,7 @@ export type ScreenerRun = {
   completedAt?: string | null;
 };
 export type ScreenerMetrics = {
+  error?: string | null;
   lastPrice?: number | null;
   averageTradedValue?: number | null;
   averageVolume?: number | null;

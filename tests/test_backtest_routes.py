@@ -122,6 +122,21 @@ class BacktestRouteTests(unittest.TestCase):
         )
         self.assertEqual(record["executionSettings"]["executionTimeframe"], "5m")
 
+    def test_crypto_run_accepts_fractional_lot_quantities(self) -> None:
+        record = self._create(
+            market="CRYPTO",
+            strategyId="rsi_dip_ladder_v1",
+            symbols=["BTCUSDT"],
+            configuration={},
+            execution={"initialQuantity": 0.01, "minimumQuantity": 1e-8},
+        )
+
+        self.assertFalse(record["executionSettings"]["wholeUnits"])
+        submitted = self.runner.submitted[0]
+        self.assertFalse(submitted.execution.whole_units)
+        self.assertEqual(submitted.execution.minimum_quantity, 1e-8)
+        self.assertEqual(submitted.execution.lot_quantity(0), 0.01)
+
     def test_create_resolves_built_in_universe_to_an_immutable_symbol_snapshot(self) -> None:
         record = self._create(symbols=[], universePresetId="nifty_top_20")
         self.assertEqual(len(record["symbols"]), 20)

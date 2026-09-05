@@ -95,7 +95,10 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         try:
             snapshot = strategy.resolve(request.configuration) if hasattr(strategy, "resolve") else dict(request.configuration)
             strategy.validate_config(snapshot)
-            execution = ExecutionSettings.from_mapping(request.execution)
+            execution = ExecutionSettings.from_mapping(
+                request.execution,
+                whole_units=request.market == "NSE",
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         runs = _guard(services.runs)

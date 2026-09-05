@@ -18,6 +18,7 @@ export type ScreenerRun = {
   market: PlatformMarket;
   status: string;
   filters?: Record<string, unknown> | null;
+  profileVersionId?: string | null;
   symbolsTotal?: number | null;
   symbolsPassed?: number | null;
   error?: string | null;
@@ -36,6 +37,26 @@ export type ScreenerMetrics = {
 };
 export type ScreenerResult = { symbol: string; passed: boolean; rank?: number | null; score?: number | null; rejectionReason?: string | null; metrics?: ScreenerMetrics | null };
 export type ScreenerResultsResponse = { run: ScreenerRun; results: ScreenerResult[] };
+export type WatchlistProfileVersion = {
+  profileVersionId: string;
+  profileId: string;
+  market: PlatformMarket;
+  name: string;
+  version: number;
+  filters: Record<string, unknown>;
+  sourceKind: "MARKET" | "PRESET" | "CUSTOM";
+  presetId?: string | null;
+  symbols: string[];
+  createdAt?: string | null;
+};
+export type WatchlistProfile = {
+  profileId: string;
+  market: PlatformMarket;
+  name: string;
+  versions: WatchlistProfileVersion[];
+};
+export type WatchlistProfilesResponse = { profiles: WatchlistProfile[] };
+
 export type Universe = {
   universeId: string;
   market: PlatformMarket;

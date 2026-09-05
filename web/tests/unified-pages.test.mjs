@@ -140,6 +140,7 @@ test("the backtest run ticket uses defaults with one collapsed JSON override", a
   const source = await readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className="quant-backtest-config">/);
   assert.doesNotMatch(source, /<details className="quant-backtest-config" open/);
+  assert.match(source, />Copy JSON</);
   assert.match(source, /aria-label="Backtest configuration JSON"/);
   assert.match(source, /hasConfigurationOverride \? "Custom JSON" : "Defaults"/);
   assert.match(source, /validateConfigValues\(configuration\.strategy, strategySchema/);
@@ -151,6 +152,8 @@ test("the backtest run ticket uses defaults with one collapsed JSON override", a
   assert.match(source, /aria-label="Filter trades by status"/);
   assert.match(source, /sort: tradeSort, direction: tradeDirection/);
   assert.match(source, /<SortableHeading label="P&amp;L"/);
+  assert.match(source, /quant-backtest-summary/);
+  assert.doesNotMatch(source, /quant-kpi-grid/);
 });
 
 test("OPEN uses the warning colour while completed targets remain green", async () => {
@@ -202,13 +205,15 @@ test("workspace headers stay compact and the screener declares both markets", as
     assert.doesNotMatch(header, /\sdescription=/, `${paths[index]} must not add a page-header description`);
   }
   assert.match(sources[1], /NSE & Crypto screener/);
-  assert.match(sources[1], /NSE & Crypto supported/);
   assert.doesNotMatch(sources[1], /Crypto only/);
 });
 
 test("the screener uses one universe selector and a complete JSON configuration", async () => {
   const source = await readFile(new URL("../app/screener/screener-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /className="quant-json-editor"/);
+  assert.match(source, /<details className="quant-config-disclosure">/);
+  assert.doesNotMatch(source, /<details className="quant-config-disclosure" open/);
+  assert.match(source, />Copy JSON</);
   assert.match(source, /aria-label="Screener configuration JSON"/);
   assert.match(source, /validateConfigValues\(overrides, FILTER_SCHEMA/);
   assert.match(source, /Full \{marketLabel\(market\)\} market/);
@@ -217,6 +222,28 @@ test("the screener uses one universe selector and a complete JSON configuration"
   assert.doesNotMatch(source, />Keep results</);
   assert.doesNotMatch(source, />Manual includes</);
   assert.match(source, /Save and activate/);
+});
+
+test("the six workspaces keep primary work visible and secondary detail collapsed", async () => {
+  const [dashboard, screener, signals, paper, settings] = await Promise.all([
+    readFile(new URL("../app/dashboard-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/screener/screener-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/paper-trading/paper-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(dashboard, /quant-primary-panel/);
+  assert.match(dashboard, /section\.recent\.slice\(0, 3\)/);
+  assert.match(dashboard, /<details className="quant-secondary-disclosure">/);
+  assert.doesNotMatch(dashboard, /quant-kpi-grid/);
+  assert.match(screener, /quant-overview-strip/);
+  assert.match(signals, /title="Signals"[\s\S]*?<details className="quant-secondary-disclosure">/);
+  assert.doesNotMatch(signals, /quant-kpi-grid/);
+  assert.match(paper, /quant-portfolio-standalone/);
+  assert.doesNotMatch(paper, /quant-kpi-grid/);
+  assert.match(settings, /<details className="quant-config-disclosure">/);
+  assert.match(settings, /<details className="quant-secondary-disclosure">/);
+  assert.doesNotMatch(settings, /<details className="quant-config-disclosure" open/);
 });
 
 test("settings is JSON-first and does not duplicate global or market controls", async () => {

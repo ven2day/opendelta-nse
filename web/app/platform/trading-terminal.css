@@ -464,6 +464,69 @@
 }
 
 /* Panels and account summaries */
+.quant-overview-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-block: 1px solid var(--od-border);
+  background: transparent;
+}
+
+.quant-overview-strip > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 13px 16px;
+}
+
+.quant-overview-strip > div + div { border-left: 1px solid var(--od-border); }
+.quant-overview-strip span,
+.quant-portfolio-value span,
+.quant-portfolio-hero dt { color: var(--od-faint); font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.quant-overview-strip strong { display: flex; overflow: hidden; align-items: center; gap: 7px; color: var(--od-text); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-overview-strip small { overflow: hidden; color: var(--od-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-overview-strip i { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--od-muted); }
+.quant-overview-strip i[data-tone="good"] { background: var(--od-success); }
+.quant-overview-strip i[data-tone="warn"] { background: var(--od-warning); }
+.quant-overview-strip i[data-tone="bad"] { background: var(--od-danger); }
+
+.quant-primary-panel { border-color: var(--od-border-strong); }
+.quant-portfolio-hero { display: grid; gap: 22px; padding: 22px; }
+.quant-portfolio-standalone { border-bottom: 1px solid var(--od-border); padding-inline: 16px; }
+.quant-portfolio-value { display: grid; gap: 5px; }
+.quant-portfolio-value strong { color: var(--od-text); font: 750 clamp(27px, 3vw, 38px) var(--font-jetbrains-mono), monospace; letter-spacing: -.04em; }
+.quant-portfolio-value small { color: var(--od-muted); font-size: 12px; }
+.quant-portfolio-hero dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.quant-portfolio-hero dl > div { display: grid; gap: 5px; min-width: 0; border-left: 1px solid var(--od-border); padding-left: 16px; }
+.quant-portfolio-hero dl > div:first-child { border-left: 0; padding-left: 0; }
+.quant-portfolio-hero dd { overflow: hidden; margin: 0; color: var(--od-text); font: 700 16px var(--font-jetbrains-mono), monospace; text-overflow: ellipsis; white-space: nowrap; }
+.quant-backtest-results { display: grid; gap: 14px; }
+.quant-backtest-summary { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(520px, 2fr); align-items: end; gap: 28px; padding: 8px 2px; }
+.quant-backtest-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.quant-backtest-summary dl > div { display: grid; gap: 5px; min-width: 0; border-left: 1px solid var(--od-border); padding-left: 16px; }
+.quant-backtest-summary dt { color: var(--od-faint); font-size: 11px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+.quant-backtest-summary dd { overflow: hidden; margin: 0; color: var(--od-text); font: 700 15px var(--font-jetbrains-mono), monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.quant-config-disclosure,
+.quant-secondary-disclosure { overflow: hidden; border: 1px solid var(--od-border); border-radius: 7px; background: var(--od-surface-raised); }
+.quant-config-disclosure > summary,
+.quant-secondary-disclosure > summary { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 12px; color: var(--od-text); cursor: pointer; list-style: none; }
+.quant-config-disclosure > summary::-webkit-details-marker,
+.quant-secondary-disclosure > summary::-webkit-details-marker { display: none; }
+.quant-config-disclosure > summary > span,
+.quant-secondary-disclosure > summary > span { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 750; }
+.quant-config-disclosure > summary > span::after,
+.quant-secondary-disclosure > summary > span::after { content: "+"; color: var(--od-muted); font-size: 16px; font-weight: 400; }
+.quant-config-disclosure[open] > summary > span::after,
+.quant-secondary-disclosure[open] > summary > span::after { content: "−"; }
+.quant-config-disclosure > summary svg,
+.quant-secondary-disclosure > summary svg { color: var(--od-accent); }
+.quant-config-disclosure > summary small,
+.quant-secondary-disclosure > summary small { color: var(--od-muted); font-size: 12px; }
+.quant-config-disclosure > .quant-json-editor,
+.quant-secondary-disclosure > :not(summary) { border-top: 1px solid var(--od-border); }
+.quant-secondary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 10px; background: var(--od-surface); }
+.quant-secondary-grid .quant-panel { border-color: color-mix(in srgb, var(--od-border) 72%, transparent); }
+
 .quant-kpi-grid { gap: 8px; }
 .quant-kpi-grid article {
   gap: 4px;
@@ -667,9 +730,10 @@
 .quant-backtest-config-body label > span { color: var(--od-muted); font-size: 11px; font-weight: 750; text-transform: uppercase; }
 .quant-backtest-config-body textarea { min-height: 320px; border: 1px solid var(--od-border); border-radius: 6px; padding: 11px; color: var(--od-text); background: var(--od-canvas); font: 12px/1.55 var(--font-jetbrains-mono), monospace; resize: vertical; }
 .quant-backtest-config-body textarea:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
-.quant-backtest-config-actions { display: flex; gap: 8px; }
-.quant-backtest-config-actions button { border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); cursor: pointer; }
-.quant-json-editor { display: grid; gap: 10px; border: 1px solid var(--od-border); border-radius: 7px; padding: 12px; background: var(--od-surface); }
+.quant-backtest-config-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.quant-backtest-config-actions button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); cursor: pointer; }
+.quant-backtest-config-actions button.primary { margin-left: auto; border-color: var(--od-accent); color: var(--od-accent-contrast); background: var(--od-accent); }
+.quant-json-editor { display: grid; gap: 10px; border: 0; border-radius: 0; padding: 12px; background: var(--od-surface); }
 .quant-json-editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .quant-json-editor-heading > span { display: inline-flex; align-items: center; gap: 7px; color: var(--od-text); font-size: 13px; font-weight: 750; }
 .quant-json-editor-heading svg { color: var(--od-accent); }
@@ -686,12 +750,21 @@
 
 @media (max-width: 1180px) {
   .quant-backtest-run-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .quant-secondary-grid { grid-template-columns: 1fr; }
+  .quant-backtest-summary { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 800px) {
   .quant-backtest-run-grid,
   .quant-screener-run-grid,
   .quant-settings-identity { grid-template-columns: 1fr; }
+  .quant-overview-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .quant-overview-strip > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--od-border); }
+  .quant-overview-strip > div:nth-child(4) { border-top: 1px solid var(--od-border); }
+  .quant-portfolio-hero dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 0; }
+  .quant-portfolio-hero dl > div:nth-child(3) { border-left: 0; }
+  .quant-backtest-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 0; }
+  .quant-backtest-summary dl > div:nth-child(odd) { border-left: 0; padding-left: 0; }
   .quant-json-editor-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
 

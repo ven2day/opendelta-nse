@@ -1,6 +1,6 @@
 "use client";
 
-import { Braces, Layers, ListChecks, LoaderCircle, Play, RefreshCw, Save, ScanSearch } from "lucide-react";
+import { Braces, Copy, Layers, ListChecks, LoaderCircle, Play, RefreshCw, Save, ScanSearch } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { formatDateTime, formatInteger, formatNumber, formatPercent, humanize, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
@@ -201,11 +201,11 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshUniverses(); refreshResults(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
-    <section className="quant-kpi-grid">
-      <article><span>Latest run</span><strong>{selectedRun?.status ?? "None"}</strong><small>{selectedRun ? `${shortId(selectedRun.runId)} · ${formatDateTime(selectedRun.requestedAt, market)}` : "No screener runs yet"}</small></article>
-      <article><span>Passed / total</span><strong>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} / ${formatInteger(selectedRun.symbolsTotal)}` : "—"}</strong><small>Symbols in the selected run</small></article>
-      <article><span>Active universe</span><strong>{activeUniverse?.name ?? "None"}</strong><small>{activeUniverse ? `${activeUniverse.symbols.length} symbols` : "Save a run to create one"}</small></article>
-      <article><span>Saved universes</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>NSE & Crypto supported · viewing {marketLabel(market)}</small></article>
+    <section className="quant-overview-strip" aria-label="Screener overview">
+      <div><span>Latest run</span><strong>{selectedRun?.status ? humanize(selectedRun.status) : "None"}</strong><small>{selectedRun ? formatDateTime(selectedRun.requestedAt, market) : "No runs yet"}</small></div>
+      <div><span>Passed</span><strong>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} / ${formatInteger(selectedRun.symbolsTotal)}` : "—"}</strong><small>Selected run</small></div>
+      <div><span>Active universe</span><strong>{activeUniverse?.name ?? "None"}</strong><small>{activeUniverse ? `${activeUniverse.symbols.length} symbols` : "Create below"}</small></div>
+      <div><span>Saved</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>Universes</small></div>
     </section>
 
     <div className="quant-screener-layout">
@@ -217,14 +217,18 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
             <label><span>Starting universe</span><select value={effectiveSymbolSource} disabled={busy} onChange={(event) => setSymbolSource(event.target.value)}><option value="market">Full {marketLabel(market)} market</option>{(presets.data?.presets ?? []).map((preset) => <option key={preset.presetId} value={preset.presetId}>{preset.name} ({preset.symbols.length})</option>)}<option value="custom">Custom list</option></select>{presets.error && <small>Ready-made universes unavailable: {presets.error.message}</small>}{selectedPreset && <small>Official snapshot · {selectedPreset.symbols.length} symbols · as of {selectedPreset.asOf}</small>}</label>
             {effectiveSymbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => setSymbolsText(event.target.value)} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
           </div>
-          <div className="quant-json-editor">
-            <div className="quant-json-editor-heading"><span><Braces size={15} />Screener JSON</span><small>Price, liquidity, volatility, quality, ranking and result limit.</small></div>
+          <details className="quant-config-disclosure">
+            <summary><span><Braces size={15} />Edit JSON</span><small>Filters and ranking</small></summary>
+            <div className="quant-json-editor">
+            <div className="quant-json-editor-heading"><span>Screener JSON</span><small>Price, liquidity, volatility, quality, ranking and result limit.</small></div>
               <textarea aria-label="Screener configuration JSON" spellCheck={false} value={filterJson} disabled={busy} onChange={(event) => setFilterJsonEdits((current) => ({ ...current, [market]: event.target.value }))} />
               <div className="quant-backtest-config-actions">
+                <button type="button" onClick={() => void navigator.clipboard.writeText(filterJson)}><Copy size={14} />Copy JSON</button>
                 <button type="button" onClick={() => { try { const parsed = parseFilterOverrides(filterJson); setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(parsed, null, 2) })); setRunNotice(null); } catch (reason) { setRunNotice({ kind: "error", text: errorMessage(reason, "Invalid screener configuration") }); } }}>Validate and format</button>
                 <button type="button" onClick={() => setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) }))}>Reset to defaults</button>
               </div>
-          </div>
+            </div>
+          </details>
           {runNotice && <Message kind={runNotice.kind}>{runNotice.text}</Message>}
         </div>
         <div className="quant-form-actions">

@@ -33,8 +33,25 @@ git archive --format=tar.gz -o "/tmp/opendelta-deploy-${release_id}.tar.gz" HEAD
 log "building images"
 "${REPO_DIR}/web/deploy/install-release.sh" "${release_id}"
 
-log "cutting over backtest service"
 previous_backtest_image="$(docker inspect --format '{{.Image}}' opendelta-backtest 2>/dev/null || true)"
+
+log "applying platform schema migrations"
+if docker run --rm \
+  --network opendelta-internal \
+  --env-file /etc/opendelta-dhan.env \
+  opendelta-backtest:current \
+  python -m backend.data.migrate; then
+  log "platform schema current"
+else
+  migration_rc=$?
+  log "schema migration exited ${migration_rc}; restoring previous backtest image"
+  if [[ -n "${previous_backtest_image}" ]]; then
+    docker tag "${previous_backtest_image}" opendelta-backtest:current
+  fi
+  exit 1
+fi
+
+log "cutting over backtest service"
 if ! systemctl restart opendelta-backtest.service; then
   restart_rc=$?
   log "systemctl restart exited ${restart_rc}; retrying once"

@@ -42,7 +42,7 @@ export async function GET(request: Request): Promise<Response> {
   const action = url.searchParams.get("action") ?? "overview";
   const market = url.searchParams.get("market");
   const endpoints: Record<string, string> = {
-    overview: "/platform/overview",
+    overview: `/platform/overview?market=${encodeURIComponent(market ?? "NSE")}`,
     instruments: `/platform/instruments?market=${encodeURIComponent(market ?? "NSE")}&offset=${encodeURIComponent(url.searchParams.get("offset") ?? "0")}&limit=${encodeURIComponent(url.searchParams.get("limit") ?? "100")}`,
     "market-context": `/platform/market-context?market=${encodeURIComponent(market ?? "NSE")}`,
   };

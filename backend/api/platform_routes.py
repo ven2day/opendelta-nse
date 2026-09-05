@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from datetime import time as datetime_time
 from pathlib import Path
 from typing import Any
@@ -63,27 +63,57 @@ def _legacy_engine_status_view() -> dict[str, Any]:
     }
 
 
-def platform_overview_payload() -> dict[str, Any]:
+def _crypto_engine_status_view() -> dict[str, Any]:
+    """Shape the continuously running crypto scanner like platform engine health."""
+    status = get_crypto_market_service().status()
+    last_scan = status.get("lastScan")
+    age: float | None = None
+    if last_scan:
+        try:
+            scanned_at = datetime.fromisoformat(str(last_scan).replace("Z", "+00:00"))
+            age = max(0.0, (datetime.now(UTC) - scanned_at.astimezone(UTC)).total_seconds())
+        except ValueError:
+            pass
+    engine_status = str(status.get("engineStatus") or "UNAVAILABLE").upper()
+    connected = engine_status in {"READY", "DEGRADED"}
+    return {
+        "engineStatus": engine_status,
+        "connectionStatus": "CONNECTED" if connected else "DISCONNECTED",
+        "dataAgeSeconds": age,
+        "lastCompletedCandle": last_scan,
+        "marketSession": "OPEN_24_7",
+        "configuredInstruments": int(status.get("configuredInstruments") or 0),
+        "pollingSeconds": int(status.get("pollingSeconds") or 60),
+    }
+
+
+def platform_overview_payload(market: str = "NSE") -> dict[str, Any]:
     """Chrome overview payload; also consumed by the v2 dashboard router."""
+    market_key = market.strip().upper()
+    if market_key not in {"NSE", "CRYPTO"}:
+        raise ValueError("market must be NSE or CRYPTO")
     try:
-        engine = _legacy_engine_status_view()
+        engine = _legacy_engine_status_view() if market_key == "NSE" else _crypto_engine_status_view()
     except Exception:  # noqa: BLE001 - the chrome must degrade, never fail, on engine errors
         engine = {}
     age = engine.get("dataAgeSeconds")
-    if engine.get("marketSession") == "OPEN":
+    if market_key == "CRYPTO" and engine and not engine.get("configuredInstruments"):
+        freshness = {"status": "UNAVAILABLE", "ageSeconds": age, "reason": "NO_CONFIGURED_INSTRUMENTS"}
+    elif engine.get("marketSession") in {"OPEN", "OPEN_24_7"}:
         if age is None:
             freshness = {"status": "UNAVAILABLE", "ageSeconds": None, "reason": "NO_MARKET_DATA"}
-        elif float(age) <= FRESH_DATA_AGE_SECONDS:
-            freshness = {"status": "FRESH", "ageSeconds": age, "reason": "MARKET_OPEN"}
+        elif float(age) <= max(FRESH_DATA_AGE_SECONDS, float(engine.get("pollingSeconds") or 0) * 3):
+            freshness = {"status": "FRESH", "ageSeconds": age, "reason": "MARKET_OPEN_24_7" if market_key == "CRYPTO" else "MARKET_OPEN"}
         else:
-            freshness = {"status": "STALE", "ageSeconds": age, "reason": "MARKET_OPEN_DATA_LAGGING"}
+            freshness = {"status": "STALE", "ageSeconds": age, "reason": "MARKET_24_7_DATA_LAGGING" if market_key == "CRYPTO" else "MARKET_OPEN_DATA_LAGGING"}
     elif engine.get("lastCompletedCandle"):
         freshness = {"status": "FRESH", "ageSeconds": age, "reason": "MARKET_CLOSED_LAST_SESSION_CURRENT"}
     else:
         freshness = {"status": "UNAVAILABLE", "ageSeconds": age, "reason": "NO_COMPLETED_CANDLE"}
     engine_status = str(engine.get("engineStatus") or "UNAVAILABLE")
-    worker = "RUNNING" if engine_status in {"READY", "RECOVERING"} else "STOPPED" if engine else "UNAVAILABLE"
+    worker = "RUNNING" if engine_status in {"READY", "RECOVERING", "DEGRADED", "STARTING"} else "STOPPED" if engine else "UNAVAILABLE"
     return {
+        "market": market_key,
         "environment": os.environ.get("OPENDELTA_ENVIRONMENT", "production"),
         "dataFreshness": freshness,
         "jobStatus": {"status": worker, "engineStatus": engine_status, "connectionStatus": engine.get("connectionStatus")},
@@ -119,8 +149,11 @@ def create_platform_router() -> APIRouter:
         return payload
 
     @router.get("/platform/overview")
-    def platform_overview() -> dict[str, Any]:
-        return platform_overview_payload()
+    def platform_overview(market: str = Query(default="NSE")) -> dict[str, Any]:
+        try:
+            return platform_overview_payload(market)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @router.get("/platform/instruments")
     def platform_instruments(

@@ -42,6 +42,10 @@ v2_anonymous="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/v2/dash
 [[ "${v2_anonymous}" == "401" ]]
 curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/dashboard?market=NSE" > "${dashboard_html}"
 jq -e '.market == "NSE" and .paperOnly == true and .liveOrdersEnabled == false and (.marketData | type == "object")' "${dashboard_html}" >/dev/null
+curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/dashboard?market=CRYPTO" > "${dashboard_html}"
+jq -e '.market == "CRYPTO" and .paperOnly == true and .liveOrdersEnabled == false and (.marketData.data.market == "CRYPTO")' "${dashboard_html}" >/dev/null
+curl -fsS -b "${cookie_jar}" "${base_url}/api/platform?action=market-context&market=CRYPTO" > "${dashboard_html}"
+jq -e '.market == "CRYPTO" and .session.status == "OPEN_24_7" and .session.timezone == "UTC"' "${dashboard_html}" >/dev/null
 curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/strategies" > "${dashboard_html}"
 jq -e '(.strategies | length) > 0 and (.strategies[0].configSchema | type == "object")' "${dashboard_html}" >/dev/null
 echo "verified unified platform API proxy"

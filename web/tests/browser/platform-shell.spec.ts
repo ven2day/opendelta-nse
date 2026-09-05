@@ -9,8 +9,9 @@ const overview = {
 
 async function mockPlatform(page: Page) {
   await page.route("**/api/platform?**", async (route) => {
-    const action = new URL(route.request().url()).searchParams.get("action");
-    if (action === "overview") return route.fulfill({ json: overview });
+    const parameters = new URL(route.request().url()).searchParams;
+    const action = parameters.get("action");
+    if (action === "overview") return route.fulfill({ json: { ...overview, environment: parameters.get("market") ?? "NSE" } });
     return route.fulfill({ status: 404, json: { detail: "Not part of this browser smoke" } });
   });
   await page.route("**/api/v2/**", async (route) => {
@@ -105,6 +106,7 @@ test("the market switcher keeps the current page and carries the market into nav
   await cryptoSwitch.click();
   await expect(page).toHaveURL(/\/screener\?market=CRYPTO$/);
   await expect(page.locator('.platform-market-switch a.active')).toHaveText("Crypto");
+  await expect(page.locator(".platform-environment")).toHaveText("CRYPTO");
   await expect(page.locator('.quant-market-tabs[aria-label="Market selector"]')).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("href", "/signals?market=CRYPTO");
 });

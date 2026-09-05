@@ -518,6 +518,54 @@ def _public_config(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+class StrategyDeploymentRepository:
+    """Desired signal/paper mode for one strategy in one market."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def get(self, market: str, strategy_id: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one("SELECT * FROM strategy_deployments WHERE market = %s AND strategy_id = %s", (market, strategy_id))
+        return _public_deployment(row) if row else None
+
+    def list(self, market: str | None = None) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all("SELECT * FROM strategy_deployments WHERE market = %s ORDER BY strategy_id", (market,))
+        else:
+            rows = self.database.fetch_all("SELECT * FROM strategy_deployments ORDER BY market, strategy_id")
+        return [_public_deployment(row) for row in rows]
+
+    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, timeframe: str, mode: str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            """
+            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, timeframe, mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT ON CONSTRAINT strategy_deployments_market_strategy DO UPDATE SET
+                strategy_version = EXCLUDED.strategy_version, config_id = EXCLUDED.config_id,
+                timeframe = EXCLUDED.timeframe, mode = EXCLUDED.mode, updated_at = now()
+            RETURNING *
+            """,
+            (uuid.uuid4(), market, strategy_id, strategy_version, uuid.UUID(config_id) if config_id else None, timeframe, mode),
+        )
+        assert row is not None
+        return _public_deployment(row)
+
+
+def _public_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "deploymentId": str(row["deployment_id"]),
+        "market": row["market"],
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "configId": str(row["config_id"]) if row["config_id"] else None,
+        "timeframe": row["timeframe"],
+        "mode": row["mode"],
+        "source": "DATABASE",
+        "createdAt": _iso(row["created_at"]),
+        "updatedAt": _iso(row["updated_at"]),
+    }
+
+
 class SavedUniverseRepository:
     def __init__(self, database: Database) -> None:
         self.database = database

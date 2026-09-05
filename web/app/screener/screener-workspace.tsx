@@ -106,7 +106,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
         setPollingRun(run);
         if (!isActive(run.status)) {
           setPollingRunId(null);
-          setRunNotice(run.status === "COMPLETE" || run.status === "COMPLETED" ? { kind: "success", text: `Screen complete: ${formatInteger(run.symbolsPassed)} of ${formatInteger(run.symbolsTotal)} symbols passed.` } : { kind: "error", text: run.error || `Screen finished with status ${run.status}.` });
+          setRunNotice(run.status === "COMPLETE" || run.status === "COMPLETED" ? { kind: "success", text: `Watchlist ready: ${formatInteger(run.symbolsPassed)} of ${formatInteger(run.symbolsTotal)} symbols are eligible for monitoring.` } : { kind: "error", text: run.error || `Screen finished with status ${run.status}.` });
           refreshRuns();
           refreshResults();
         }
@@ -167,11 +167,11 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
         manualExcludes: [],
         activate: true,
       });
-      setUniverseNotice({ kind: "success", text: `Saved "${universe.name}" with ${universe.symbols.length} symbols${universe.active ? " and activated it" : ""}.` });
+      setUniverseNotice({ kind: "success", text: `Saved "${universe.name}" with ${universe.symbols.length} symbols${universe.active ? " and selected it for strategies" : ""}.` });
       setUniverseName("");
       refreshUniverses();
     } catch (reason) {
-      setUniverseNotice({ kind: "error", text: errorMessage(reason, "The universe could not be saved") });
+      setUniverseNotice({ kind: "error", text: errorMessage(reason, "The watchlist could not be saved") });
     } finally {
       setSavingUniverse(false);
     }
@@ -182,10 +182,10 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
     setUniverseNotice(null);
     try {
       await v2Post(`screener/universes/${universe.universeId}/activate`);
-      setUniverseNotice({ kind: "success", text: `"${universe.name}" is now the active ${marketLabel(market)} universe.` });
+      setUniverseNotice({ kind: "success", text: `"${universe.name}" is now the active ${marketLabel(market)} watchlist.` });
       refreshUniverses();
     } catch (reason) {
-      setUniverseNotice({ kind: "error", text: errorMessage(reason, "The universe could not be activated") });
+      setUniverseNotice({ kind: "error", text: errorMessage(reason, "The watchlist could not be activated") });
     } finally {
       setActivatingId(null);
     }
@@ -196,21 +196,27 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
 
   return <main className="quant-workspace">
     <WorkspaceHeader
-      eyebrow={`NSE & Crypto screener · viewing ${marketLabel(market)}`}
-      title="Universe screener"
+      eyebrow={`NSE & Crypto watchlist · viewing ${marketLabel(market)}`}
+      title="Trading watchlist"
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshUniverses(); refreshResults(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
-    <section className="quant-overview-strip" aria-label="Screener overview">
+    <section className="quant-screener-purpose" aria-label="How the watchlist works">
+      <strong>Find symbols worth monitoring—not automatic BUY or SELL calls.</strong>
+      <span>The screen removes instruments that fail your price, liquidity, volatility or data-quality rules. Your selected strategies monitor the active watchlist and create actual decisions on the Signals page.</span>
+      <a className="quant-action-link" href={market === "CRYPTO" ? "/signals?market=CRYPTO" : "/signals"}>View signals</a>
+    </section>
+
+    <section className="quant-overview-strip" aria-label="Watchlist overview">
       <div><span>Latest run</span><strong>{selectedRun?.status ? humanize(selectedRun.status) : "None"}</strong><small>{selectedRun ? formatDateTime(selectedRun.requestedAt, market) : "No runs yet"}</small></div>
-      <div><span>Passed</span><strong>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} / ${formatInteger(selectedRun.symbolsTotal)}` : "—"}</strong><small>Selected run</small></div>
-      <div><span>Active universe</span><strong>{activeUniverse?.name ?? "None"}</strong><small>{activeUniverse ? `${activeUniverse.symbols.length} symbols` : "Create below"}</small></div>
-      <div><span>Saved</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>Universes</small></div>
+      <div><span>Candidates</span><strong>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} / ${formatInteger(selectedRun.symbolsTotal)}` : "—"}</strong><small>Eligible for monitoring</small></div>
+      <div><span>Active watchlist</span><strong>{activeUniverse?.name ?? "None"}</strong><small>{activeUniverse ? `${activeUniverse.symbols.length} symbols` : "Create below"}</small></div>
+      <div><span>Saved</span><strong>{universes.data ? formatInteger(universes.data.universes.length) : "—"}</strong><small>Watchlists</small></div>
     </section>
 
     <div className="quant-screener-layout">
     <div className="quant-screener-sidebar">
-    <Panel icon={<ScanSearch size={17} />} title="Run screener">
+    <Panel icon={<ScanSearch size={17} />} title="Find candidates" description="Apply eligibility rules to a starting market list.">
       {filters.loading ? <LoadingState label="Loading filter defaults" /> : filters.error ? <RequestErrorState error={filters.error} retry={filters.reload} /> : <form onSubmit={runScreener} noValidate>
         <div className="quant-panel-body">
           <div className="quant-form-grid quant-screener-run-grid">
@@ -232,41 +238,41 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
           {runNotice && <Message kind={runNotice.kind}>{runNotice.text}</Message>}
         </div>
         <div className="quant-form-actions">
-          <button type="submit" className="primary" disabled={busy}>{pollingRunId ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{pollingRunId ? "Screening…" : "Run screener"}</button>
+          <button type="submit" className="primary" disabled={busy}>{pollingRunId ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{pollingRunId ? "Screening…" : "Find candidates"}</button>
           <span>{pollingRun && pollingRunId ? `Run ${shortId(pollingRun.runId)} · ${pollingRun.status} · ${formatInteger(pollingRun.symbolsTotal)} symbols` : selectedPreset?.name ?? (effectiveSymbolSource === "custom" ? `${parseSymbols(symbolsText).length} custom symbols` : `Full ${marketLabel(market)} market`)}</span>
         </div>
       </form>}
     </Panel>
 
-    <Panel icon={<Save size={17} />} title="Save as universe" description="Freeze the selected run for backtests and signals.">
+    <Panel icon={<Save size={17} />} title="Use as watchlist" description="Freeze these candidates for backtests and strategy monitoring.">
       <form onSubmit={saveUniverse} noValidate>
         <div className="quant-panel-body">
           <div className="quant-form-grid quant-universe-save-grid">
-            <label><span>Universe name</span><input type="text" required value={universeName} onChange={(event) => setUniverseName(event.target.value)} placeholder={`${marketLabel(market)} liquid universe`} /></label>
+            <label><span>Watchlist name</span><input type="text" required value={universeName} onChange={(event) => setUniverseName(event.target.value)} placeholder={`${marketLabel(market)} liquid candidates`} /></label>
           </div>
           {universeNotice && <Message kind={universeNotice.kind}>{universeNotice.text}</Message>}
         </div>
         <div className="quant-form-actions">
-          <button type="submit" className="primary" disabled={savingUniverse || !selectedRunId || !universeName.trim() || isActive(selectedRun?.status)}><Save size={15} />{savingUniverse ? "Saving…" : "Save and activate"}</button>
-          <span>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} passed` : "Select a completed run"}</span>
+          <button type="submit" className="primary" disabled={savingUniverse || !selectedRunId || !universeName.trim() || isActive(selectedRun?.status)}><Save size={15} />{savingUniverse ? "Saving…" : "Save and use for signals"}</button>
+          <span>{selectedRun ? `${formatInteger(selectedRun.symbolsPassed)} candidates` : "Select a completed run"}</span>
         </div>
       </form>
     </Panel>
     </div>
 
-    <Panel icon={<ListChecks size={17} />} title="Results" description="Passed symbols carry their rank and metrics; rejected symbols show the first failing rule." aside={<div className="quant-toolbar">
+    <Panel icon={<ListChecks size={17} />} title="Candidate watchlist" description="Candidates meet the eligibility rules; excluded symbols show the first failed rule." aside={<div className="quant-toolbar">
       {runs.data && runs.data.runs.length > 0 && <label><span>Run</span><select value={selectedRunId ?? ""} onChange={(event) => setSelectedRunChoice(event.target.value)}>{runs.data.runs.map((run) => <option key={run.runId} value={run.runId}>{shortId(run.runId)} · {run.status} · {formatDateTime(run.requestedAt, market)}</option>)}</select></label>}
       <div className="quant-section-tabs" role="tablist" aria-label="Result view">
-        <button type="button" role="tab" aria-selected={resultsTab === "passed"} className={resultsTab === "passed" ? "active" : ""} onClick={() => setResultsTab("passed")}>Passed ({formatInteger(passedRows.length)})</button>
-        <button type="button" role="tab" aria-selected={resultsTab === "rejected"} className={resultsTab === "rejected" ? "active" : ""} onClick={() => setResultsTab("rejected")}>Rejected ({formatInteger(rejectedRows.length)})</button>
+        <button type="button" role="tab" aria-selected={resultsTab === "passed"} className={resultsTab === "passed" ? "active" : ""} onClick={() => setResultsTab("passed")}>Candidates ({formatInteger(passedRows.length)})</button>
+        <button type="button" role="tab" aria-selected={resultsTab === "rejected"} className={resultsTab === "rejected" ? "active" : ""} onClick={() => setResultsTab("rejected")}>Excluded ({formatInteger(rejectedRows.length)})</button>
       </div>
     </div>}>
       {pollingRunId && pollingRun && <div className="quant-progress-row"><LoaderCircle className="spin" size={15} /><span>Screening {formatInteger(pollingRun.symbolsTotal)} symbols · {pollingRun.status}</span><StatusBadge tone={tone(pollingRun.status)}>{pollingRun.status}</StatusBadge></div>}
-      {runs.loading || results.loading ? <LoadingState label="Loading screener results" /> : runs.error ? <RequestErrorState error={runs.error} retry={runs.reload} /> : results.error ? <RequestErrorState error={results.error} retry={results.reload} /> : !selectedRunId ? <EmptyState title="No screener runs yet" description="Run the screener to rank the instrument universe." /> : resultsTab === "passed" ? (passedRows.length ? <div className="quant-table-scroll tall"><table className="quant-table">
-        <thead><tr><th className="numeric">Rank</th><th>Symbol</th><th className="numeric">Price</th><th className="numeric">Traded value</th><th className="numeric">Volume</th><th className="numeric">Volatility</th><th className="numeric">Coverage</th><th className="numeric">Sessions</th><th className="numeric">Score</th></tr></thead>
+      {runs.loading || results.loading ? <LoadingState label="Loading watchlist candidates" /> : runs.error ? <RequestErrorState error={runs.error} retry={runs.reload} /> : results.error ? <RequestErrorState error={results.error} retry={results.reload} /> : !selectedRunId ? <EmptyState title="No watchlist runs yet" description="Find candidates to build the first strategy watchlist." /> : resultsTab === "passed" ? (passedRows.length ? <div className="quant-table-scroll tall"><table className="quant-table">
+        <thead><tr><th className="numeric">Rank</th><th>Symbol</th><th>Watch status</th><th className="numeric">Price</th><th className="numeric">Traded value</th><th className="numeric">Volume</th><th className="numeric">Volatility</th><th className="numeric">Coverage</th><th className="numeric">Sessions</th><th className="numeric">Score</th></tr></thead>
         <tbody>{passedRows.map((row) => <tr key={row.symbol}>
           <td className="numeric">{row.rank ?? "—"}</td>
-          <td><strong>{row.symbol}</strong></td>
+          <td><strong>{row.symbol}</strong></td><td><StatusBadge tone="neutral">Monitor</StatusBadge></td>
           <td className="numeric">{formatNumber(row.metrics?.lastPrice)}</td>
           <td className="numeric">{formatNumber(row.metrics?.averageTradedValue, 0)}</td>
           <td className="numeric">{formatNumber(row.metrics?.averageVolume, 0)}</td>
@@ -275,7 +281,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
           <td className="numeric">{formatInteger(row.metrics?.sessions)}</td>
           <td className="numeric">{formatNumber(row.score, 3)}</td>
         </tr>)}</tbody>
-      </table></div> : <EmptyState title="No symbols passed" description={selectedRun?.error || "Loosen the filters or widen the symbol list and run again."} />) : (rejectedRows.length ? <div className="quant-table-scroll tall"><table className="quant-table">
+      </table></div> : <EmptyState title="No eligible candidates" description={selectedRun?.error || "Loosen the filters or widen the symbol list and run again."} />) : (rejectedRows.length ? <div className="quant-table-scroll tall"><table className="quant-table">
         <thead><tr><th>Symbol</th><th>Rejection reason</th><th className="numeric">Price</th><th className="numeric">Traded value</th><th className="numeric">Volatility</th></tr></thead>
         <tbody>{rejectedRows.map((row) => <tr key={row.symbol}>
           <td><strong>{row.symbol}</strong></td>
@@ -284,12 +290,12 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
           <td className="numeric">{formatNumber(row.metrics?.averageTradedValue, 0)}</td>
           <td className="numeric">{formatPercent(row.metrics?.volatilityPct)}</td>
         </tr>)}</tbody>
-      </table></div> : <EmptyState title="Nothing rejected" description="Every screened symbol passed the filters." />)}
+      </table></div> : <EmptyState title="Nothing excluded" description="Every screened symbol met the eligibility rules." />)}
     </Panel>
     </div>
 
-    <Panel icon={<Layers size={17} />} title="Saved universes" description="The active universe is the default symbol source for backtests and the live signal engine." aside={activeUniverse && <StatusBadge tone="good">Active: {activeUniverse.name}</StatusBadge>}>
-      {universes.loading ? <LoadingState label="Loading universes" /> : universes.error ? <RequestErrorState error={universes.error} retry={universes.reload} /> : !universes.data?.universes.length ? <EmptyState title="No saved universes" description="Save a screener run above to create the first universe." /> : <div className="quant-table-scroll"><table className="quant-table">
+    <Panel icon={<Layers size={17} />} title="Saved watchlists" description="The active watchlist supplies symbols to backtests and selected live strategies." aside={activeUniverse && <StatusBadge tone="good">Active: {activeUniverse.name}</StatusBadge>}>
+      {universes.loading ? <LoadingState label="Loading watchlists" /> : universes.error ? <RequestErrorState error={universes.error} retry={universes.reload} /> : !universes.data?.universes.length ? <EmptyState title="No saved watchlists" description="Save candidate results above to create the first watchlist." /> : <div className="quant-table-scroll"><table className="quant-table">
         <thead><tr><th>Name</th><th className="numeric">Symbols</th><th>Includes / excludes</th><th>Created</th><th>Status</th><th>Symbols</th><th></th></tr></thead>
         <tbody>{universes.data.universes.map((universe) => <tr key={universe.universeId} className={universe.active ? "active" : ""}>
           <td><strong>{universe.name}</strong><small className="mono">{shortId(universe.universeId)}</small></td>

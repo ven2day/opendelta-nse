@@ -57,7 +57,7 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
       await expect(page.locator(".platform-topnav a")).toHaveCount(6);
-      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Screener", "Backtest", "Signals", "Paper Trading", "Settings"]);
+      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Settings"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });

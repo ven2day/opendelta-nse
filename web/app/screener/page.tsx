@@ -6,8 +6,8 @@ import { ScreenerWorkspace } from "./screener-workspace";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Screener",
-  description: "Screen NSE and crypto instruments by liquidity, price and volatility, then save the result as a universe.",
+  title: "Watchlist",
+  description: "Find eligible NSE and crypto candidates, then select the watchlist monitored by trading strategies.",
 };
 
 export default async function ScreenerPage({ searchParams }: { searchParams: Promise<{ market?: string }> }) {

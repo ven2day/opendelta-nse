@@ -575,7 +575,9 @@
 .quant-backtest-custom-symbols { display: grid; gap: 5px; margin-top: 10px; }
 .quant-backtest-custom-symbols input { min-height: 40px; border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 9px; color: var(--od-text); background: var(--od-surface-raised); font-size: 14px; }
 .quant-backtest-custom-symbols small { color: var(--od-faint); font-size: 12px; }
-.quant-screener-run-grid { grid-template-columns: minmax(150px, .75fr) minmax(140px, .65fr) minmax(190px, 1fr) minmax(240px, 1.4fr); }
+.quant-screener-run-grid,
+.quant-universe-save-grid { grid-template-columns: minmax(220px, 1fr); }
+.quant-settings-identity { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
 .quant-universe-summary {
   display: flex;
   min-height: 40px;
@@ -604,6 +606,20 @@
 .quant-backtest-config-body textarea:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
 .quant-backtest-config-actions { display: flex; gap: 8px; }
 .quant-backtest-config-actions button { border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); cursor: pointer; }
+.quant-json-editor { display: grid; gap: 10px; border: 1px solid var(--od-border); border-radius: 7px; padding: 12px; background: var(--od-surface); }
+.quant-json-editor-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.quant-json-editor-heading > span { display: inline-flex; align-items: center; gap: 7px; color: var(--od-text); font-size: 13px; font-weight: 750; }
+.quant-json-editor-heading svg { color: var(--od-accent); }
+.quant-json-editor-heading small { color: var(--od-muted); font-size: 12px; }
+.quant-json-editor textarea { min-height: 300px; border: 1px solid var(--od-border); border-radius: 6px; padding: 11px; color: var(--od-text); background: var(--od-canvas); font: 12px/1.55 var(--font-jetbrains-mono), monospace; resize: vertical; }
+.quant-json-editor textarea:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
+.quant-filter-menu { position: relative; }
+.quant-filter-menu > summary { min-height: 34px; border: 1px solid var(--od-border); border-radius: 6px; padding: 7px 10px; color: var(--od-text); background: var(--od-surface-raised); font-size: 12px; font-weight: 700; cursor: pointer; }
+.quant-filter-menu[open] > .quant-toolbar { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; width: min(720px, calc(100vw - 32px)); border: 1px solid var(--od-border); border-radius: 7px; padding: 10px; background: var(--od-surface); box-shadow: 0 12px 30px rgba(0, 0, 0, .35); }
+.quant-danger-zone { border: 1px solid color-mix(in srgb, var(--od-danger) 35%, var(--od-border)); border-radius: 7px; background: var(--od-surface); }
+.quant-danger-zone > summary { display: flex; min-height: 42px; align-items: center; gap: 7px; padding: 9px 12px; color: var(--od-danger); font-size: 13px; font-weight: 750; cursor: pointer; }
+.quant-danger-zone > .quant-panel { border: 0; border-top: 1px solid var(--od-border); border-radius: 0; }
+.quant-reset-grid { grid-template-columns: minmax(220px, 380px); }
 
 @media (max-width: 1180px) {
   .quant-backtest-run-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -611,7 +627,9 @@
 
 @media (max-width: 800px) {
   .quant-backtest-run-grid,
-  .quant-screener-run-grid { grid-template-columns: 1fr; }
+  .quant-screener-run-grid,
+  .quant-settings-identity { grid-template-columns: 1fr; }
+  .quant-json-editor-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
 
 /* Server-backed table sorting and filters; headers stay usable while scrolling. */

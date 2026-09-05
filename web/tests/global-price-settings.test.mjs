@@ -5,7 +5,7 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
 
-test("settings exposes one persisted inclusive global price range", async () => {
+test("the legacy global price contract remains secured but is not a settings-page control", async () => {
   const [page, form, api, backend] = await Promise.all([
     source("app/settings/page.tsx"),
     source("app/settings/price-range-form.tsx"),
@@ -13,7 +13,7 @@ test("settings exposes one persisted inclusive global price range", async () => 
     source("../backend/config/application_settings.py"),
   ]);
   assert.match(page, /requireSessionUser/);
-  assert.match(page, /readGlobalSettings/);
+  assert.doesNotMatch(page, /readGlobalSettings|GlobalPriceRangeForm/);
   assert.match(form, /Global minimum price/);
   assert.match(form, /Global maximum price/);
   assert.match(form, /step="0\.01"/);

@@ -2,7 +2,7 @@
 
 import { Activity, Radio, RefreshCw } from "lucide-react";
 import { useCallback, useState } from "react";
-import { formatAge, formatDateTime, formatInteger, formatNumber, marketLabel, tone } from "../platform/format";
+import { formatAge, formatDateTime, formatInteger, formatNumber, humanize, marketLabel, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { v2Get } from "../platform/v2-client";
@@ -68,13 +68,13 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
       {STATUS_OPTIONS.map((option) => <article key={option}><span className="quant-signal-status" data-colour={colours[option] ?? "grey"}>{option.replace("_", " ")}</span><strong>{formatInteger(counts[option] ?? 0)}</strong></article>)}
     </section>
 
-    <Panel icon={<Radio size={17} />} title="Signals" description={`Latest ${SIGNAL_LIMIT} ${marketLabel(market)} signals matching the filter.`} aside={<form className="quant-toolbar" onSubmit={(event) => { event.preventDefault(); setSymbol(symbolInput.trim().toUpperCase()); }}>
+    <Panel icon={<Radio size={17} />} title="Signals" description={`Latest ${SIGNAL_LIMIT} ${marketLabel(market)} signals.`} aside={<details className="quant-filter-menu"><summary>Filters{[status, strategy, timeframe, symbol].filter(Boolean).length ? ` (${[status, strategy, timeframe, symbol].filter(Boolean).length})` : ""}</summary><form className="quant-toolbar" onSubmit={(event) => { event.preventDefault(); setSymbol(symbolInput.trim().toUpperCase()); }}>
       <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace("_", " ")}</option>)}</select></label>
       <label><span>Strategy</span><select value={strategy} onChange={(event) => setStrategy(event.target.value)}><option value="">All strategies</option>{strategyOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
       <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframe(event.target.value)}><option value="">All timeframes</option>{timeframeOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
       <label><span>Symbol</span><input type="text" value={symbolInput} placeholder="Any symbol" onChange={(event) => setSymbolInput(event.target.value)} /></label>
       <button type="submit">Apply</button>
-    </form>}>
+    </form></details>}>
       {signals.loading ? <LoadingState label="Loading signals" /> : signals.error ? <RequestErrorState error={signals.error} retry={signals.reload} /> : !rows.length ? <EmptyState title="No signals" description={engine ? "No signals match the current filter." : "The signal engine has not reported for this market yet."} /> : <div className="quant-table-scroll tall"><table className="quant-table">
         <thead><tr><th>Symbol</th><th>Status</th><th>Candle</th><th className="numeric">Signal</th><th className="numeric">Target</th><th className="numeric">Stop</th><th className="numeric">Last</th><th>Expires</th><th>Exit</th><th>Reasons</th><th>Strategy</th></tr></thead>
         <tbody>{rows.map((signal) => <tr key={signal.signalId}>
@@ -87,7 +87,7 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
           <td className="numeric">{formatNumber(signal.lastPrice)}</td>
           <td>{formatDateTime(signal.expiresAt, market)}</td>
           <td>{signal.exitTimestamp ? <><span>{formatDateTime(signal.exitTimestamp, market)}</span><small>@ {formatNumber(signal.exitPrice)}</small></> : "—"}</td>
-          <td><div className="quant-tag-list">{(signal.reasons ?? []).map((reason) => <Tag key={reason}>{reason}</Tag>)}</div></td>
+          <td><div className="quant-tag-list">{(signal.reasons ?? []).map((reason) => <Tag key={reason}>{humanize(reason)}</Tag>)}</div></td>
           <td><StatusBadge tone={tone(signal.status)}>{signal.strategyId}{signal.strategyVersion ? ` v${signal.strategyVersion}` : ""}</StatusBadge></td>
         </tr>)}</tbody>
       </table></div>}

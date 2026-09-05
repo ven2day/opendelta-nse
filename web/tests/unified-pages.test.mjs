@@ -92,8 +92,9 @@ test("every unified route requires login and renders one topbar market selector"
 
   const settings = await fetchFromWorker(worker, "/settings", { headers: { accept: "text/html", cookie } });
   const settingsHtml = await settings.text();
-  assert.match(settingsHtml, /Global minimum price/);
-  assert.match(settingsHtml, /Global maximum price/);
+  assert.match(settingsHtml, /Strategy settings/);
+  assert.match(settingsHtml, /Connections and safety/);
+  assert.doesNotMatch(settingsHtml, /Global minimum price|Global maximum price/);
   assert.doesNotMatch(settingsHtml, /\/legacy\//, "settings no longer links to retired pages");
 
   // /admin was retired with the legacy shell and now redirects to the unified Settings workspace.
@@ -180,6 +181,9 @@ test("the backtest trade ledger preserves readable outcome columns", async () =>
 test("NSE paper positions identify the executable FIFO net target", async () => {
   const workspace = await readFile(new URL("../app/paper-trading/paper-workspace.tsx", import.meta.url), "utf8");
   assert.match(workspace, /"FIFO net target"/);
+  assert.match(workspace, /latest completed-candle mark/);
+  assert.match(workspace, /v2Post\(`paper\/lots\/\$\{lot\.lotId\}\/close`, \{\}/);
+  assert.doesNotMatch(workspace, /Close price for/);
 });
 
 test("workspace headers stay compact and the screener declares both markets", async () => {
@@ -202,16 +206,35 @@ test("workspace headers stay compact and the screener declares both markets", as
   assert.doesNotMatch(sources[1], /Crypto only/);
 });
 
-test("the screener uses a compact run ticket with partial JSON overrides", async () => {
+test("the screener uses one universe selector and a complete JSON configuration", async () => {
   const source = await readFile(new URL("../app/screener/screener-workspace.tsx", import.meta.url), "utf8");
-  assert.match(source, /<details className="quant-backtest-config">/);
-  assert.doesNotMatch(source, /<details className="quant-backtest-config" open/);
+  assert.match(source, /className="quant-json-editor"/);
   assert.match(source, /aria-label="Screener configuration JSON"/);
-  assert.match(source, /hasFilterOverride \? "Custom JSON" : "Defaults"/);
   assert.match(source, /validateConfigValues\(overrides, FILTER_SCHEMA/);
   assert.match(source, /Full \{marketLabel\(market\)\} market/);
   assert.doesNotMatch(source, /<SchemaForm/);
-  assert.doesNotMatch(source, /Keep all passing symbols/);
+  assert.doesNotMatch(source, />Rank by</);
+  assert.doesNotMatch(source, />Keep results</);
+  assert.doesNotMatch(source, />Manual includes</);
+  assert.match(source, /Save and activate/);
+});
+
+test("settings is JSON-first and does not duplicate global or market controls", async () => {
+  const source = await readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /aria-label="Strategy and paper execution JSON"/);
+  assert.match(source, /validateConfigValues\(strategy, strategySchema/);
+  assert.match(source, /validateConfigValues\(paperExecution, riskSchema/);
+  assert.doesNotMatch(source, /<SchemaForm/);
+  assert.doesNotMatch(source, /GlobalPriceRangeForm/);
+  assert.doesNotMatch(source, /MARKETS\.map/);
+  assert.doesNotMatch(source, /VALR/);
+  assert.match(source, /OKX public feed/);
+});
+
+test("signal filters stay collapsed and reason codes are humanized", async () => {
+  const source = await readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /<details className="quant-filter-menu">/);
+  assert.match(source, /<Tag key=\{reason\}>\{humanize\(reason\)\}<\/Tag>/);
 });
 
 test("screener and backtest use backend-owned ready-made NIFTY universes", async () => {

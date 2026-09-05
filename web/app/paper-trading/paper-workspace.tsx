@@ -26,7 +26,6 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
   const snapshot = useV2Resource(load, PAPER_REFRESH_MS);
   const { refresh } = snapshot;
   const [tab, setTab] = useState<"orders" | "trades">("orders");
-  const [closePrices, setClosePrices] = useState<Record<string, string>>({});
   const [closingLotId, setClosingLotId] = useState<string | null>(null);
   const [resetBalance, setResetBalance] = useState("");
   const [resetting, setResetting] = useState(false);
@@ -36,18 +35,12 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
   const currency = account?.currency ?? marketCurrency(market);
 
   const closeLot = async (lot: PaperLot) => {
-    const raw = closePrices[lot.lotId] ?? (lot.lastPrice != null ? String(lot.lastPrice) : "");
-    const price = Number(raw);
-    if (!raw || !Number.isFinite(price) || price <= 0) {
-      setNotice({ kind: "error", text: `Enter a valid close price for ${lot.symbol}.` });
-      return;
-    }
-    if (!window.confirm(`Close paper lot ${lot.symbol} (${formatNumber(lot.quantity, 4)} units) at ${formatMoney(price, market, currency)}? This is a simulated fill only.`)) return;
+    if (!window.confirm(`Close paper lot ${lot.symbol} (${formatNumber(lot.quantity, 4)} units) using its latest completed-candle mark? Paper fees and slippage will be applied.`)) return;
     setClosingLotId(lot.lotId);
     setNotice(null);
     try {
-      await v2Post(`paper/lots/${lot.lotId}/close`, { price }, { market });
-      setNotice({ kind: "success", text: `Paper lot ${lot.symbol} closed at ${formatMoney(price, market, currency)}.` });
+      await v2Post(`paper/lots/${lot.lotId}/close`, {}, { market });
+      setNotice({ kind: "success", text: `Paper lot ${lot.symbol} closed using the latest market mark.` });
       refresh();
     } catch (reason) {
       setNotice({ kind: "error", text: errorMessage(reason, "The paper lot could not be closed") });
@@ -100,7 +93,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
       </section>
       {notice && <Message kind={notice.kind}>{notice.text}</Message>}
 
-      <Panel icon={<Wallet size={17} />} title="Open positions" description="Open paper lots with live marks. Closing a lot records a simulated exit at the price you enter." aside={<StatusBadge tone="good">{formatInteger(snapshot.data.positions.length)} open</StatusBadge>}>
+      <Panel icon={<Wallet size={17} />} title="Open positions" description="Manual closes use the latest completed-candle mark and apply the configured paper fee and slippage model." aside={<StatusBadge tone="good">{formatInteger(snapshot.data.positions.length)} open</StatusBadge>}>
         {!snapshot.data.positions.length ? <EmptyState title="No open paper positions" description="Lots open automatically when the signal engine records a strong buy." /> : <div className="quant-table-scroll"><table className="quant-table">
           <thead><tr><th>Symbol</th><th className="numeric">Qty</th><th className="numeric">Entry</th><th className="numeric">Last</th><th className="numeric">{market === "NSE" ? "FIFO net target" : "Target"}</th><th className="numeric">Stop</th><th className="numeric">Unrealized</th><th className="numeric">MAE / MFE</th><th>Expires</th><th>Status</th><th>Manual close</th></tr></thead>
           <tbody>{snapshot.data.positions.map((lot) => <tr key={lot.lotId}>
@@ -114,7 +107,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
             <td className="numeric">{formatPercent(lot.maePct)} / {formatPercent(lot.mfePct)}</td>
             <td>{formatDateTime(lot.expiresAt, market)}</td>
             <td><StatusBadge tone={tone(lot.status)}>{lot.status}</StatusBadge></td>
-            <td><div className="quant-row-actions"><input type="number" step="any" min={0} inputMode="decimal" aria-label={`Close price for ${lot.symbol}`} value={closePrices[lot.lotId] ?? (lot.lastPrice != null ? String(lot.lastPrice) : "")} onChange={(event) => setClosePrices((current) => ({ ...current, [lot.lotId]: event.target.value }))} /><button type="button" className="danger" disabled={closingLotId === lot.lotId} onClick={() => void closeLot(lot)}>{closingLotId === lot.lotId ? "Closing…" : "Close"}</button></div></td>
+            <td><button type="button" className="danger" disabled={closingLotId === lot.lotId || !lot.lastPrice} onClick={() => void closeLot(lot)}>{closingLotId === lot.lotId ? "Closing…" : "Close at mark"}</button></td>
           </tr>)}</tbody>
         </table></div>}
       </Panel>
@@ -153,12 +146,12 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
         </table></div>)}
       </Panel>
 
-      <Panel icon={<Trash2 size={17} />} title="Reset paper account" description="Discards every simulated lot, order and fill for this market and restores the starting balance.">
-        <div className="quant-panel-body"><div className="quant-form-grid">
+      <details className="quant-danger-zone"><summary><Trash2 size={15} />Reset paper account</summary><Panel icon={<Trash2 size={17} />} title="Reset paper account" description="Discards every simulated lot, order and fill for this market and restores the starting balance.">
+        <div className="quant-panel-body"><div className="quant-form-grid quant-reset-grid">
           <label><span>Starting balance ({currency})</span><input type="number" min={0} step="any" inputMode="decimal" value={resetBalance} placeholder={account.startingBalance != null ? String(account.startingBalance) : "Platform default"} onChange={(event) => setResetBalance(event.target.value)} /><small>Leave empty to keep the current starting balance</small></label>
         </div></div>
         <div className="quant-form-actions"><button type="button" className="danger" disabled={resetting} onClick={() => void resetAccount()}><Trash2 size={14} />{resetting ? "Resetting…" : "Reset account"}</button><span>Asks for confirmation. Paper only; no broker account is affected.</span></div>
-      </Panel>
+      </Panel></details>
     </>}
   </main>;
 }

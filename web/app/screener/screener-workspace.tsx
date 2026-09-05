@@ -282,10 +282,11 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
           <td className="numeric">{formatNumber(row.score, 3)}</td>
         </tr>)}</tbody>
       </table></div> : <EmptyState title="No eligible candidates" description={selectedRun?.error || "Loosen the filters or widen the symbol list and run again."} />) : (rejectedRows.length ? <div className="quant-table-scroll tall"><table className="quant-table">
-        <thead><tr><th>Symbol</th><th>Rejection reason</th><th className="numeric">Price</th><th className="numeric">Traded value</th><th className="numeric">Volatility</th></tr></thead>
+        <thead><tr><th>Symbol</th><th>Rejection reason</th><th>Details</th><th className="numeric">Price</th><th className="numeric">Traded value</th><th className="numeric">Volatility</th></tr></thead>
         <tbody>{rejectedRows.map((row) => <tr key={row.symbol}>
           <td><strong>{row.symbol}</strong></td>
           <td>{row.rejectionReason ? humanize(row.rejectionReason) : "—"}</td>
+          <td>{typeof row.metrics?.error === "string" ? row.metrics.error : "—"}</td>
           <td className="numeric">{formatNumber(row.metrics?.lastPrice)}</td>
           <td className="numeric">{formatNumber(row.metrics?.averageTradedValue, 0)}</td>
           <td className="numeric">{formatPercent(row.metrics?.volatilityPct)}</td>

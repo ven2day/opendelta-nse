@@ -206,10 +206,23 @@ class ExitRuleTests(unittest.TestCase):
             self.assertGreaterEqual(fifo_target_return_pct(trade), 0.3)
 
     def test_invalid_execution_settings_are_rejected(self) -> None:
-        for bad in ({"stop_loss_pct": 0}, {"maximum_holding_bars": 0}, {"initial_quantity": 0}, {"additional_sizing_mode": "NOPE"}, {"unknownSetting": 1}):
+        for bad in ({"stop_loss_pct": 0}, {"maximum_holding_bars": 0}, {"initial_quantity": 0}, {"additional_sizing_mode": "NOPE"}, {"whole_units": False}, {"unknownSetting": 1}):
             with self.assertRaises(ValueError):
                 ExecutionSettings.from_mapping(bad)
         self.assertEqual(ExecutionSettings.from_mapping({"stopLossPct": 1.5, "maximumHoldingBars": 30}).stop_loss_pct, 1.5)
+
+    def test_crypto_execution_accepts_fractional_quantities(self) -> None:
+        execution = ExecutionSettings.from_mapping(
+            {"initialQuantity": 0.01, "minimumQuantity": 1e-8},
+            whole_units=False,
+        )
+
+        self.assertFalse(execution.whole_units)
+        self.assertEqual(execution.minimum_quantity, 1e-8)
+        self.assertEqual(execution.lot_quantity(0), 0.01)
+        self.assertEqual(execution.lot_quantity(1), 0.005)
+        with self.assertRaisesRegex(ValueError, "whole numbers"):
+            ExecutionSettings.from_mapping({"minimumQuantity": 1e-8})
 
 
 class ResilienceTests(unittest.TestCase):

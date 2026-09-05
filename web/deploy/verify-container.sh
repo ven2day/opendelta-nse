@@ -68,7 +68,7 @@ jq -e '
   .paperOnly == true and
   .liveOrdersEnabled == false and
   (.engines | type == "array") and
-  (.workers | type == "array")
+  (.workers | type == "object")
 ' "${dashboard_html}" >/dev/null
 echo "verified paper-only v2 signal health contract"
 

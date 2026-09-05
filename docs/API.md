@@ -35,13 +35,18 @@ configured or its schema is behind (`python -m backend.data.migrate`).
 | --- | --- | --- |
 | GET | `/v2/screener/filters` | Filter defaults, `rankBy` keys, markets. |
 | GET | `/v2/screener/presets?market=` | Backend-owned, dated symbol presets. NSE currently provides `nifty_50` and `nifty_top_20`; Crypto returns an empty list. |
-| POST | `/v2/screener/runs` | Body `{market, filters?, symbols?, presetId?}`; use either `presetId` or `symbols`, or omit both to screen the market's full catalogue. Returns 202 `{runId, status: RUNNING, …}`; poll. |
+| GET | `/v2/screener/profiles?market=` | Named watchlist rule profiles with immutable versions, newest first within each profile. |
+| POST | `/v2/screener/profiles` | Create profile v1: `{market, name, filters, sourceKind: MARKET|PRESET|CUSTOM, presetId?, symbols?}`. |
+| POST | `/v2/screener/profiles/{profileId}/versions` | Save the next immutable version. Existing versions and strategy watchlists are unchanged. |
+| POST | `/v2/screener/runs` | Body `{market, profileVersionId}` to run an exact saved version, or `{market, filters?, symbols?, presetId?}` for unsaved rules. Returns 202 `{runId, status: RUNNING, …}`; poll. |
 | GET | `/v2/screener/runs?market=&limit=` | Recent runs. |
 | GET | `/v2/screener/runs/{id}` | Run status, counts, filters. |
 | GET | `/v2/screener/runs/{id}/results?passed=` | `results[{symbol, passed, rank, score, rejectionReason, metrics}]`; every symbol is recorded with a pass or a reason (`PRICE_BELOW_MINIMUM`, `LIQUIDITY_BELOW_MINIMUM`, `INSUFFICIENT_CANDLE_COVERAGE`, `CANDLE_DATA_UNAVAILABLE`, `RANKED_OUT_BY_MAXIMUM_SYMBOLS`, …). |
 | POST | `/v2/screener/universes` | Body `{runId, name, maximumSymbols?, manualIncludes, manualExcludes, activate}` → 201 saved universe. |
 | GET | `/v2/screener/universes?market=` | Saved universes and the active one per market. |
 | POST | `/v2/screener/universes/{id}/activate` | Make it the universe consumed by Backtest and Signals. |
+
+A profile version freezes both the validated filter JSON and its starting universe source. A screener run records `profileVersionId`; saving its candidates creates a separate immutable symbol snapshot. Strategy deployments remain pinned to that saved watchlist until manually changed.
 
 Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTradedValue, minimumAverageVolume, minimumVolatilityPct, maximumVolatilityPct, minimumCandleCoverage, minimumSessions, rankBy (liquidity|volume|volatility|price|coverage), maximumSymbols (null = keep every passing symbol)`.
 

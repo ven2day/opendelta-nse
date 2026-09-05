@@ -324,7 +324,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
               <div className="quant-backtest-config-actions">
                 <button type="button" onClick={() => void navigator.clipboard.writeText(filterJson)}><Copy size={14} />Copy JSON</button>
                 <button type="button" onClick={() => { try { const parsed = parseFilterOverrides(filterJson); setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(parsed, null, 2) })); setRunNotice(null); } catch (reason) { setRunNotice({ kind: "error", text: errorMessage(reason, "Invalid screener configuration") }); } }}>Validate and format</button>
-                <button type="button" onClick={() => setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) })); markProfileDirty(); }}>Reset to defaults</button>
+                <button type="button" onClick={() => { setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) })); markProfileDirty(); }}>Reset to defaults</button>
               </div>
             </div>
           </details>

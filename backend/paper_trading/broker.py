@@ -180,7 +180,7 @@ class PaperBroker:
         )
         quantity = (
             ladder.quantity(entry_number, first_entry_price)
-            if ladder
+            if ladder and self.market.market == "NSE"
             else policy.lot_quantity(entry_number, reference_price)
         )
         fill = policy.buy(self.market.fees, reference_price, quantity)

@@ -399,7 +399,13 @@ class BacktestEngine:
         ladder = PriceBandLadder.from_config(config)
         indicative_fill_price = self.market.fees.buy(reference_price, 1).price
         first_price = cycle_first_entry_price or indicative_fill_price
-        quantity = ladder.quantity(entry_number, first_price) if ladder else execution.lot_quantity(entry_number)
+        # Price-band quantities are NSE share counts. Crypto keeps the RSI/dip
+        # ladder but takes quantity from its execution settings.
+        quantity = (
+            ladder.quantity(entry_number, first_price)
+            if ladder and self.market.market == "NSE"
+            else execution.lot_quantity(entry_number)
+        )
         fill = self.market.fees.buy(reference_price, quantity)
         if ladder is not None:
             if not ladder.within_capital(current_open_capital, fill.price, quantity):

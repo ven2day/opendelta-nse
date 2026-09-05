@@ -43,7 +43,7 @@ class RsiDipLadderV1:
     strategy_id = STRATEGY_ID
     name = STRATEGY_NAME
     version = STRATEGY_VERSION
-    supported_markets = ("NSE",)
+    supported_markets = ("NSE", "CRYPTO")
     supported_timeframes = ("5m", "15m", "30m", "1h", "4h", "1d")
     config_schema = CONFIG_SCHEMA
 

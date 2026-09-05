@@ -200,7 +200,7 @@ class SettingsRouteTests(unittest.TestCase):
         api = endpoints(create_settings_router(STRATEGIES))
         payload = api["GET /v2/strategies"](market="crypto")
         self.assertEqual(payload["markets"], ["NSE", "CRYPTO"])
-        self.assertEqual([item["strategyId"] for item in payload["strategies"]], ["ema_vwap_strong_buy"])
+        self.assertEqual([item["strategyId"] for item in payload["strategies"]], ["ema_vwap_strong_buy", "rsi_dip_ladder_v1"])
         schema = payload["strategies"][0]["configSchema"]
         self.assertEqual(schema["ema_fast"], {"type": "integer", "default": 9, "minimum": 1, "maximum": 499, "label": "Fast EMA length"})
         self.assertEqual(payload["strategies"][0]["defaults"]["target_pct"], 1.0)

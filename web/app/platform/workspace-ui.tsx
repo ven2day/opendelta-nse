@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { AlertTriangle, DatabaseZap, LoaderCircle } from "lucide-react";
 import { formatSignedMoney } from "./format";
 import type { PlatformMarket } from "./platform-client";
@@ -65,4 +65,34 @@ export function SymbolTags({ symbols, limit = 40 }: { symbols: string[]; limit?:
 
 export function Message({ kind, children }: { kind: "success" | "error"; children: ReactNode }) {
   return <p className={`quant-message ${kind}`} role={kind === "error" ? "alert" : "status"}>{children}</p>;
+}
+
+/** A minimal accessible dialog: click outside or press Escape to dismiss. */
+export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+  // Backdrop click-to-dismiss and the inner stopPropagation guard are decorative;
+  // Escape (handled above) is the real keyboard equivalent for closing the dialog.
+  /* eslint-disable jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */
+  return <div className="quant-modal-backdrop" role="presentation" onClick={onClose}>
+    <div className="quant-modal" role="dialog" aria-modal="true" aria-label={title} onClick={(event) => event.stopPropagation()}>
+      <h2>{title}</h2>
+      {children}
+    </div>
+  </div>;
+  /* eslint-enable jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */
+}
+
+/** Replaces window.confirm() with a styled confirmation dialog for destructive actions. */
+export function ConfirmDialog({ title, message, confirmLabel = "Confirm", danger, busy, onConfirm, onCancel }: { title: string; message: string; confirmLabel?: string; danger?: boolean; busy?: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return <Modal title={title} onClose={onCancel}>
+    <p className="quant-modal-message">{message}</p>
+    <div className="quant-modal-actions">
+      <button type="button" onClick={onCancel} disabled={busy}>Cancel</button>
+      <button type="button" className={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>{busy ? "Working…" : confirmLabel}</button>
+    </div>
+  </Modal>;
 }

@@ -8,7 +8,7 @@ import { compactValues, pickValues, schemaDefaults, schemaFromValues, validateCo
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
 import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
-import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { ConfirmDialog, EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
 const TRADES_POLL_MS = 6_000;
@@ -121,6 +121,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const [notice, setNotice] = useState<Notice>(null);
   const [selectedRunChoice, setSelectedRunChoice] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [tradeSymbolInput, setTradeSymbolInput] = useState("");
   const [tradeSymbol, setTradeSymbol] = useState("");
   const [tradeStatus, setTradeStatus] = useState("");
@@ -218,7 +219,8 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   };
 
   const cancel = async () => {
-    if (!run || !window.confirm(`Cancel backtest ${shortId(run.runId)}?`)) return;
+    setConfirmingCancel(false);
+    if (!run) return;
     setCancelling(true);
     try {
       await v2Delete(`backtests/${run.runId}`);
@@ -275,7 +277,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       </form>}
     </Panel>
 
-    <Panel icon={<Gauge size={17} />} title={run ? `Run ${shortId(run.runId)}` : "Run progress"} description={run ? `${run.strategyId} ${run.strategyVersion ? `v${run.strategyVersion}` : ""} · ${run.timeframe} signals${executionTimeframe && executionTimeframe !== run.timeframe ? ` · ${executionTimeframe} execution` : ""} · ${run.startDate} → ${run.endDate}` : "Select a run from the list below or start a new one."} aside={run && <div className="quant-toolbar"><StatusBadge tone={tone(run.status)}>{run.status}</StatusBadge>{runActive && <button type="button" className="danger" disabled={cancelling || run.cancelRequested} onClick={() => void cancel()}><Square size={13} />{run.cancelRequested ? "Cancelling…" : cancelling ? "Cancelling…" : "Cancel"}</button>}</div>}>
+    <Panel icon={<Gauge size={17} />} title={run ? `Run ${shortId(run.runId)}` : "Run progress"} description={run ? `${run.strategyId} ${run.strategyVersion ? `v${run.strategyVersion}` : ""} · ${run.timeframe} signals${executionTimeframe && executionTimeframe !== run.timeframe ? ` · ${executionTimeframe} execution` : ""} · ${run.startDate} → ${run.endDate}` : "Select a run from the list below or start a new one."} aside={run && <div className="quant-toolbar"><StatusBadge tone={tone(run.status)}>{run.status}</StatusBadge>{runActive && <button type="button" className="danger" disabled={cancelling || run.cancelRequested} onClick={() => setConfirmingCancel(true)}><Square size={13} />{run.cancelRequested ? "Cancelling…" : cancelling ? "Cancelling…" : "Cancel"}</button>}</div>}>
       {!selectedRunId ? <EmptyState title="No backtests yet" description="Start a backtest above; progress and metrics appear here." /> : runDetail.error ? <RequestErrorState error={runDetail.error} retry={runDetail.reload} /> : !run ? <LoadingState label="Loading run" /> : <>
         <div className="quant-progress-row">
           <div className="quant-progress"><span style={{ width: `${progressPct(run)}%` }} /></div>
@@ -372,5 +374,15 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
         </tr>)}</tbody>
       </table></div>}
     </Panel>
+
+    {confirmingCancel && run && <ConfirmDialog
+      title="Cancel backtest"
+      message={`Cancel backtest ${shortId(run.runId)}? Progress made so far will be discarded.`}
+      confirmLabel="Cancel backtest"
+      danger
+      busy={cancelling}
+      onConfirm={() => void cancel()}
+      onCancel={() => setConfirmingCancel(false)}
+    />}
   </main>;
 }

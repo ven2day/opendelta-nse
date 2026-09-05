@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { PaperAccount, PaperLot, PaperOrder, PaperTrade } from "../platform/v2-types";
-import { EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { ConfirmDialog, EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const PAPER_REFRESH_MS = 15_000;
 type Notice = { kind: "success" | "error"; text: string } | null;
@@ -27,15 +27,17 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
   const { refresh } = snapshot;
   const [tab, setTab] = useState<"orders" | "trades">("orders");
   const [closingLotId, setClosingLotId] = useState<string | null>(null);
+  const [pendingCloseLot, setPendingCloseLot] = useState<PaperLot | null>(null);
   const [resetBalance, setResetBalance] = useState("");
   const [resetting, setResetting] = useState(false);
+  const [pendingReset, setPendingReset] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
 
   const account = snapshot.data?.account ?? null;
   const currency = account?.currency ?? marketCurrency(market);
 
   const closeLot = async (lot: PaperLot) => {
-    if (!window.confirm(`Close paper lot ${lot.symbol} (${formatNumber(lot.quantity, 4)} units) using its latest completed-candle mark? Paper fees and slippage will be applied.`)) return;
+    setPendingCloseLot(null);
     setClosingLotId(lot.lotId);
     setNotice(null);
     try {
@@ -49,13 +51,18 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
     }
   };
 
-  const resetAccount = async () => {
+  const requestReset = () => {
     const startingBalance = resetBalance.trim() ? Number(resetBalance) : undefined;
     if (startingBalance !== undefined && (!Number.isFinite(startingBalance) || startingBalance <= 0)) {
       setNotice({ kind: "error", text: "Enter a positive starting balance or leave it empty to keep the current default." });
       return;
     }
-    if (!window.confirm(`Reset the ${marketLabel(market)} paper account? All simulated lots, orders and fills for this market are discarded.`)) return;
+    setPendingReset(true);
+  };
+
+  const resetAccount = async () => {
+    setPendingReset(false);
+    const startingBalance = resetBalance.trim() ? Number(resetBalance) : undefined;
     setResetting(true);
     setNotice(null);
     try {
@@ -107,7 +114,7 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
             <td className="numeric">{formatPercent(lot.maePct)} / {formatPercent(lot.mfePct)}</td>
             <td>{formatDateTime(lot.expiresAt, market)}</td>
             <td><StatusBadge tone={tone(lot.status)}>{lot.status}</StatusBadge></td>
-            <td><button type="button" className="danger" disabled={closingLotId === lot.lotId || !lot.lastPrice} onClick={() => void closeLot(lot)}>{closingLotId === lot.lotId ? "Closing…" : "Close at mark"}</button></td>
+            <td><button type="button" className="danger" disabled={closingLotId === lot.lotId || !lot.lastPrice} onClick={() => setPendingCloseLot(lot)}>{closingLotId === lot.lotId ? "Closing…" : "Close at mark"}</button></td>
           </tr>)}</tbody>
         </table></div>}
       </Panel>
@@ -150,8 +157,27 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
         <div className="quant-panel-body"><div className="quant-form-grid quant-reset-grid">
           <label><span>Starting balance ({currency})</span><input type="number" min={0} step="any" inputMode="decimal" value={resetBalance} placeholder={account.startingBalance != null ? String(account.startingBalance) : "Platform default"} onChange={(event) => setResetBalance(event.target.value)} /><small>Leave empty to keep the current starting balance</small></label>
         </div></div>
-        <div className="quant-form-actions"><button type="button" className="danger" disabled={resetting} onClick={() => void resetAccount()}><Trash2 size={14} />{resetting ? "Resetting…" : "Reset account"}</button><span>Asks for confirmation. Paper only; no broker account is affected.</span></div>
+        <div className="quant-form-actions"><button type="button" className="danger" disabled={resetting} onClick={requestReset}><Trash2 size={14} />{resetting ? "Resetting…" : "Reset account"}</button><span>Asks for confirmation. Paper only; no broker account is affected.</span></div>
       </Panel></details>
+
+      {pendingCloseLot && <ConfirmDialog
+        title="Close paper lot"
+        message={`Close paper lot ${pendingCloseLot.symbol} (${formatNumber(pendingCloseLot.quantity, 4)} units) using its latest completed-candle mark? Paper fees and slippage will be applied.`}
+        confirmLabel="Close lot"
+        danger
+        busy={closingLotId === pendingCloseLot.lotId}
+        onConfirm={() => void closeLot(pendingCloseLot)}
+        onCancel={() => setPendingCloseLot(null)}
+      />}
+      {pendingReset && <ConfirmDialog
+        title="Reset paper account"
+        message={`Reset the ${marketLabel(market)} paper account? All simulated lots, orders and fills for this market are discarded.`}
+        confirmLabel="Reset account"
+        danger
+        busy={resetting}
+        onConfirm={() => void resetAccount()}
+        onCancel={() => setPendingReset(false)}
+      />}
     </>}
   </main>;
 }

@@ -1,10 +1,10 @@
 "use client";
 
-import { Braces, Layers, ListChecks, LoaderCircle, Play, RefreshCw, Save, ScanSearch } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Layers, ListChecks, LoaderCircle, Play, RefreshCw, Save, ScanSearch } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, formatInteger, formatNumber, formatPercent, humanize, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
-import { compactValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
+import { SchemaForm, compactValues, schemaDefaults, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { ScreenerFiltersResponse, ScreenerResultsResponse, ScreenerRun, Universe, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
@@ -28,23 +28,6 @@ const FILTER_SCHEMA: ConfigSchema = {
   maximumSymbols: { type: "integer", minimum: 1 },
 };
 
-function isObject(value: unknown): value is ConfigValues {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseFilterOverrides(text: string): ConfigValues {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("Screener configuration is not valid JSON.");
-  }
-  if (!isObject(parsed)) throw new Error("Screener configuration must be a JSON object.");
-  const overrides = compactValues(parsed);
-  validateConfigValues(overrides, FILTER_SCHEMA, "filters");
-  return overrides;
-}
-
 function parseSymbols(text: string): string[] {
   return Array.from(new Set(text.split(/[\s,;]+/).map((symbol) => symbol.trim().toUpperCase()).filter(Boolean)));
 }
@@ -67,7 +50,7 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
 
   const [symbolSource, setSymbolSource] = useState("market");
   const [symbolsText, setSymbolsText] = useState("");
-  const [filterJsonEdits, setFilterJsonEdits] = useState<Record<PlatformMarket, string>>({ NSE: "", CRYPTO: "" });
+  const [filterValueEdits, setFilterValueEdits] = useState<Record<PlatformMarket, ConfigValues | undefined>>({ NSE: undefined, CRYPTO: undefined });
   const [submitting, setSubmitting] = useState(false);
   const [runNotice, setRunNotice] = useState<Notice>(null);
   const [pollingRunId, setPollingRunId] = useState<string | null>(null);
@@ -80,7 +63,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const [activatingId, setActivatingId] = useState<string | null>(null);
 
   const defaultFilters = filters.data?.defaults ?? {};
-  const filterJson = filterJsonEdits[market] || JSON.stringify(compactValues(defaultFilters), null, 2);
+  const filterSchema = useMemo<ConfigSchema>(() => ({ ...FILTER_SCHEMA, rankBy: { ...FILTER_SCHEMA.rankBy, enum: filters.data?.rankBy ?? [] } }), [filters.data?.rankBy]);
+  const filterValues = filterValueEdits[market] ?? schemaDefaults(filterSchema, defaultFilters);
   const selectedPreset = presets.data?.presets.find((preset) => preset.presetId === symbolSource) ?? null;
   const effectiveSymbolSource = symbolSource === "market" || symbolSource === "custom" || selectedPreset ? symbolSource : "market";
 
@@ -133,8 +117,8 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
     try {
       const symbols = effectiveSymbolSource === "custom" ? parseSymbols(symbolsText) : [];
       if (effectiveSymbolSource === "custom" && !symbols.length) throw new Error("Enter at least one symbol or use a ready-made universe.");
-      const configuration = parseFilterOverrides(filterJson);
-      if (configuration.rankBy !== undefined && !(filters.data?.rankBy ?? []).includes(String(configuration.rankBy))) throw new Error(`filters.rankBy must be one of: ${(filters.data?.rankBy ?? []).join(", ")}.`);
+      const configuration = compactValues(filterValues);
+      validateConfigValues(configuration, filterSchema, "filters");
       const body = {
         market,
         filters: configuration,
@@ -218,11 +202,10 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
             {effectiveSymbolSource === "custom" && <label className="symbols"><span>Custom symbols</span><input value={symbolsText} disabled={busy} placeholder={market === "NSE" ? "RELIANCE, TCS, INFY" : "BTC-USDT, ETH-USDT"} onChange={(event) => setSymbolsText(event.target.value)} /><small>{parseSymbols(symbolsText).length} symbols</small></label>}
           </div>
           <div className="quant-json-editor">
-            <div className="quant-json-editor-heading"><span><Braces size={15} />Screener JSON</span><small>Price, liquidity, volatility, quality, ranking and result limit.</small></div>
-              <textarea aria-label="Screener configuration JSON" spellCheck={false} value={filterJson} disabled={busy} onChange={(event) => setFilterJsonEdits((current) => ({ ...current, [market]: event.target.value }))} />
+            <div className="quant-json-editor-heading"><span><ScanSearch size={15} />Filters</span><small>Price, liquidity, volatility, quality, ranking and result limit.</small></div>
+              <SchemaForm schema={filterSchema} values={filterValues} disabled={busy} onChange={(next) => setFilterValueEdits((current) => ({ ...current, [market]: next }))} />
               <div className="quant-backtest-config-actions">
-                <button type="button" onClick={() => { try { const parsed = parseFilterOverrides(filterJson); setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(parsed, null, 2) })); setRunNotice(null); } catch (reason) { setRunNotice({ kind: "error", text: errorMessage(reason, "Invalid screener configuration") }); } }}>Validate and format</button>
-                <button type="button" onClick={() => setFilterJsonEdits((current) => ({ ...current, [market]: JSON.stringify(compactValues(defaultFilters), null, 2) }))}>Reset to defaults</button>
+                <button type="button" onClick={() => setFilterValueEdits((current) => ({ ...current, [market]: schemaDefaults(filterSchema, defaultFilters) }))}>Reset to defaults</button>
               </div>
           </div>
           {runNotice && <Message kind={runNotice.kind}>{runNotice.text}</Message>}

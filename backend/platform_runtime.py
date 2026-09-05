@@ -462,14 +462,14 @@ def _backtest_workers() -> int:
 
 
 def install_platform(
-    app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[], dict[str, Any]] | None = None
+    app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[str], dict[str, Any]] | None = None
 ) -> None:
     services = BacktestServices(registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner)
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(
         create_dashboard_router(
-            overview=overview or (lambda: {}),
+            overview=overview or (lambda _market: {}),
             screener_runs=lambda market: ScreenerRunRepository(runtime.require_database()).list(market, limit=1),
             backtest_runs=lambda market: runtime.runs().list(market, limit=5),
             engine_health=lambda market: {

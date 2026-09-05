@@ -12,7 +12,7 @@ from backend.data.database import DatabaseUnavailable
 
 def create_dashboard_router(
     *,
-    overview: Callable[[], dict[str, Any]],
+    overview: Callable[[str], dict[str, Any]],
     screener_runs: Callable[[str], list[dict[str, Any]]],
     backtest_runs: Callable[[str], list[dict[str, Any]]],
     engine_health: Callable[[str], dict[str, Any]],
@@ -37,7 +37,7 @@ def create_dashboard_router(
             raise HTTPException(status_code=422, detail="market must be NSE or CRYPTO")
         return {
             "market": key,
-            "marketData": _section(overview),
+            "marketData": _section(lambda: overview(key)),
             "screener": _section(lambda: {"latestRun": (screener_runs(key) or [None])[0], "activeUniverse": active_universe(key)}),
             "backtests": _section(lambda: {"recent": backtest_runs(key)}),
             "signalEngine": _section(lambda: engine_health(key)),

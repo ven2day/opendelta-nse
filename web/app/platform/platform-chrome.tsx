@@ -99,7 +99,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
     const load = async () => {
       if (document.visibilityState !== "visible") return;
       try {
-        const next = await platformGet<Overview>("overview");
+        const next = await platformGet<Overview>("overview", { market });
         if (!cancelled) {
           setOverview(next);
           setOverviewUnavailable(false);
@@ -122,7 +122,7 @@ export function PlatformChrome({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", refreshVisible);
       window.removeEventListener("focus", refreshVisible);
     };
-  }, [pathname, shellEnabled]);
+  }, [market, pathname, shellEnabled]);
 
   const marketClock = useMemo(() => (clock ? new Intl.DateTimeFormat("en-GB", {
     hour: "2-digit",

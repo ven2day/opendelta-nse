@@ -151,12 +151,18 @@ class SettingsRouteTests(unittest.TestCase):
 
 class DashboardRouteTests(unittest.TestCase):
     def test_dashboard_aggregates_every_section_and_degrades_per_section(self) -> None:
+        overview_markets: list[str] = []
+
+        def overview(market: str):
+            overview_markets.append(market)
+            return {"dataFreshness": {"status": "FRESH"}}
+
         def broken(market: str):
             raise DatabaseUnavailable("no database")
 
         api = endpoints(
             create_dashboard_router(
-                overview=lambda: {"dataFreshness": {"status": "FRESH"}},
+                overview=overview,
                 screener_runs=lambda market: [{"runId": "r1", "market": market, "status": "COMPLETE"}],
                 backtest_runs=lambda market: [],
                 engine_health=lambda market: {
@@ -170,6 +176,7 @@ class DashboardRouteTests(unittest.TestCase):
         )
         payload = api["GET /v2/dashboard"](market="crypto")
         self.assertEqual(payload["market"], "CRYPTO")
+        self.assertEqual(overview_markets, ["CRYPTO"])
         self.assertEqual(payload["marketData"]["data"]["dataFreshness"]["status"], "FRESH")
         self.assertEqual(payload["screener"]["data"]["latestRun"]["runId"], "r1")
         self.assertEqual(payload["screener"]["data"]["activeUniverse"]["name"], "Liquid")

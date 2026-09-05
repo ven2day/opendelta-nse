@@ -11,9 +11,9 @@ from datetime import datetime, timedelta
 import pandas as pd
 from fastapi import HTTPException
 
-from backend.api.screener_routes import SaveUniverseRequest, ScreenerRunRequest, ScreenerServices, create_screener_router
+from backend.api.screener_routes import SaveUniverseRequest, ScreenerRunRequest, ScreenerServices, WatchlistProfileRequest, WatchlistProfileVersionRequest, create_screener_router
 from backend.data.database import Database
-from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository
+from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository, WatchlistProfileRepository
 from backend.markets.base import CandleBatch, market_spec
 from backend.screener import ScreenerEngine, ScreenerFilters, rank_symbols
 from backend.screener.engine import apply_manual_selection, symbol_metrics
@@ -163,11 +163,11 @@ class FakeRuns:
     def __init__(self) -> None:
         self.records = {}
 
-    def create(self, *, market, filters, symbols_total):
+    def create(self, *, market, filters, symbols_total, profile_version_id=None):
         import uuid
 
         run_id = str(uuid.uuid4())
-        self.records[run_id] = {"runId": run_id, "market": market, "status": "RUNNING", "filters": filters, "symbolsTotal": symbols_total, "symbolsPassed": 0, "error": None}
+        self.records[run_id] = {"runId": run_id, "market": market, "status": "RUNNING", "filters": filters, "profileVersionId": profile_version_id, "symbolsTotal": symbols_total, "symbolsPassed": 0, "error": None}
         return dict(self.records[run_id])
 
     def get(self, run_id):
@@ -226,10 +226,52 @@ class FakeUniverses:
         return dict(target)
 
 
+class FakeProfiles:
+    def __init__(self) -> None:
+        self.profiles = []
+
+    def create(self, *, market, name, filters, source_kind, preset_id=None, symbols=()):
+        import uuid
+
+        profile_id = str(uuid.uuid4())
+        version = {
+            "profileVersionId": str(uuid.uuid4()), "profileId": profile_id, "market": market, "name": name,
+            "version": 1, "filters": dict(filters), "sourceKind": source_kind, "presetId": preset_id,
+            "symbols": list(symbols), "createdAt": "2026-09-05T00:00:00+00:00",
+        }
+        self.profiles.append({"profileId": profile_id, "market": market, "name": name, "versions": [version]})
+        return dict(version)
+
+    def add_version(self, profile_id, *, filters, source_kind, preset_id=None, symbols=()):
+        import uuid
+
+        profile = next(item for item in self.profiles if item["profileId"] == profile_id)
+        version = {
+            "profileVersionId": str(uuid.uuid4()), "profileId": profile_id, "market": profile["market"], "name": profile["name"],
+            "version": len(profile["versions"]) + 1, "filters": dict(filters), "sourceKind": source_kind,
+            "presetId": preset_id, "symbols": list(symbols), "createdAt": "2026-09-05T00:01:00+00:00",
+        }
+        profile["versions"].insert(0, version)
+        return dict(version)
+
+    def get(self, profile_id):
+        profile = next(item for item in self.profiles if item["profileId"] == profile_id)
+        return {key: profile[key] for key in ("profileId", "market", "name")}
+
+    def get_version(self, profile_version_id):
+        return dict(next(version for profile in self.profiles for version in profile["versions"] if version["profileVersionId"] == profile_version_id))
+
+    def list(self, market=None, *, limit=100):
+        return [
+            {"profileId": profile["profileId"], "market": profile["market"], "name": profile["name"], "versions": [dict(version) for version in profile["versions"]]}
+            for profile in self.profiles if market is None or profile["market"] == market
+        ][:limit]
+
+
 class RouteTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.runs, self.results, self.universes = FakeRuns(), FakeResults(), FakeUniverses()
-        self.services = ScreenerServices(runs=lambda: self.runs, results=lambda: self.results, universes=lambda: self.universes, engine_for=lambda market: engine(), catalogue_for=lambda market: SYMBOLS)
+        self.runs, self.results, self.universes, self.profiles = FakeRuns(), FakeResults(), FakeUniverses(), FakeProfiles()
+        self.services = ScreenerServices(runs=lambda: self.runs, results=lambda: self.results, universes=lambda: self.universes, profiles=lambda: self.profiles, engine_for=lambda market: engine(), catalogue_for=lambda market: SYMBOLS)
         self.api = endpoints(create_screener_router(self.services))
 
     def tearDown(self) -> None:
@@ -262,6 +304,30 @@ class RouteTests(unittest.TestCase):
         activated = self.api["POST /v2/screener/universes/{universe_id}/activate"](second["universeId"])
         self.assertTrue(activated["active"])
         self.assertFalse(self.universes.saved[0]["active"])
+
+    def test_named_profile_versions_are_immutable_and_can_run(self) -> None:
+        first = self.api["POST /v2/screener/profiles"](WatchlistProfileRequest(
+            market="NSE", name="Intraday quality", filters={"minimumSessions": 5, "maximumSymbols": 2},
+            sourceKind="CUSTOM", symbols=["BLUE", "MID"],
+        ))
+        self.assertEqual((first["name"], first["version"], first["sourceKind"]), ("Intraday quality", 1, "CUSTOM"))
+        second = self.api["POST /v2/screener/profiles/{profile_id}/versions"](
+            first["profileId"],
+            WatchlistProfileVersionRequest(filters={"minimumSessions": 5}, sourceKind="CUSTOM", symbols=["BLUE"]),
+        )
+        self.assertEqual(second["version"], 2)
+        listed = self.api["GET /v2/screener/profiles"](market="NSE", limit=10)["profiles"]
+        self.assertEqual([item["version"] for item in listed[0]["versions"]], [2, 1])
+
+        started = self.api["POST /v2/screener/runs"](ScreenerRunRequest(market="NSE", profileVersionId=second["profileVersionId"]))
+        finished = self._wait(started["runId"])
+        self.assertEqual((finished["symbolsTotal"], finished["profileVersionId"]), (1, second["profileVersionId"]))
+
+        with self.assertRaises(HTTPException) as mixed:
+            self.api["POST /v2/screener/runs"](ScreenerRunRequest(
+                market="NSE", profileVersionId=second["profileVersionId"], filters={"minimumSessions": 1},
+            ))
+        self.assertEqual(mixed.exception.status_code, 422)
 
     def test_validation_and_not_found(self) -> None:
         with self.assertRaises(HTTPException) as bad_filter:
@@ -325,6 +391,28 @@ class ScreenerDatabaseTests(unittest.TestCase):
         self.assertEqual(universes.active("NSE")["universeId"], universe["universeId"])
         self.assertIsNone(universes.active("CRYPTO"))
         self.assertEqual(runs.list("NSE")[0]["runId"], record["runId"])
+
+    def test_watchlist_profile_versions_round_trip_without_overwrite(self) -> None:
+        profiles = WatchlistProfileRepository(self.database)
+        first = profiles.create(
+            market="NSE", name="Intraday quality", filters={"lookbackDays": 30},
+            source_kind="PRESET", preset_id="nifty_50",
+        )
+        second = profiles.add_version(
+            first["profileId"], filters={"lookbackDays": 40}, source_kind="CUSTOM", symbols=["TCS", "RELIANCE"],
+        )
+        self.assertEqual((first["version"], second["version"]), (1, 2))
+        self.assertEqual(profiles.get_version(first["profileVersionId"])["filters"], {"lookbackDays": 30})
+        self.assertEqual(profiles.get_version(second["profileVersionId"])["symbols"], ["TCS", "RELIANCE"])
+        listed = profiles.list("NSE")
+        self.assertEqual([item["version"] for item in listed[0]["versions"]], [2, 1])
+
+        runs = ScreenerRunRepository(self.database)
+        run = runs.create(
+            market="NSE", filters=second["filters"], symbols_total=2,
+            profile_version_id=second["profileVersionId"],
+        )
+        self.assertEqual(run["profileVersionId"], second["profileVersionId"])
 
     def test_restart_recovery_marks_running_screener_runs_failed(self) -> None:
         runs = ScreenerRunRepository(self.database)

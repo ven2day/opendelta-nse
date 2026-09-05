@@ -111,6 +111,48 @@ test("the market switcher keeps the current page and carries the market into nav
   await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("href", "/signals?market=CRYPTO");
 });
 
+test("strategies adds a configured instrument with one compact control", async ({ page }) => {
+  await page.unroute("**/api/platform?**");
+  await page.unroute("**/api/v2/**");
+  let added: unknown;
+  await page.route("**/api/platform?**", async (route) => {
+    const request = route.request();
+    const parameters = new URL(request.url()).searchParams;
+    if (parameters.get("action") === "overview") return route.fulfill({ json: { ...overview, environment: "CRYPTO" } });
+    if (parameters.get("action") === "instruments" && request.method() === "GET") return route.fulfill({ json: { rows: [], count: 0, offset: 0, limit: 1 } });
+    if (parameters.get("action") === "add-instrument" && request.method() === "POST") {
+      added = request.postDataJSON();
+      return route.fulfill({ json: { instrument: { providerSymbol: "BTC-USDT" } } });
+    }
+    return route.fulfill({ status: 404, json: { detail: "Unexpected platform route" } });
+  });
+  await page.route("**/api/v2/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const strategy = { strategyId: "rsi_dip_ladder", name: "RSI Dip Ladder", version: "1.0.0", supportedMarkets: ["CRYPTO"], supportedTimeframes: ["5m"], configSchema: {}, defaults: {} };
+    if (path.endsWith("/strategies")) return route.fulfill({ json: { strategies: [strategy], markets: ["NSE", "CRYPTO"], riskDefaults: {}, riskSchema: {} } });
+    if (path.endsWith("/strategy-deployments")) return route.fulfill({ json: { deployments: [] } });
+    if (path.endsWith("/screener/universes")) return route.fulfill({ json: { active: {}, universes: [] } });
+    if (path.endsWith("/strategies/rsi_dip_ladder/config")) return route.fulfill({ json: { strategyId: strategy.strategyId, market: "CRYPTO", active: null, effectiveConfiguration: {}, effectiveRiskSettings: {}, all: [] } });
+    if (path.endsWith("/strategies/rsi_dip_ladder/deployment")) return route.fulfill({ json: { market: "CRYPTO", strategyId: strategy.strategyId, timeframe: "5m", mode: "OFF" } });
+    return route.fulfill({ status: 404, json: { detail: "Unexpected v2 route" } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings?market=CRYPTO");
+  const disclosure = page.getByText("Instrument setup", { exact: true });
+  await expect(page.getByPlaceholder("BTC-USDT")).toBeHidden();
+  await disclosure.click();
+  const input = page.getByPlaceholder("BTC-USDT");
+  const button = page.getByRole("button", { name: "Add symbol" });
+  await expect(input).toBeVisible();
+  const tops = await Promise.all([input, button].map((control) => control.evaluate((element) => Math.round(element.getBoundingClientRect().top))));
+  expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
+  await input.fill("btc-usdt");
+  await button.click();
+  await expect(page.getByText("BTC-USDT is now available to watchlists, backtests and strategies.")).toBeVisible();
+  expect(added).toEqual({ market: "CRYPTO", symbol: "BTC-USDT" });
+});
+
 test("backtest ticket is compact and trade controls filter and sort the full result", async ({ page }) => {
   await page.unroute("**/api/v2/**");
   const tradeRequests: URL[] = [];

@@ -107,6 +107,8 @@ test("the v2 proxy refuses anonymous and malformed requests before touching the 
   const worker = await loadWorker();
   const anonymous = await fetchFromWorker(worker, "/api/v2/dashboard?market=NSE");
   assert.equal(anonymous.status, 401);
+  const anonymousInstrument = await fetchFromWorker(worker, "/api/platform?action=add-instrument", { method: "POST" });
+  assert.equal(anonymousInstrument.status, 401);
 
   const cookie = await login(worker);
   const traversal = await fetchFromWorker(worker, "/api/v2/..%2Fplatform", { headers: { cookie } });
@@ -115,6 +117,12 @@ test("the v2 proxy refuses anonymous and malformed requests before touching the 
   const unconfigured = await fetchFromWorker(worker, "/api/v2/dashboard?market=NSE", { headers: { cookie } });
   assert.equal(unconfigured.status, 503);
   assert.match((await unconfigured.json()).detail, /not configured/);
+  const unconfiguredInstrument = await fetchFromWorker(worker, "/api/platform?action=add-instrument", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({ market: "CRYPTO", symbol: "BTC-USDT" }),
+  });
+  assert.equal(unconfiguredInstrument.status, 503);
 });
 
 test("the unified navigation and proxy are wired exactly once", async () => {
@@ -268,7 +276,10 @@ test("the six workspaces keep primary work visible and secondary detail collapse
 });
 
 test("settings is JSON-first and does not duplicate global or market controls", async () => {
-  const source = await readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8");
+  const [source, proxy] = await Promise.all([
+    readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/platform/route.ts", import.meta.url), "utf8"),
+  ]);
   assert.match(source, /aria-label="Strategy and paper execution JSON"/);
   assert.match(source, /validateConfigValues\(strategy, strategySchema/);
   assert.match(source, /validateConfigValues\(paperExecution, riskSchema/);
@@ -284,6 +295,11 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.match(source, /universeId: universeId \|\| null/);
   assert.match(source, />Watchlist</);
   assert.match(source, /Existing paper positions continue to be monitored/);
+  assert.match(source, /<Plus size=\{15\} \/>Instrument setup/);
+  assert.doesNotMatch(source, /Instrument setup<\/span>[\s\S]*?<details[^>]+open/);
+  assert.match(source, /platformPost<InstrumentAddResponse>\("add-instrument", \{ market, symbol \}\)/);
+  assert.match(proxy, /market === "NSE" \? "\/market-data\/symbols" : "\/crypto\/instruments"/);
+  assert.match(proxy, /\{ provider: "OKX", providerSymbol: symbol \}/);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

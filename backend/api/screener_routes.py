@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
-from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository
+from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository, WatchlistProfileRepository
 from backend.data.universe_presets import get_universe_preset, list_universe_presets
 from backend.screener.engine import ScreenerEngine, apply_manual_selection
 from backend.screener.filters import ScreenerFilters
@@ -26,6 +26,19 @@ class ScreenerRunRequest(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
     symbols: list[str] | None = Field(default=None, max_length=5_000)  # None = the market's full catalogue
     presetId: str | None = Field(default=None, min_length=1, max_length=80)
+    profileVersionId: str | None = None
+
+
+class WatchlistProfileVersionRequest(BaseModel):
+    filters: dict[str, Any] = Field(default_factory=dict)
+    sourceKind: str = Field(pattern="^(MARKET|PRESET|CUSTOM)$")
+    presetId: str | None = Field(default=None, min_length=1, max_length=80)
+    symbols: list[str] = Field(default_factory=list, max_length=5_000)
+
+
+class WatchlistProfileRequest(WatchlistProfileVersionRequest):
+    market: str = Field(pattern="^(NSE|CRYPTO)$")
+    name: str = Field(min_length=1, max_length=120)
 
 
 class SaveUniverseRequest(BaseModel):
@@ -44,6 +57,7 @@ class ScreenerServices:
         runs: Callable[[], ScreenerRunRepository],
         results: Callable[[], ScreenerResultRepository],
         universes: Callable[[], SavedUniverseRepository],
+        profiles: Callable[[], WatchlistProfileRepository],
         engine_for: Callable[[str], ScreenerEngine],
         catalogue_for: Callable[[str], list[str]],
         max_workers: int = 1,
@@ -51,13 +65,14 @@ class ScreenerServices:
         self.runs = runs
         self.results = results
         self.universes = universes
+        self.profiles = profiles
         self.engine_for = engine_for
         self.catalogue_for = catalogue_for
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="screener")
         self._cancel: dict[str, threading.Event] = {}
 
-    def start(self, market: str, filters: ScreenerFilters, symbols: list[str]) -> dict[str, Any]:
-        record = self.runs().create(market=market, filters=filters.public(), symbols_total=len(symbols))
+    def start(self, market: str, filters: ScreenerFilters, symbols: list[str], *, profile_version_id: str | None = None) -> dict[str, Any]:
+        record = self.runs().create(market=market, filters=filters.public(), symbols_total=len(symbols), profile_version_id=profile_version_id)
         event = threading.Event()
         self._cancel[record["runId"]] = event
         self._executor.submit(self._execute, record["runId"], market, filters, symbols, event)
@@ -98,6 +113,41 @@ def create_screener_router(services: ScreenerServices) -> APIRouter:
         except DatabaseUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
+    def _validated_filters(values: dict[str, Any]) -> ScreenerFilters:
+        try:
+            return ScreenerFilters.from_mapping(values)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    def _profile_source(market: str, source_kind: str, preset_id: str | None, symbols: list[str]) -> tuple[str, str | None, list[str]]:
+        kind = source_kind.strip().upper()
+        normalised = list(dict.fromkeys(item.strip().upper() for item in symbols if item.strip()))
+        if kind == "MARKET":
+            if preset_id is not None or normalised:
+                raise HTTPException(status_code=422, detail="MARKET profiles cannot include presetId or symbols")
+            return kind, None, []
+        if kind == "PRESET":
+            if preset_id is None or normalised:
+                raise HTTPException(status_code=422, detail="PRESET profiles require presetId and cannot include symbols")
+            try:
+                get_universe_preset(preset_id, market)
+            except KeyError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            return kind, preset_id, []
+        if kind == "CUSTOM":
+            if preset_id is not None or not normalised:
+                raise HTTPException(status_code=422, detail="CUSTOM profiles require symbols and cannot include presetId")
+            return kind, None, normalised
+        raise HTTPException(status_code=422, detail="sourceKind must be MARKET, PRESET or CUSTOM")
+
+    def _profile_symbols(market: str, source_kind: str, preset_id: str | None, symbols: list[str]) -> list[str]:
+        if source_kind == "MARKET":
+            return _guard(lambda: services.catalogue_for(market))
+        if source_kind == "PRESET":
+            assert preset_id is not None
+            return get_universe_preset(preset_id, market).symbols
+        return symbols
+
     @router.get("/filters")
     def describe_filters() -> dict[str, Any]:
         return {"defaults": ScreenerFilters().public(), "rankBy": sorted(RANKING_KEYS), "markets": list(MARKETS)}
@@ -107,27 +157,72 @@ def create_screener_router(services: ScreenerServices) -> APIRouter:
         key = _market(market) if market else None
         return {"presets": [preset.public() for preset in list_universe_presets(key)]}
 
+    @router.get("/profiles")
+    def list_profiles(market: str | None = Query(default=None), limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+        key = _market(market) if market else None
+        return {"profiles": _guard(services.profiles).list(key, limit=limit)}
+
+    @router.post("/profiles", status_code=201)
+    def create_profile(request: WatchlistProfileRequest) -> dict[str, Any]:
+        market = _market(request.market)
+        filters = _validated_filters(request.filters)
+        source_kind, preset_id, symbols = _profile_source(market, request.sourceKind, request.presetId, request.symbols)
+        name = request.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Watchlist profile name is required")
+        try:
+            return _guard(services.profiles).create(
+                market=market, name=name, filters=filters.public(), source_kind=source_kind,
+                preset_id=preset_id, symbols=symbols,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.post("/profiles/{profile_id}/versions", status_code=201)
+    def create_profile_version(profile_id: str, request: WatchlistProfileVersionRequest) -> dict[str, Any]:
+        try:
+            profile = _guard(services.profiles).get(profile_id)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=404, detail="Watchlist profile was not found") from error
+        filters = _validated_filters(request.filters)
+        source_kind, preset_id, symbols = _profile_source(profile["market"], request.sourceKind, request.presetId, request.symbols)
+        return _guard(services.profiles).add_version(
+            profile_id, filters=filters.public(), source_kind=source_kind, preset_id=preset_id, symbols=symbols,
+        )
+
     @router.post("/runs", status_code=202)
     def start_run(request: ScreenerRunRequest) -> dict[str, Any]:
         market = _market(request.market)
-        if request.presetId is not None and request.symbols is not None:
-            raise HTTPException(status_code=422, detail="Use either presetId or symbols, not both")
-        try:
-            filters = ScreenerFilters.from_mapping(request.filters)
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        if request.presetId is not None:
+        profile_version_id: str | None = None
+        if request.profileVersionId is not None:
+            if request.filters or request.presetId is not None or request.symbols is not None:
+                raise HTTPException(status_code=422, detail="A profileVersionId cannot be combined with filters, presetId or symbols")
             try:
-                requested_symbols = get_universe_preset(request.presetId, market).symbols
-            except KeyError as error:
-                raise HTTPException(status_code=422, detail=str(error)) from error
+                profile_version = _guard(services.profiles).get_version(request.profileVersionId)
+            except (KeyError, ValueError) as error:
+                raise HTTPException(status_code=404, detail="Watchlist profile version was not found") from error
+            if profile_version["market"] != market:
+                raise HTTPException(status_code=422, detail=f"Watchlist profile version belongs to {profile_version['market']}, not {market}")
+            filters = _validated_filters(profile_version["filters"])
+            requested_symbols = _profile_symbols(
+                market, profile_version["sourceKind"], profile_version["presetId"], profile_version["symbols"],
+            )
+            profile_version_id = profile_version["profileVersionId"]
         else:
-            requested_symbols = request.symbols if request.symbols is not None else _guard(lambda: services.catalogue_for(market))
-        symbols = [symbol.strip().upper() for symbol in requested_symbols if symbol.strip()]
-        symbols = list(dict.fromkeys(symbols))
+            if request.presetId is not None and request.symbols is not None:
+                raise HTTPException(status_code=422, detail="Use either presetId or symbols, not both")
+            filters = _validated_filters(request.filters)
+            if request.presetId is not None:
+                try:
+                    requested_symbols = get_universe_preset(request.presetId, market).symbols
+                except KeyError as error:
+                    raise HTTPException(status_code=422, detail=str(error)) from error
+            else:
+                requested_symbols = request.symbols if request.symbols is not None else _guard(lambda: services.catalogue_for(market))
+        symbols = list(dict.fromkeys(symbol.strip().upper() for symbol in requested_symbols if symbol.strip()))
         if not symbols:
             raise HTTPException(status_code=422, detail="The symbol universe is empty")
-        return _guard(lambda: services.start(market, filters, symbols))
+        return _guard(lambda: services.start(market, filters, symbols, profile_version_id=profile_version_id))
 
     @router.get("/runs")
     def list_runs(market: str | None = Query(default=None), limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:

@@ -540,11 +540,31 @@
 .quant-screener-purpose { border-color: var(--od-border); background: var(--od-surface); }
 .quant-screener-purpose > strong { flex: none; }
 .quant-screener-purpose > span { flex: 1; }
+.quant-dashboard-workspace .quant-workspace-header {
+  padding-bottom: 6px;
+}
+.quant-dashboard-workspace .quant-workspace-header h1 {
+  font-size: 23px;
+}
+.quant-dashboard-workspace .quant-overview-strip > div {
+  gap: 2px;
+  padding: 7px 10px;
+}
+.quant-dashboard-workspace .quant-panel-heading {
+  min-height: 42px;
+  padding: 7px 10px;
+}
+.quant-dashboard-workspace .quant-primary-panel .quant-panel-heading p {
+  display: none;
+}
 .quant-dashboard-workspace .quant-portfolio-hero {
-  grid-template-columns: minmax(260px, .75fr) minmax(520px, 1.6fr);
-  align-items: end;
-  gap: 18px 28px;
-  padding: 16px 18px;
+  grid-template-columns: minmax(220px, .6fr) minmax(520px, 2fr);
+  align-items: center;
+  gap: 8px 20px;
+  padding: 10px 14px;
+}
+.quant-dashboard-workspace .quant-portfolio-value strong {
+  font-size: clamp(24px, 2.2vw, 31px);
 }
 .quant-dashboard-workspace .quant-portfolio-hero > .quant-table-scroll,
 .quant-dashboard-workspace .quant-portfolio-hero > .quant-compact-empty { grid-column: 1 / -1; }
@@ -552,8 +572,20 @@
 .quant-dashboard-workspace .quant-compact-empty .quant-state.empty {
   min-height: 0;
   justify-content: flex-start;
-  padding: 12px 0 0;
+  padding: 7px 0 0;
   text-align: left;
+}
+.quant-dashboard-workspace .quant-compact-empty .quant-state.empty > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.quant-dashboard-workspace .quant-compact-empty .quant-state.empty span {
+  font-size: 11px;
+}
+.quant-dashboard-workspace > .quant-panel > .quant-state.empty {
+  min-height: 58px;
+  padding: 10px 12px;
 }
 .quant-backtest-results { display: grid; gap: 14px; }
 .quant-backtest-summary { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(520px, 2fr); align-items: end; gap: 28px; padding: 8px 2px; }

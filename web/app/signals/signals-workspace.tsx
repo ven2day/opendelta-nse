@@ -34,7 +34,7 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
   const timeframeOptions = Array.from(new Set([...workers.map((item) => item.timeframe), ...rows.map((item) => item.timeframe)].filter((item): item is string => Boolean(item))));
   const readyWorkers = workers.filter((item) => item.status === "READY").length;
   const symbols = new Set(workers.flatMap((item) => item.symbols ?? []));
-  const counts = rows.reduce<Record<string, number>>((accumulator, signal) => ({ ...accumulator, [signal.status]: (accumulator[signal.status] ?? 0) + 1 }), {});
+  const created = workers.reduce((total, item) => total + (item.signalsCreated ?? 0), 0);
 
   return <main className="quant-workspace">
     <WorkspaceHeader
@@ -43,30 +43,12 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { health.refresh(); signals.refresh(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
 
-    {health.error ? <RequestErrorState error={health.error} retry={health.reload} /> : <div className="quant-health-bar" role="status" aria-label="Signal engine health">
-      <div><span>Workers</span><strong>{health.loading ? "Checking" : `${readyWorkers} / ${workers.length} ready`}</strong><small>{workers.length ? "Independent strategy/timeframe workers" : stored.length ? "Last stored heartbeats" : "No engine report for this market"}</small></div>
-      <div><span>Connection</span><strong>{workers.length && workers.every((item) => item.connectionStatus === "CONNECTED") ? "CONNECTED" : (engine?.connectionStatus ?? "—")}</strong></div>
-      <div><span>Data age</span><strong>{formatAge(engine?.dataAgeSeconds)}</strong></div>
-      <div><span>Last completed candle</span><strong>{formatDateTime(engine?.lastCompletedCandle, market)}</strong></div>
-      <div><span>Symbols</span><strong>{workers.length ? formatInteger(symbols.size) : "—"}</strong></div>
-      <div><span>Created / duplicates</span><strong>{formatInteger(workers.reduce((total, item) => total + (item.signalsCreated ?? 0), 0))} / {formatInteger(workers.reduce((total, item) => total + (item.duplicatesRejected ?? 0), 0))}</strong></div>
-      <div><span>Message</span><strong title={engine?.message ?? undefined}>{workers.length ? `${workers.length} active strategy worker${workers.length === 1 ? "" : "s"}` : (engine?.message ?? "—")}</strong><small>{stored[0]?.updatedAt ? `Stored ${formatDateTime(stored[0].updatedAt, market)}` : ""}</small></div>
-    </div>}
-
-    <Panel icon={<Activity size={17} />} title="Active signal strategies">
-      {workers.length ? <div className="quant-table-scroll"><table className="quant-table">
-        <thead><tr><th>Strategy</th><th>Timeframe</th><th>Status</th><th>Connection</th><th>Last completed candle</th><th className="numeric">Signals</th></tr></thead>
-        <tbody>{workers.map((item) => <tr key={item.engine ?? `${item.strategyId}:${item.timeframe}`}>
-          <td><strong>{item.strategyId}</strong><small>{item.strategyVersion ? `v${item.strategyVersion}` : ""}</small></td>
-          <td>{item.timeframe}</td><td><StatusBadge tone={tone(item.status)}>{item.status ?? "unknown"}</StatusBadge></td>
-          <td>{item.connectionStatus ?? "—"}</td><td>{formatDateTime(item.lastCompletedCandle, market)}</td><td className="numeric">{formatInteger(item.signalsCreated)}</td>
-        </tr>)}</tbody>
-      </table></div> : <EmptyState title="No active strategy workers" description="Enable at least one live strategy for this market." />}
-    </Panel>
-
-    <section className="quant-kpi-grid dense">
-      {STATUS_OPTIONS.map((option) => <article key={option}><span className="quant-signal-status" data-colour={colours[option] ?? "grey"}>{option.replace("_", " ")}</span><strong>{formatInteger(counts[option] ?? 0)}</strong></article>)}
-    </section>
+    {health.error ? <RequestErrorState error={health.error} retry={health.reload} /> : <section className="quant-overview-strip" role="status" aria-label="Signal engine overview">
+      <div><span>Engine</span><strong>{health.loading ? "Checking" : `${readyWorkers} / ${workers.length} ready`}</strong><small>{workers.length ? `${formatInteger(symbols.size)} symbols` : "No worker report"}</small></div>
+      <div><span>Connection</span><strong>{workers.length && workers.every((item) => item.connectionStatus === "CONNECTED") ? "Connected" : humanize(engine?.connectionStatus ?? "Unavailable")}</strong><small>Data age {formatAge(engine?.dataAgeSeconds)}</small></div>
+      <div><span>Last candle</span><strong>{formatDateTime(engine?.lastCompletedCandle, market)}</strong><small>{engine?.timeframe ?? "—"}</small></div>
+      <div><span>Signals created</span><strong>{formatInteger(created)}</strong><small>All active workers</small></div>
+    </section>}
 
     <Panel icon={<Radio size={17} />} title="Signals" description={`Latest ${SIGNAL_LIMIT} ${marketLabel(market)} signals.`} aside={<details className="quant-filter-menu"><summary>Filters{[status, strategy, timeframe, symbol].filter(Boolean).length ? ` (${[status, strategy, timeframe, symbol].filter(Boolean).length})` : ""}</summary><form className="quant-toolbar" onSubmit={(event) => { event.preventDefault(); setSymbol(symbolInput.trim().toUpperCase()); }}>
       <label><span>Status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option>{STATUS_OPTIONS.map((option) => <option key={option} value={option}>{option.replace("_", " ")}</option>)}</select></label>
@@ -92,6 +74,17 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
         </tr>)}</tbody>
       </table></div>}
     </Panel>
+    <details className="quant-secondary-disclosure">
+      <summary><span><Activity size={15} />Worker diagnostics</span><small>{workers.length} active strategy worker{workers.length === 1 ? "" : "s"}</small></summary>
+      {workers.length ? <div className="quant-table-scroll"><table className="quant-table">
+        <thead><tr><th>Strategy</th><th>Timeframe</th><th>Status</th><th>Connection</th><th>Last completed candle</th><th className="numeric">Signals</th></tr></thead>
+        <tbody>{workers.map((item) => <tr key={item.engine ?? `${item.strategyId}:${item.timeframe}`}>
+          <td><strong>{humanize(item.strategyId ?? "unknown")}</strong><small>{item.strategyVersion ? `v${item.strategyVersion}` : ""}</small></td>
+          <td>{item.timeframe}</td><td><StatusBadge tone={tone(item.status)}>{humanize(item.status ?? "unknown")}</StatusBadge></td>
+          <td>{humanize(item.connectionStatus ?? "unavailable")}</td><td>{formatDateTime(item.lastCompletedCandle, market)}</td><td className="numeric">{formatInteger(item.signalsCreated)}</td>
+        </tr>)}</tbody>
+      </table></div> : <EmptyState title="No active strategy workers" description="Enable at least one live strategy for this market." />}
+    </details>
     <p className="quant-inline-note"><Activity size={12} /> Signals are informational and feed the paper account only. No broker order is ever placed from this page.</p>
   </main>;
 }

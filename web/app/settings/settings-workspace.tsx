@@ -1,6 +1,6 @@
 "use client";
 
-import { Braces, Save, Settings2, ShieldCheck } from "lucide-react";
+import { Braces, Copy, Save, Settings2, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
@@ -114,17 +114,19 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
               <div><dt>Active config</dt><dd>{active ? shortId(active.configId) : "None"}</dd></div>
               <div><dt>Updated</dt><dd>{formatDateTime(active?.updatedAt ?? active?.createdAt, market)}</dd></div>
             </dl>
-            <div className="quant-json-editor">
-              <div className="quant-json-editor-heading"><span><Braces size={15} />Configuration JSON</span><small><code>strategy</code> drives signals/backtests; <code>paperExecution</code> controls simulated sizing and fills.</small></div>
-              <textarea aria-label="Strategy and paper execution JSON" spellCheck={false} value={configurationJson} disabled={saving} onChange={(event) => setJsonEdits((current) => ({ ...current, [key]: event.target.value }))} />
-              <div className="quant-backtest-config-actions"><button type="button" disabled={saving} onClick={formatJson}>Validate and format</button><button type="button" disabled={saving} onClick={() => { setJsonEdits((current) => ({ ...current, [key]: JSON.stringify(effectiveDocument, null, 2) })); setNotice(null); }}>Reset to active</button></div>
-            </div>
+            <details className="quant-config-disclosure">
+              <summary><span><Braces size={15} />Edit JSON</span><small>Strategy and paper execution</small></summary>
+              <div className="quant-json-editor">
+                <div className="quant-json-editor-heading"><span>Configuration JSON</span><small><code>strategy</code> drives signals/backtests; <code>paperExecution</code> controls simulated sizing and fills.</small></div>
+                <textarea aria-label="Strategy and paper execution JSON" spellCheck={false} value={configurationJson} disabled={saving} onChange={(event) => setJsonEdits((current) => ({ ...current, [key]: event.target.value }))} />
+                <div className="quant-backtest-config-actions"><button type="button" disabled={saving} onClick={() => void navigator.clipboard.writeText(configurationJson)}><Copy size={14} />Copy JSON</button><button type="button" disabled={saving} onClick={formatJson}>Validate and format</button><button type="button" disabled={saving} onClick={() => { setJsonEdits((current) => ({ ...current, [key]: JSON.stringify(effectiveDocument, null, 2) })); setNotice(null); }}>Reset to active</button><button type="submit" className="primary" disabled={saving || config.loading}><Save size={15} />{saving ? "Saving…" : "Save and activate"}</button></div>
+              </div>
+            </details>
           </>}
           {notice && <Message kind={notice.kind}>{notice.text}</Message>}
         </div>
-        <div className="quant-form-actions"><button type="submit" className="primary" disabled={saving || config.loading}><Save size={15} />{saving ? "Saving…" : "Save and activate"}</button><span>Creates a version; previous versions remain in history.</span></div>
       </form>}
-      {config.data && config.data.all.length > 0 && <div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Name</th><th>Config id</th><th>Status</th><th>Created</th></tr></thead><tbody>{config.data.all.map((item) => <tr key={item.configId} className={item.active ? "active" : ""}><td><strong>{item.name}</strong></td><td className="mono">{shortId(item.configId)}</td><td><StatusBadge tone={item.active ? "good" : "neutral"}>{item.active ? "Active" : "Saved"}</StatusBadge></td><td>{formatDateTime(item.createdAt, market)}</td></tr>)}</tbody></table></div>}
+      {config.data && config.data.all.length > 0 && <details className="quant-secondary-disclosure"><summary><span>Configuration history</span><small>{config.data.all.length} saved version{config.data.all.length === 1 ? "" : "s"}</small></summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Name</th><th>Config id</th><th>Status</th><th>Created</th></tr></thead><tbody>{config.data.all.map((item) => <tr key={item.configId} className={item.active ? "active" : ""}><td><strong>{item.name}</strong></td><td className="mono">{shortId(item.configId)}</td><td><StatusBadge tone={item.active ? "good" : "neutral"}>{item.active ? "Active" : "Saved"}</StatusBadge></td><td>{formatDateTime(item.createdAt, market)}</td></tr>)}</tbody></table></div></details>}
     </Panel>
 
     <Panel icon={<ShieldCheck size={17} />} title="Connections and safety" description="Connection details are informational; secrets cannot be entered in the browser." aside={<StatusBadge tone="good">Live orders disabled</StatusBadge>}>

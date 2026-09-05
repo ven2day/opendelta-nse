@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronsUpDown, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsUpDown, Copy, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
@@ -265,6 +265,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
               <div><strong>{config.data?.active ? `Active configuration: ${config.data.active.name}` : "Published defaults"}</strong><p>Edit only when this run needs different strategy or execution values. The exact JSON is stored with the result.</p></div>
               {config.loading ? <LoadingState label="Loading strategy defaults" /> : <label><span>JSON override</span><textarea aria-label="Backtest configuration JSON" spellCheck={false} value={configurationJson} disabled={submitting} onChange={(event) => setConfigurationJsonEdits((current) => ({ ...current, [configKey]: event.target.value }))} /></label>}
               <div className="quant-backtest-config-actions">
+                <button type="button" onClick={() => void navigator.clipboard.writeText(configurationJson)}><Copy size={14} />Copy JSON</button>
                 <button type="button" onClick={() => { try { const parsed = parseConfigurationJson(configurationJson, strategy.configSchema, executionSchema); setConfigurationJsonEdits((current) => ({ ...current, [configKey]: JSON.stringify(parsed, null, 2) })); setNotice(null); } catch (reason) { setNotice({ kind: "error", text: errorMessage(reason, "Invalid strategy configuration") }); } }}>Format JSON</button>
                 <button type="button" onClick={() => setConfigurationJsonEdits((current) => { const next = { ...current }; delete next[configKey]; return next; })}>Use defaults</button>
               </div>
@@ -283,17 +284,13 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
           <span>Created {formatDateTime(run.createdAt, market)}{run.completedAt ? ` · finished ${formatDateTime(run.completedAt, market)}` : ""}</span>
         </div>
         {run.error && <div className="quant-panel-body"><Message kind="error">{run.error}</Message></div>}
-        {metrics ? <div className="quant-panel-body"><section className="quant-kpi-grid dense">
-          <article><span>Realized PnL</span><strong><PnlValue value={metrics.realizedPnl} market={market} /></strong><small>Unrealized <PnlValue value={metrics.unrealizedPnl} market={market} /></small></article>
-          <article><span>Win rate</span><strong>{metrics.winRate != null ? formatPercent(metrics.winRate, 1) : "—"}</strong><small>{formatInteger(metrics.completedTrades)} completed trades</small></article>
-          <article><span>Signals</span><strong>{formatInteger(metrics.totalSignals)}</strong><small>{formatInteger(metrics.openTrades)} still open</small></article>
-          <article><span>Targets / stops / expiries</span><strong>{formatInteger(metrics.targetHits)} / {formatInteger(metrics.stoppedTrades)} / {formatInteger(metrics.expiredTrades)}</strong></article>
-          <article><span>Max drawdown</span><strong>{formatMoney(metrics.maximumDrawdown, market)}</strong></article>
-          <article><span>Costs</span><strong>{formatMoney((metrics.fees ?? 0) + (metrics.slippage ?? 0), market)}</strong><small>Fees {formatMoney(metrics.fees, market)} · slippage {formatMoney(metrics.slippage, market)}</small></article>
-          <article><span>MAE / MFE</span><strong>{formatPercent(metrics.averageMaePct)} / {formatPercent(metrics.averageMfePct)}</strong><small>Average adverse / favourable excursion</small></article>
-          <article><span>Holding</span><strong>{formatMinutes(metrics.averageHoldingMinutes)}</strong><small>Median {formatMinutes(metrics.medianHoldingMinutes)}</small></article>
-          <article><span>Symbols</span><strong>{formatInteger(metrics.symbolsProcessed)}</strong><small>{formatInteger(metrics.symbolsFailed)} failed</small></article>
-        </section></div> : <div className="quant-panel-body"><p className="quant-inline-note">{runActive ? "Metrics are published when the run completes." : "No metrics were recorded for this run."}</p></div>}
+        {metrics ? <div className="quant-panel-body quant-backtest-results">
+          <section className="quant-backtest-summary" aria-label="Backtest performance summary">
+            <div className="quant-portfolio-value"><span>Realized PnL</span><strong><PnlValue value={metrics.realizedPnl} market={market} /></strong><small>Unrealized <PnlValue value={metrics.unrealizedPnl} market={market} /></small></div>
+            <dl><div><dt>Win rate</dt><dd>{metrics.winRate != null ? formatPercent(metrics.winRate, 1) : "—"}</dd></div><div><dt>Completed trades</dt><dd>{formatInteger(metrics.completedTrades)}</dd></div><div><dt>Max drawdown</dt><dd>{formatMoney(metrics.maximumDrawdown, market)}</dd></div><div><dt>Costs</dt><dd>{formatMoney((metrics.fees ?? 0) + (metrics.slippage ?? 0), market)}</dd></div></dl>
+          </section>
+          <details className="quant-secondary-disclosure"><summary><span>Execution metrics</span><small>Outcomes, excursions and coverage</small></summary><dl className="quant-facts"><div><dt>Signals / open</dt><dd>{formatInteger(metrics.totalSignals)} / {formatInteger(metrics.openTrades)}</dd></div><div><dt>Targets / stops / expiries</dt><dd>{formatInteger(metrics.targetHits)} / {formatInteger(metrics.stoppedTrades)} / {formatInteger(metrics.expiredTrades)}</dd></div><div><dt>Average MAE / MFE</dt><dd>{formatPercent(metrics.averageMaePct)} / {formatPercent(metrics.averageMfePct)}</dd></div><div><dt>Average / median holding</dt><dd>{formatMinutes(metrics.averageHoldingMinutes)} / {formatMinutes(metrics.medianHoldingMinutes)}</dd></div><div><dt>Symbols processed / failed</dt><dd>{formatInteger(metrics.symbolsProcessed)} / {formatInteger(metrics.symbolsFailed)}</dd></div><div><dt>Fees / slippage</dt><dd>{formatMoney(metrics.fees, market)} / {formatMoney(metrics.slippage, market)}</dd></div></dl></details>
+        </div> : <div className="quant-panel-body"><p className="quant-inline-note">{runActive ? "Metrics are published when the run completes." : "No metrics were recorded for this run."}</p></div>}
         {run.failedSymbols && run.failedSymbols.length > 0 && <div className="quant-panel-body"><details className="quant-details"><summary>{formatInteger(run.failedSymbols.length)} failed symbols</summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Symbol</th><th>Message</th></tr></thead><tbody>{run.failedSymbols.map((item) => <tr key={item.symbol}><td><strong>{item.symbol}</strong></td><td>{item.message}</td></tr>)}</tbody></table></div></details></div>}
       </>}
     </Panel>

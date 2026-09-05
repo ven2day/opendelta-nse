@@ -78,18 +78,14 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
     />
 
     {snapshot.loading ? <LoadingState label="Loading paper account" /> : snapshot.error ? <RequestErrorState error={snapshot.error} retry={snapshot.reload} /> : snapshot.data && account && <>
-      <section className="quant-kpi-grid">
-        <article><span>Equity</span><strong>{formatMoney(account.equity, market, currency)}</strong><small>Starting {formatMoney(account.startingBalance, market, currency)}</small></article>
-        <article><span>Cash</span><strong>{formatMoney(account.cashBalance, market, currency)}</strong><small>Market value {formatMoney(account.marketValue, market, currency)}</small></article>
-        <article><span>Daily PnL</span><strong><PnlValue value={account.dailyPnl} market={market} currency={currency} /></strong><small>Realized today <PnlValue value={account.realizedPnlToday} market={market} currency={currency} /></small></article>
-        <article><span>Realized / unrealized</span><strong><PnlValue value={account.realizedPnl} market={market} currency={currency} /></strong><small>Unrealized <PnlValue value={account.unrealizedPnl} market={market} currency={currency} /></small></article>
-      </section>
-      <section className="quant-kpi-grid dense">
-        <article><span>Open positions</span><strong>{formatInteger(account.openPositions)}</strong></article>
-        <article><span>Closed lots</span><strong>{formatInteger(account.closedLots)}</strong></article>
-        <article><span>Orders filled</span><strong>{formatInteger(account.filled)}</strong></article>
-        <article><span>Orders rejected</span><strong>{formatInteger(account.rejected)}</strong></article>
-        <article><span>As of</span><strong>{formatDateTime(account.asOf, market)}</strong><small>{typeof account.executionPolicy === "string" ? account.executionPolicy : "Simulated execution"}</small></article>
+      <section className="quant-portfolio-hero quant-portfolio-standalone" aria-label="Paper portfolio summary">
+        <div className="quant-portfolio-value"><span>Portfolio equity</span><strong>{formatMoney(account.equity, market, currency)}</strong><small>Starting balance {formatMoney(account.startingBalance, market, currency)} · {formatInteger(account.openPositions)} open positions</small></div>
+        <dl>
+          <div><dt>Today</dt><dd><PnlValue value={account.dailyPnl} market={market} currency={currency} /></dd></div>
+          <div><dt>Realized</dt><dd><PnlValue value={account.realizedPnl} market={market} currency={currency} /></dd></div>
+          <div><dt>Unrealized</dt><dd><PnlValue value={account.unrealizedPnl} market={market} currency={currency} /></dd></div>
+          <div><dt>Cash</dt><dd>{formatMoney(account.cashBalance, market, currency)}</dd></div>
+        </dl>
       </section>
       {notice && <Message kind={notice.kind}>{notice.text}</Message>}
 

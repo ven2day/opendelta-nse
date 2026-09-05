@@ -362,10 +362,73 @@
 .research-actions button.primary:hover { background: var(--od-accent-hover); }
 
 .quant-form-actions button.danger,
-.quant-table button.danger {
+.quant-table button.danger,
+.quant-modal-actions button.danger {
   border-color: color-mix(in srgb, var(--od-danger) 45%, var(--od-border));
   color: var(--od-danger);
   background: var(--od-danger-soft);
+}
+
+.quant-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.quant-modal {
+  width: 100%;
+  max-width: 420px;
+  border: 1px solid var(--od-border);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--od-surface-raised);
+  box-shadow: var(--od-shadow);
+}
+
+.quant-modal h2 {
+  margin: 0 0 8px;
+  color: var(--od-text);
+  font-size: 16px;
+}
+
+.quant-modal-message {
+  margin: 0 0 18px;
+  color: var(--od-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.quant-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.quant-modal-actions button {
+  min-height: 36px;
+  border: 1px solid var(--od-border);
+  border-radius: 7px;
+  padding: 7px 14px;
+  color: var(--od-text);
+  background: var(--od-surface-hover);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quant-modal-actions button.primary {
+  border-color: var(--od-accent);
+  color: var(--od-accent-contrast);
+  background: var(--od-accent);
+}
+
+.quant-modal-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
 }
 
 .quant-market-tabs,

@@ -256,6 +256,10 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.doesNotMatch(source, /MARKETS\.map/);
   assert.doesNotMatch(source, /VALR/);
   assert.match(source, /OKX public feed/);
+  assert.match(source, /aria-label="Strategy mode"/);
+  assert.match(source, /\["OFF", "SIGNALS", "PAPER"\]/);
+  assert.match(source, /strategies\/\$\{selectedStrategy\.strategyId\}\/deployment/);
+  assert.match(source, /Existing paper positions continue to be monitored/);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

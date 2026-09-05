@@ -233,6 +233,11 @@ test("the screener presents eligible symbols as a watchlist, not trade calls", a
   assert.match(source, />Always include</);
   assert.match(source, />Always exclude</);
   assert.match(source, /not automatic BUY or SELL calls/);
+  assert.match(source, /v2Get<WatchlistProfilesResponse>\("screener\/profiles"/);
+  assert.match(source, /aria-label="Watchlist profile version"/);
+  assert.match(source, /Save new version/);
+  assert.match(source, /profileVersionId: selectedProfileVersionId/);
+  assert.match(source, /Existing strategy watchlists were not changed/);
   assert.match(source, /Candidates \(/);
   assert.match(source, /Excluded \(/);
   assert.doesNotMatch(source, />Passed \(/);

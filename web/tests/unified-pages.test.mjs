@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 
 process.env.APP_USERNAME = "test-admin";
@@ -137,9 +137,11 @@ test("the unified navigation and proxy are wired exactly once", async () => {
 });
 
 test("production verification follows the Strategies navigation label", async () => {
-  const verification = await readFile(new URL("../deploy/verify-container.sh", import.meta.url), "utf8");
+  const script = new URL("../deploy/verify-container.sh", import.meta.url);
+  const verification = await readFile(script, "utf8");
   assert.match(verification, /'Paper Trading' Strategies/);
   assert.doesNotMatch(verification, /'Paper Trading' Settings/);
+  assert.notEqual((await stat(script)).mode & 0o111, 0, "deployment verification must remain executable");
 });
 
 test("the backtest run ticket uses defaults with one collapsed JSON override", async () => {

@@ -22,6 +22,7 @@ from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
 from backend.api.settings_routes import create_settings_router
 from backend.api.signal_routes import create_signal_router
+from backend.api.strategy_studio_routes import create_strategy_studio_router
 from backend.api.tradingview_routes import create_tradingview_router
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
@@ -43,6 +44,7 @@ from backend.data.repositories import (
     StrategyApprovalRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
+    StrategySourceRepository,
     TradingViewWebhookEventRepository,
     WatchlistProfileRepository,
 )
@@ -485,6 +487,9 @@ class PlatformRuntime:
     def strategy_deployments(self) -> StrategyDeploymentRepository:
         return StrategyDeploymentRepository(self.require_database())
 
+    def strategy_sources(self) -> StrategySourceRepository:
+        return StrategySourceRepository(self.require_database())
+
     def tradingview_events(self) -> TradingViewWebhookEventRepository:
         return TradingViewWebhookEventRepository(self.require_database())
 
@@ -589,6 +594,7 @@ def install_platform(
     )
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
+    app.router.routes.extend(create_strategy_studio_router(runtime.strategy_sources).routes)
     app.router.routes.extend(
         create_dashboard_router(
             overview=overview or (lambda _market: {}),

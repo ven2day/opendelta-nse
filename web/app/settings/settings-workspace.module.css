@@ -33,6 +33,22 @@
 .strategySelect { display: grid; min-width: 0; gap: 2px; border: 0; padding: 0; color: var(--od-text); background: transparent; text-align: left; cursor: pointer; }
 .strategyTable small { color: var(--od-muted); }
 
+.studio { background: var(--od-surface); }
+.studioIntro { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.studioIntro > div { display: grid; gap: 3px; }
+.studioIntro strong, .sourceHistory > strong { color: var(--od-text); font-size: 13px; }
+.studioIntro small, .sourceHistory > small { color: var(--od-muted); }
+.codeEditor { width: 100%; min-height: 360px; border: 1px solid var(--od-border); border-radius: 6px; padding: 12px; color: var(--od-text); background: var(--od-canvas); font: 12px/1.55 var(--font-jetbrains-mono), monospace; resize: vertical; }
+.codeEditor:focus { border-color: var(--od-accent); outline: 1px solid var(--od-accent); }
+.studioActions { display: flex; justify-content: flex-end; gap: 8px; }
+.studioActions button { min-height: 34px; }
+.validationList { display: grid; gap: 4px; color: var(--od-muted); font-size: 12px; }
+.validationError { color: var(--od-danger); }
+.sourceHistory { display: grid; gap: 8px; border-top: 1px solid var(--od-border); padding-top: 12px; }
+.sourceRow { display: grid; grid-template-columns: minmax(180px, 1fr) 90px 150px auto; align-items: center; gap: 12px; border: 1px solid var(--od-border); border-radius: 6px; padding: 8px 10px; color: var(--od-text); background: var(--od-surface-raised); }
+.sourceRow > span:first-child { display: grid; gap: 2px; }
+.sourceRow small { color: var(--od-muted); }
+
 .instrumentControl {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(220px, 360px) auto;
@@ -51,4 +67,7 @@
 @media (max-width: 820px) {
   .deploymentControl, .instrumentControl { grid-template-columns: 1fr; align-items: stretch; }
   .deploymentState { grid-column: auto; }
+  .studioIntro { align-items: flex-start; flex-direction: column; }
+  .studioActions { justify-content: stretch; flex-wrap: wrap; }
+  .sourceRow { grid-template-columns: 1fr auto; }
 }

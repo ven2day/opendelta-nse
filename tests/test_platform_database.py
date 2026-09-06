@@ -15,6 +15,7 @@ from backend.data.repositories import (
     SavedUniverseRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
+    StrategySourceRepository,
 )
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
@@ -66,6 +67,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "009_watchlist_profile_versions",
                 "010_tradingview_signal_ingestion",
                 "011_strategy_governance",
+                "012_strategy_sources",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -84,6 +86,7 @@ class PlatformDatabaseTests(unittest.TestCase):
             "strategy_configs",
             "strategy_deployments",
             "strategy_approvals",
+            "strategy_sources",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -97,6 +100,18 @@ class PlatformDatabaseTests(unittest.TestCase):
             "schema_migrations",
         ):
             self.assertIn(expected, tables)
+
+    def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
+        repository = StrategySourceRepository(self.database)
+        manifest = {
+            "strategyId": "quality_breakout_v2", "name": "Quality Breakout", "version": "1.0.0",
+            "description": "Test source", "supportedMarkets": ["CRYPTO"],
+            "supportedTimeframes": ["5m"], "parameters": {},
+        }
+        saved = repository.create(source_code="source", code_hash="a" * 64, manifest=manifest, validation={"valid": True})
+        self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
+        self.assertEqual(len(repository.list("CRYPTO")), 1)
+        self.assertEqual(repository.list("NSE"), [])
 
     def test_different_strategy_ids_do_not_collide_at_same_candle(self) -> None:
         signals = LiveSignalRepository(self.database)

@@ -1,13 +1,13 @@
 "use client";
 
-import { Braces, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";
+import { Braces, Code2, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
 import { platformGet, platformPost, type PlatformMarket } from "../platform/platform-client";
 import { compactValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, TradingViewStatus, TradingViewTestResult, UniversesResponse } from "../platform/v2-types";
+import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, StrategySource, StrategySourcesResponse, StrategySourceTemplate, StrategySourceValidation, TradingViewStatus, TradingViewTestResult, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 import styles from "./settings-workspace.module.css";
 
@@ -54,6 +54,10 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const [addingInstrument, setAddingInstrument] = useState(false);
   const [instrumentNotice, setInstrumentNotice] = useState<Notice>(null);
   const [testingTradingView, setTestingTradingView] = useState(false);
+  const [strategySource, setStrategySource] = useState("");
+  const [sourceBusy, setSourceBusy] = useState<"validate" | "save" | null>(null);
+  const [sourceNotice, setSourceNotice] = useState<Notice>(null);
+  const [sourceValidation, setSourceValidation] = useState<StrategySourceValidation | null>(null);
 
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
@@ -63,6 +67,10 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const universes = useV2Resource(loadUniverses);
   const loadInstruments = useCallback(() => platformGet<InstrumentListResponse>("instruments", { market, limit: "1" }), [market]);
   const instruments = useV2Resource(loadInstruments);
+  const loadSourceTemplate = useCallback(() => v2Get<StrategySourceTemplate>("strategy-studio/template"), []);
+  const sourceTemplate = useV2Resource(loadSourceTemplate);
+  const loadStrategySources = useCallback(() => v2Get<StrategySourcesResponse>("strategy-studio/sources", { market }), [market]);
+  const strategySources = useV2Resource(loadStrategySources);
   const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((item) => !item.supportedMarkets?.length || item.supportedMarkets.includes(market)), [strategies.data, market]);
   const selectedStrategy = marketStrategies.find((item) => item.strategyId === strategyChoice) ?? marketStrategies[0] ?? null;
   const strategyId = selectedStrategy?.strategyId ?? null;
@@ -85,6 +93,39 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const configurationJson = jsonEdits[key] ?? JSON.stringify(effectiveDocument, null, 2);
   const name = nameEdits[key] ?? (config.data?.active?.name ?? (selectedStrategy ? `${selectedStrategy.name} · ${marketLabel(market)}` : ""));
   const active = config.data?.active ?? null;
+
+  const currentSource = strategySource || sourceTemplate.data?.sourceCode || "";
+
+  const validateStrategySource = async () => {
+    if (!currentSource.trim()) return;
+    setSourceBusy("validate");
+    setSourceNotice(null);
+    try {
+      const result = await v2Post<StrategySourceValidation>("strategy-studio/validate", { sourceCode: currentSource });
+      setSourceValidation(result);
+      setSourceNotice({ kind: result.valid ? "success" : "error", text: result.valid ? `${result.manifest?.name ?? "Strategy"} v${result.manifest?.version ?? ""} is valid and safe to version.` : result.errors.join(" ") });
+    } catch (reason) {
+      setSourceNotice({ kind: "error", text: errorMessage(reason, "The strategy source could not be validated") });
+    } finally {
+      setSourceBusy(null);
+    }
+  };
+
+  const saveStrategySource = async () => {
+    if (!currentSource.trim()) return;
+    setSourceBusy("save");
+    setSourceNotice(null);
+    try {
+      const saved = await v2Post<StrategySource>("strategy-studio/sources", { sourceCode: currentSource });
+      setSourceValidation(saved.validation);
+      setSourceNotice({ kind: "success", text: `Saved immutable ${saved.name} v${saved.strategyVersion}. It is not deployed or executed yet.` });
+      strategySources.refresh();
+    } catch (reason) {
+      setSourceNotice({ kind: "error", text: errorMessage(reason, "The strategy source could not be saved") });
+    } finally {
+      setSourceBusy(null);
+    }
+  };
 
   const openConfiguration = () => {
     const details = document.querySelector<HTMLDetailsElement>("details.quant-config-disclosure");
@@ -185,6 +226,20 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
 
   return <main className="quant-workspace">
     <WorkspaceHeader eyebrow={`${marketLabel(market)} strategy control`} title="Strategies" actions={<div className="quant-header-actions"><StatusBadge tone="good">Paper only</StatusBadge><StatusBadge>Server-managed keys</StatusBadge></div>} />
+
+    <details className={`quant-secondary-disclosure ${styles.studio}`}>
+      <summary><span><Code2 size={15} />Strategy Studio V2</span><small>Python editor · validation and immutable versions</small></summary>
+      <div className="quant-panel-body">
+        <div className={styles.studioIntro}><div><strong>Create a Strategy V2</strong><small>Edit Python here. Validation is static: saving never runs or deploys the code.</small></div><StatusBadge tone="warn">Runner not enabled</StatusBadge></div>
+        {sourceTemplate.loading ? <LoadingState label="Loading Strategy V2 template" /> : sourceTemplate.error ? <Message kind="error">Strategy Studio is unavailable while the V2 service is offline. <button type="button" onClick={sourceTemplate.reload}>Retry</button></Message> : <>
+          <textarea className={styles.codeEditor} aria-label="Strategy V2 Python source" spellCheck={false} value={currentSource} disabled={sourceBusy !== null} onChange={(event) => { setStrategySource(event.target.value); setSourceValidation(null); setSourceNotice(null); }} />
+          <div className={styles.studioActions}><button type="button" disabled={sourceBusy !== null} onClick={() => { setStrategySource(sourceTemplate.data?.sourceCode ?? ""); setSourceValidation(null); setSourceNotice(null); }}>Reset template</button><button type="button" disabled={sourceBusy !== null || !currentSource.trim()} onClick={() => void validateStrategySource()}>{sourceBusy === "validate" ? "Validating…" : "Validate"}</button><button type="button" className="primary" disabled={sourceBusy !== null || !currentSource.trim() || sourceValidation?.valid === false} onClick={() => void saveStrategySource()}><Save size={15} />{sourceBusy === "save" ? "Saving…" : "Save new version"}</button></div>
+        </>}
+        {sourceNotice && <Message kind={sourceNotice.kind}>{sourceNotice.text}</Message>}
+        {sourceValidation && (sourceValidation.errors.length > 0 || sourceValidation.warnings.length > 0) && <div className={styles.validationList}>{sourceValidation.errors.map((item) => <span key={item} className={styles.validationError}>{item}</span>)}{sourceValidation.warnings.map((item) => <span key={item}>{item}</span>)}</div>}
+        <div className={styles.sourceHistory}><strong>Saved V2 sources</strong>{strategySources.loading ? <small>Loading…</small> : strategySources.error ? <small>Unavailable until migration 012 is applied</small> : strategySources.data?.sources.length ? strategySources.data.sources.map((item) => <div key={item.sourceId} className={styles.sourceRow}><span><strong>{item.name}</strong><small>{item.strategyId}</small></span><code>v{item.strategyVersion}</code><span>{item.manifest.supportedMarkets.join(" + ")}</span><StatusBadge tone="good">Validated</StatusBadge></div>) : <small>No V2 source versions saved for {marketLabel(market)}.</small>}</div>
+      </div>
+    </details>
 
     <Panel icon={<Settings2 size={17} />} title="Strategy control" description="Select a strategy, assign its timeframe and watchlist, then run signals or paper trading." aside={active ? <StatusBadge tone="good">Active: {active.name}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
       {strategies.loading ? <LoadingState label="Loading strategies" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !selectedStrategy ? <EmptyState title="No strategies registered" description={`No strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={save} noValidate>

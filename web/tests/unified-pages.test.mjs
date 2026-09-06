@@ -334,6 +334,17 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.match(proxy, /\{ provider: "OKX", providerSymbol: symbol \}/);
 });
 
+test("Strategy Studio V2 is collapsed and versions Python without deploying it", async () => {
+  const source = await readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /<details className=\{`quant-secondary-disclosure \$\{styles\.studio\}`\}>/);
+  assert.match(source, /Strategy Studio V2/);
+  assert.match(source, /aria-label="Strategy V2 Python source"/);
+  assert.match(source, /strategy-studio\/validate/);
+  assert.match(source, /strategy-studio\/sources/);
+  assert.match(source, /It is not deployed or executed yet/);
+  assert.doesNotMatch(source, /styles\.studio\}`\} open/);
+});
+
 test("signal filters stay collapsed and reason codes are humanized", async () => {
   const source = await readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className="quant-filter-menu">/);

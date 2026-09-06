@@ -618,6 +618,61 @@ def _public_config(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+class StrategySourceRepository:
+    """Immutable validated Strategy V2 source snapshots."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def create(self, *, source_code: str, code_hash: str, manifest: Mapping[str, Any], validation: Mapping[str, Any]) -> dict[str, Any]:
+        source_id = uuid.uuid4()
+        row = self.database.fetch_one(
+            """
+            INSERT INTO strategy_sources (
+                source_id, strategy_id, strategy_version, name, description,
+                source_code, code_hash, manifest, validation
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                source_id, manifest["strategyId"], manifest["version"], manifest["name"],
+                manifest.get("description", ""), source_code, code_hash,
+                jsonb(dict(manifest)), jsonb(dict(validation)),
+            ),
+        )
+        assert row is not None
+        return _public_strategy_source(row, include_source=True)
+
+    def list(self, market: str | None = None) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM strategy_sources ORDER BY created_at DESC")
+        public = [_public_strategy_source(row, include_source=False) for row in rows]
+        return [item for item in public if market is None or market in item["manifest"]["supportedMarkets"]]
+
+    def get(self, source_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one("SELECT * FROM strategy_sources WHERE source_id = %s", (uuid.UUID(str(source_id)),))
+        if row is None:
+            raise KeyError(f"Strategy source {source_id} was not found")
+        return _public_strategy_source(row, include_source=True)
+
+
+def _public_strategy_source(row: Mapping[str, Any], *, include_source: bool) -> dict[str, Any]:
+    result = {
+        "sourceId": str(row["source_id"]),
+        "strategyId": row["strategy_id"],
+        "strategyVersion": row["strategy_version"],
+        "name": row["name"],
+        "description": row["description"],
+        "codeHash": row["code_hash"],
+        "manifest": row["manifest"],
+        "validation": row["validation"],
+        "status": row["status"],
+        "createdAt": _iso(row["created_at"]),
+    }
+    if include_source:
+        result["sourceCode"] = row["source_code"]
+    return result
+
+
 class StrategyDeploymentRepository:
     """Desired signal/paper mode for one strategy in one market."""
 

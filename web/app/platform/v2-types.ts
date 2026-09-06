@@ -141,6 +141,38 @@ export type TradingViewActivityResponse = { events: TradingViewEvent[] };
 export type TradingViewTestResult = { safe: true; ready: boolean; checks: Record<string, boolean>; resolvedSymbol?: string | null; message: string };
 export type BacktestApproval = { approvalId: string; runId: string; mode: "SIGNALS" | "PAPER"; configId: string; universeId: string; signalSource: StrategySignalSource; approvedAt: string };
 
+export type StrategySourceManifest = {
+  strategyId: string;
+  name: string;
+  version: string;
+  description: string;
+  supportedMarkets: PlatformMarket[];
+  supportedTimeframes: string[];
+  parameters: ConfigValues;
+};
+export type StrategySourceValidation = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  manifest: StrategySourceManifest | null;
+  codeHash: string;
+};
+export type StrategySource = {
+  sourceId: string;
+  strategyId: string;
+  strategyVersion: string;
+  name: string;
+  description?: string;
+  codeHash: string;
+  manifest: StrategySourceManifest;
+  validation: StrategySourceValidation;
+  status: "VALIDATED" | "ARCHIVED";
+  createdAt?: string | null;
+  sourceCode?: string;
+};
+export type StrategySourcesResponse = { sources: StrategySource[] };
+export type StrategySourceTemplate = { sourceCode: string };
+
 export type BacktestMetrics = {
   totalSignals?: number | null;
   completedTrades?: number | null;

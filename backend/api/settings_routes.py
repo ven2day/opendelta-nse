@@ -152,13 +152,19 @@ def create_settings_router(
         timeframes = list(strategy.supported_timeframes)
         return {"deploymentId": None, "market": market, "strategyId": strategy.strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "signalSource": "OPENDELTA", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
+    def _execution_policy(values: dict[str, Any] | None, market: str | None) -> ExecutionPolicy:
+        defaults: dict[str, Any] = {"whole_units": market != "CRYPTO"}
+        if market == "CRYPTO":
+            defaults.update(initial_quantity=0.01, minimum_quantity=1e-8)
+        return ExecutionPolicy.from_mapping(values, **defaults)
+
     @router.get("/strategies")
     def list_strategies(market: str | None = Query(default=None)) -> dict[str, Any]:
         market_key = _market(market)
         return {
             "strategies": registry.describe(market_key),
             "markets": list(MARKETS),
-            "riskDefaults": ExecutionPolicy().public(),
+            "riskDefaults": _execution_policy(None, market_key).public(),
             "riskSchema": RISK_SCHEMA,
         }
 
@@ -174,9 +180,7 @@ def create_settings_router(
             "effectiveConfiguration": strategy.resolve((active or {}).get("configuration"))
             if hasattr(strategy, "resolve")
             else (active or {}).get("configuration", {}),
-            "effectiveRiskSettings": ExecutionPolicy.from_mapping(
-                (active or {}).get("riskSettings"), whole_units=(key == "NSE")
-            ).public(),
+            "effectiveRiskSettings": _execution_policy((active or {}).get("riskSettings"), key).public(),
             "all": _repository().list(key),
         }
 
@@ -190,7 +194,7 @@ def create_settings_router(
                 strategy.resolve(request.configuration) if hasattr(strategy, "resolve") else dict(request.configuration)
             )
             strategy.validate_config(snapshot)
-            risk = ExecutionPolicy.from_mapping(request.riskSettings, whole_units=(request.market == "NSE")).public()
+            risk = _execution_policy(request.riskSettings, request.market).public()
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         saved = _repository().save(

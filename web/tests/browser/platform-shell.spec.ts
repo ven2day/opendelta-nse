@@ -208,7 +208,19 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   }
   expect(headings.at(-1)?.width).toBeGreaterThanOrEqual(100);
   await tradeScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
-  await expect(tradeTable.getByRole("columnheader", { name: /Holding/ })).toBeInViewport();
+  const holdingBounds = await tradeTable.getByRole("columnheader", { name: /Holding/ }).evaluate((header) => {
+    const headerBox = header.getBoundingClientRect();
+    const scrollerBox = header.closest(".quant-trades-scroll")?.getBoundingClientRect();
+    return scrollerBox ? {
+      headerLeft: headerBox.left,
+      headerRight: headerBox.right,
+      scrollerLeft: scrollerBox.left,
+      scrollerRight: scrollerBox.right,
+    } : null;
+  });
+  expect(holdingBounds).not.toBeNull();
+  expect(holdingBounds?.headerLeft ?? 0).toBeGreaterThanOrEqual((holdingBounds?.scrollerLeft ?? 0) - 1);
+  expect(holdingBounds?.headerRight ?? 0).toBeLessThanOrEqual((holdingBounds?.scrollerRight ?? 0) + 1);
   await expect(page.getByText("Unrealized", { exact: true })).toBeVisible();
   await expect(page.getByText("99.5", { exact: true })).toBeVisible();
   await expect(page.getByText("12 bars", { exact: true })).toBeVisible();

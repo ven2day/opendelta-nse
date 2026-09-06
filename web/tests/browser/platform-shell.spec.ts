@@ -208,7 +208,7 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   }
   expect(headings.at(-1)?.width).toBeGreaterThanOrEqual(100);
   await tradeScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
-  await expect(page.getByRole("columnheader", { name: /Holding/ })).toBeInViewport();
+  await expect(tradeTable.getByRole("columnheader", { name: /Holding/ })).toBeInViewport();
   await expect(page.getByText("Unrealized", { exact: true })).toBeVisible();
   await expect(page.getByText("99.5", { exact: true })).toBeVisible();
   await expect(page.getByText("12 bars", { exact: true })).toBeVisible();

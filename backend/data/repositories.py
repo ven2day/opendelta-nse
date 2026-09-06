@@ -128,6 +128,93 @@ class BacktestRunRepository:
         )
 
 
+class ResearchExperimentRepository:
+    """Durable experiment metadata; execution remains owned by backtest runs."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def create(self, *, name: str, runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        if not runs:
+            raise ValueError("An experiment requires at least one variant")
+        experiment_id = uuid.uuid4()
+        first = runs[0]["run"]
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO research_experiments (
+                    experiment_id, name, market, strategy_id, strategy_version, strategy_source_id,
+                    timeframe, symbols, start_date, end_date
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (experiment_id, name, first["market"], first["strategyId"], first["strategyVersion"],
+                 uuid.UUID(first["strategySourceId"]) if first.get("strategySourceId") else None,
+                 first["timeframe"], jsonb(first["symbols"]), first["startDate"], first["endDate"]),
+            )
+            for item in runs:
+                run = item["run"]
+                cursor.execute(
+                    """
+                    INSERT INTO research_variants (
+                        variant_id, experiment_id, name, configuration_snapshot, execution_settings, run_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (uuid.uuid4(), experiment_id, item["name"], jsonb(run["configurationSnapshot"]),
+                     jsonb(run["executionSettings"]), uuid.UUID(run["runId"])),
+                )
+        return self.get(experiment_id)
+
+    def get(self, experiment_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            "SELECT * FROM research_experiments WHERE experiment_id = %s", (uuid.UUID(str(experiment_id)),),
+        )
+        if row is None:
+            raise KeyError(f"Research experiment {experiment_id} was not found")
+        variants = self.database.fetch_all(
+            """
+            SELECT v.variant_id, v.name AS variant_name, v.configuration_snapshot AS variant_configuration,
+                   v.execution_settings AS variant_execution, r.*
+            FROM research_variants v
+            JOIN backtest_runs r ON r.run_id = v.run_id
+            WHERE v.experiment_id = %s ORDER BY v.created_at, v.variant_id
+            """,
+            (uuid.UUID(str(experiment_id)),),
+        )
+        return self._public(row, variants)
+
+    def list(self, market: str | None = None, *, limit: int = 50) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all(
+                "SELECT * FROM research_experiments WHERE market = %s ORDER BY created_at DESC LIMIT %s",
+                (market, limit),
+            )
+        else:
+            rows = self.database.fetch_all("SELECT * FROM research_experiments ORDER BY created_at DESC LIMIT %s", (limit,))
+        return [self.get(row["experiment_id"]) for row in rows]
+
+    @staticmethod
+    def _public(row: Mapping[str, Any], variants: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        public_variants = []
+        for variant in variants:
+            run = _public_run(variant)
+            public_variants.append({
+                "variantId": str(variant["variant_id"]), "name": variant["variant_name"],
+                "configuration": variant["variant_configuration"], "execution": variant["variant_execution"],
+                "run": run,
+            })
+        statuses = {item["run"]["status"] for item in public_variants}
+        status = "COMPLETE" if statuses == {"COMPLETE"} else "FAILED" if statuses and statuses <= {"FAILED", "CANCELLED", "INTERRUPTED"} else "RUNNING" if statuses & {"RUNNING", "QUEUED"} else "PARTIAL"
+        return {
+            "experimentId": str(row["experiment_id"]), "name": row["name"], "market": row["market"],
+            "strategyId": row["strategy_id"], "strategyVersion": row["strategy_version"],
+            "strategySourceId": str(row["strategy_source_id"]) if row.get("strategy_source_id") else None,
+            "timeframe": row["timeframe"], "symbols": row["symbols"],
+            "startDate": row["start_date"].isoformat(), "endDate": row["end_date"].isoformat(),
+            "status": status, "variants": public_variants,
+            "createdAt": row["created_at"].isoformat(),
+        }
+
+
 class StrategyApprovalRepository:
     """Immutable evidence linking a completed backtest to an enabled deployment."""
 

@@ -188,8 +188,8 @@ test("backtest ticket is compact and trade controls filter and sort the full res
   const tops = await controls.evaluateAll((elements) => elements.map((element) => Math.round(element.getBoundingClientRect().top)));
   expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
 
-  const tradeScroller = page.locator(".quant-trades-scroll");
-  const tradeTable = page.locator(".quant-trades-table");
+  const tradeScroller = page.locator(".quant-trades-scroll").first();
+  const tradeTable = page.locator(".quant-trades-table").first();
   await expect(tradeTable).toBeVisible();
   const dimensions = await tradeScroller.evaluate((element) => ({
     clientWidth: element.clientWidth,

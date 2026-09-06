@@ -2,11 +2,11 @@
 
 import { Copy, FlaskConical, LoaderCircle, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
-import { formatDateTime, isoDate, marketLabel, shortId, tone } from "../platform/format";
+import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { ResearchExperiment, ResearchExperimentsResponse, StrategiesResponse, StrategySourcesResponse, UniversesResponse } from "../platform/v2-types";
+import type { BacktestTrade, BacktestTradesResponse, ResearchExperiment, ResearchExperimentsResponse, ResearchVariant, StrategiesResponse, StrategySourcesResponse, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 type DraftVariant = { id: string; name: string; json: string };
@@ -27,6 +27,29 @@ function parseVariant(text: string): { strategy: Record<string, unknown>; execut
   return { strategy: strategy as Record<string, unknown>, execution: execution as Record<string, unknown> };
 }
 
+type VariantTrades = { variant: ResearchVariant; trades: BacktestTrade[]; total: number };
+
+function cumulativeCurve(trades: BacktestTrade[]): number[] {
+  let equity = 0;
+  return trades.filter((trade) => trade.exitTimestamp).sort((a, b) => String(a.exitTimestamp).localeCompare(String(b.exitTimestamp))).map((trade) => {
+    equity += trade.netPnl ?? 0;
+    return equity;
+  });
+}
+
+function EquityComparison({ rows }: { rows: VariantTrades[] }) {
+  const curves = rows.map((row) => ({ name: row.variant.name, values: cumulativeCurve(row.trades) }));
+  const values = curves.flatMap((curve) => curve.values);
+  if (!values.length) return <EmptyState title="Equity curves pending" description="Curves appear after variants complete trades." />;
+  const width = 960, height = 220, pad = 24;
+  const low = Math.min(0, ...values), high = Math.max(0, ...values), span = Math.max(1, high - low);
+  const colours = ["#4ea1ff", "#ff9f43", "#47c98b", "#c084fc", "#f87171", "#22d3ee"];
+  return <div className="research-equity-chart"><svg role="img" aria-label="Variant equity curves" viewBox={`0 0 ${width} ${height}`}><line x1={pad} x2={width - pad} y1={height - pad - ((0 - low) / span) * (height - pad * 2)} y2={height - pad - ((0 - low) / span) * (height - pad * 2)} />{curves.map((curve, index) => {
+    const points = curve.values.map((value, point) => `${pad + (point / Math.max(1, curve.values.length - 1)) * (width - pad * 2)},${height - pad - ((value - low) / span) * (height - pad * 2)}`).join(" ");
+    return <polyline key={curve.name} points={points} style={{ stroke: colours[index % colours.length] }} />;
+  })}</svg><div>{curves.map((curve, index) => <span key={curve.name}><i style={{ background: colours[index % colours.length] }} />{curve.name}</span>)}</div></div>;
+}
+
 export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
   const strategies = useV2Resource(useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]));
   const sources = useV2Resource(useCallback(() => v2Get<StrategySourcesResponse>("strategy-studio/sources", { market, status: "VALIDATED" }), [market]));
@@ -45,9 +68,19 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
   const [variants, setVariants] = useState<DraftVariant[]>(() => [newVariant(1), newVariant(2)]);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [comparisonId, setComparisonId] = useState<string | null>(null);
   const activeUniverse = universes.data?.active?.[market] ?? universes.data?.universes.find((item) => item.active) ?? null;
   const allowedTimeframes = selected?.timeframes ?? ["5m"];
   const effectiveTimeframe = allowedTimeframes.includes(timeframe) ? timeframe : allowedTimeframes[0];
+  const comparison = experiments.data?.experiments.find((item) => item.experimentId === comparisonId) ?? experiments.data?.experiments[0] ?? null;
+  const loadComparison = useCallback(async (): Promise<VariantTrades[]> => {
+    if (!comparison) return [];
+    return Promise.all(comparison.variants.map(async (variant) => {
+      const page = await v2Get<BacktestTradesResponse>(`backtests/${variant.run.runId}/trades`, { sort: "exitTimestamp", direction: "asc", limit: 5000 });
+      return { variant, trades: page.trades, total: page.total };
+    }));
+  }, [comparison]);
+  const comparisonTrades = useV2Resource(loadComparison, comparison?.variants.some((variant) => ["QUEUED", "RUNNING"].includes(variant.run.status)) ? 5_000 : undefined);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setSubmitting(true); setNotice(null);
@@ -92,6 +125,20 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
     </Panel>
     <Panel icon={<FlaskConical size={17} />} title="Experiments" description="Status refreshes every five seconds while variants run.">
       {experiments.loading ? <LoadingState label="Loading experiments" /> : experiments.error ? <RequestErrorState error={experiments.error} retry={experiments.reload} /> : !experiments.data?.experiments.length ? <EmptyState title="No research experiments" description="Create controlled variants above." /> : <div className="research-experiment-list">{experiments.data.experiments.map((experiment) => <article key={experiment.experimentId} className="research-experiment-card"><header><div><strong>{experiment.name}</strong><small>{experiment.strategyId} v{experiment.strategyVersion} · {experiment.timeframe} · {experiment.symbols.length} symbols · {experiment.startDate} → {experiment.endDate}</small></div><StatusBadge tone={tone(experiment.status)}>{experiment.status}</StatusBadge></header><div className="research-run-grid">{experiment.variants.map((variant) => <div key={variant.variantId}><span>{variant.name}</span><StatusBadge tone={tone(variant.run.status)}>{variant.run.status}</StatusBadge><small>{shortId(variant.run.runId)} · created {formatDateTime(variant.run.createdAt, market)}</small></div>)}</div></article>)}</div>}
+    </Panel>
+    <Panel icon={<FlaskConical size={17} />} title="Strategy comparison" description="Side-by-side metrics and equity curves from the exact immutable variant runs.">
+      {!experiments.data?.experiments.length ? <EmptyState title="Nothing to compare" description="Create an experiment with two or more variants." /> : <div className="quant-panel-body research-comparison">
+        <label className="research-comparison-select"><span>Experiment</span><select value={comparison?.experimentId ?? ""} onChange={(event) => setComparisonId(event.target.value)}>{experiments.data.experiments.map((item) => <option key={item.experimentId} value={item.experimentId}>{item.name} · {item.variants.length} variants</option>)}</select></label>
+        {comparisonTrades.loading ? <LoadingState label="Loading variant trades" /> : comparisonTrades.error ? <RequestErrorState error={comparisonTrades.error} retry={comparisonTrades.reload} /> : <>
+          <div className="quant-table-scroll"><table className="quant-table research-comparison-table"><thead><tr><th>Variant</th><th>Status</th><th className="numeric">Net P&amp;L</th><th className="numeric">Drawdown</th><th className="numeric">Win rate</th><th className="numeric">Costs</th><th className="numeric">Trades</th><th className="numeric">Exposure</th><th className="numeric">Open</th><th className="numeric">Failed symbols</th><th>Inspect</th></tr></thead><tbody>{(comparisonTrades.data ?? []).map(({ variant, trades, total }) => {
+            const metrics = variant.run.metrics ?? {};
+            const exposureMinutes = trades.reduce((sum, trade) => sum + (trade.holdingMinutes ?? 0), 0);
+            return <tr key={variant.variantId}><td><strong>{variant.name}</strong><small>{shortId(variant.run.runId)}</small></td><td><StatusBadge tone={tone(variant.run.status)}>{variant.run.status}</StatusBadge></td><td className="numeric">{formatMoney((metrics.realizedPnl ?? 0) + (metrics.unrealizedPnl ?? 0), market)}</td><td className="numeric">{formatMoney(metrics.maximumDrawdown, market)}</td><td className="numeric">{metrics.winRate == null ? "—" : formatPercent(metrics.winRate, 1)}</td><td className="numeric">{formatMoney((metrics.fees ?? 0) + (metrics.slippage ?? 0), market)}</td><td className="numeric">{formatInteger(total)}</td><td className="numeric">{formatMinutes(exposureMinutes)}</td><td className="numeric">{formatInteger(metrics.openTrades)}</td><td className="numeric">{formatInteger(variant.run.failedSymbols?.length ?? 0)}</td><td><a className="quant-inline-link" href={`/backtest?${new URLSearchParams({ ...(market === "CRYPTO" ? { market } : {}), runId: variant.run.runId })}`}>Chart</a></td></tr>;
+          })}</tbody></table></div>
+          <p className="quant-inline-note">Exposure is the sum of recorded trade holding minutes. Failed symbols are data/execution failures; OpenDelta does not fabricate a “rejected trade” count when the strategy emitted no trade.</p>
+          <EquityComparison rows={comparisonTrades.data ?? []} />
+        </>}
+      </div>}
     </Panel>
   </main>;
 }

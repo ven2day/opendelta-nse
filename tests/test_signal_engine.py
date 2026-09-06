@@ -318,6 +318,32 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(worker.poll_once(), 0)
         self.assertEqual(sorted(row["symbol"] for row in repository.rows.values()), ["OTHER", "SYN"])
 
+    def test_poll_exposes_the_actual_data_signal_and_paper_cycle(self) -> None:
+        repository = FakeSignalRepository()
+        self.now = (self.candles.index[self.signal_bar - 3] + timedelta(minutes=5)).to_pydatetime()
+        worker = self._worker(self.Source(self.candles), repository, automation_mode="PAPER")
+        worker.recover()
+
+        self.now = (self.candles.index[self.signal_bar] + timedelta(minutes=5)).to_pydatetime()
+        self.assertEqual(worker.poll_once(), 2)
+        status = worker.status()
+        cycle = status["lifecycle"]
+
+        self.assertEqual((status["mode"], status["signalSource"]), ("PAPER", "OPENDELTA"))
+        self.assertEqual(cycle["status"], "COMPLETE")
+        self.assertEqual((cycle["symbolsRequested"], cycle["symbolsDownloaded"]), (2, 2))
+        self.assertGreater(cycle["symbolsEvaluated"], 0)
+        self.assertEqual(cycle["signalsCreated"], 2)
+        self.assertEqual(cycle["stages"]["data"]["status"], "COMPLETE")
+        self.assertEqual(cycle["stages"]["signal"]["status"], "GENERATED")
+        self.assertEqual(cycle["stages"]["paper"]["status"], "PENDING")
+        self.assertEqual(status["lastSignal"]["symbol"], cycle["lastSignalSymbol"])
+
+        self.assertEqual(worker.poll_once(), 0)
+        quiet = worker.status()["lifecycle"]
+        self.assertEqual(quiet["stages"]["signal"]["status"], "NO_NEW_CANDLE")
+        self.assertEqual(quiet["stages"]["paper"]["status"], "NOT_REQUIRED")
+
     def test_one_symbol_failing_does_not_abort_the_poll_but_all_failing_raises(self) -> None:
         worker = self._worker(self.Source(self.candles, fail_symbols={"OTHER"}))
         worker.recover()
@@ -352,6 +378,8 @@ class WorkerTests(unittest.TestCase):
         status = worker.status()
         worker.stop()
         self.assertEqual(status["status"], "MARKET_CLOSED")
+        self.assertEqual(status["lifecycle"]["status"], "MARKET_CLOSED")
+        self.assertEqual(status["lifecycle"]["stages"]["signal"]["status"], "PAUSED")
         self.assertEqual(source.calls, 2)  # recovery only, one call per unique symbol; no polling while closed
 
     def test_nse_intraday_worker_polls_through_the_close_settlement_grace(self) -> None:

@@ -587,6 +587,33 @@
   min-height: 58px;
   padding: 10px 12px;
 }
+.quant-live-refresh { display: inline-flex; align-items: center; gap: 7px; color: var(--od-muted); font-size: 11px; font-weight: 700; }
+.quant-live-refresh i { width: 7px; height: 7px; border-radius: 50%; background: var(--od-success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--od-success) 12%, transparent); }
+.quant-lifecycle-list { display: grid; gap: 8px; padding: 9px; }
+.quant-lifecycle-card { overflow: hidden; border: 1px solid var(--od-border); border-radius: 7px; background: var(--od-canvas); }
+.quant-lifecycle-card > header,
+.quant-lifecycle-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 10px; }
+.quant-lifecycle-card > header { border-bottom: 1px solid var(--od-border); background: var(--od-surface-raised); }
+.quant-lifecycle-card > header > div:first-child { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
+.quant-lifecycle-card > header strong { overflow: hidden; color: var(--od-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-lifecycle-card > header span,
+.quant-lifecycle-card > footer { color: var(--od-muted); font-size: 11px; }
+.quant-lifecycle-card-status { display: flex; flex: none; align-items: center; gap: 8px; }
+.quant-lifecycle-card-status small { color: var(--od-faint); font-size: 11px; text-transform: uppercase; }
+.quant-lifecycle-rail { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.quant-lifecycle-step { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; min-width: 0; padding: 9px 10px; }
+.quant-lifecycle-step + .quant-lifecycle-step { border-left: 1px solid var(--od-border); }
+.quant-lifecycle-step-icon { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: var(--od-muted); background: var(--od-surface-raised); }
+.quant-lifecycle-step[data-tone="good"] .quant-lifecycle-step-icon { color: var(--od-success); background: color-mix(in srgb, var(--od-success) 12%, var(--od-surface)); }
+.quant-lifecycle-step[data-tone="warn"] .quant-lifecycle-step-icon { color: var(--od-warning); background: color-mix(in srgb, var(--od-warning) 12%, var(--od-surface)); }
+.quant-lifecycle-step[data-tone="bad"] .quant-lifecycle-step-icon { color: var(--od-danger); background: color-mix(in srgb, var(--od-danger) 12%, var(--od-surface)); }
+.quant-lifecycle-step > div { display: grid; min-width: 0; gap: 1px; }
+.quant-lifecycle-step small { color: var(--od-faint); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.quant-lifecycle-step strong { color: var(--od-text); font-size: 12px; }
+.quant-lifecycle-step > div > span { overflow: hidden; color: var(--od-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-lifecycle-card > footer { justify-content: flex-start; flex-wrap: wrap; border-top: 1px solid var(--od-border); padding-block: 5px; }
+.quant-lifecycle-card > footer span + span::before { margin-right: 8px; color: var(--od-border-strong); content: "•"; }
+.quant-lifecycle-card > footer b { color: var(--od-text-secondary); font-weight: 700; }
 .quant-backtest-results { display: grid; gap: 14px; }
 .quant-backtest-summary { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(520px, 2fr); align-items: end; gap: 28px; padding: 8px 2px; }
 .quant-backtest-summary dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
@@ -872,6 +899,8 @@
   .quant-backtest-summary dl { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 0; }
   .quant-backtest-summary dl > div:nth-child(odd) { border-left: 0; padding-left: 0; }
   .quant-json-editor-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .quant-lifecycle-rail { grid-template-columns: 1fr; }
+  .quant-lifecycle-step + .quant-lifecycle-step { border-top: 1px solid var(--od-border); border-left: 0; }
 }
 
 /* Server-backed table sorting and filters; headers stay usable while scrolling. */

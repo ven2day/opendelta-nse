@@ -234,6 +234,43 @@ export type WorkerStatus = EngineStatus & {
   signalsCreated?: number | null;
   duplicatesRejected?: number | null;
 };
+export type LifecycleStage = {
+  status: string;
+  message: string;
+  timestamp?: string | null;
+};
+export type StrategyLifecycle = {
+  strategyId: string;
+  strategyVersion?: string | null;
+  timeframe: string;
+  mode: "SIGNALS" | "PAPER" | string;
+  signalSource?: StrategySignalSource | null;
+  workerStatus?: string | null;
+  connectionStatus?: string | null;
+  cycle?: {
+    cycleId?: string | null;
+    status: string;
+    startedAt?: string | null;
+    completedAt?: string | null;
+    nextCheckAt?: string | null;
+    symbolsRequested?: number | null;
+    symbolsDownloaded?: number | null;
+    symbolsEvaluated?: number | null;
+    signalsCreated?: number | null;
+    failures?: number | null;
+    lastSignalId?: string | null;
+    lastSignalSymbol?: string | null;
+    stages?: Partial<Record<"data" | "signal" | "paper", LifecycleStage>>;
+  } | null;
+  lastSignal?: {
+    signalId?: string | null;
+    symbol?: string | null;
+    signalType?: string | null;
+    candleTimestamp?: string | null;
+    createdAt?: string | null;
+  } | null;
+  paper?: LifecycleStage & { symbol?: string | null; orderId?: string | null };
+};
 export type SignalStatus = "STRONG_BUY" | "HOLDING" | "TARGET_HIT" | "EXITED" | "EXPIRED";
 export type Signal = {
   signalId: string;
@@ -338,7 +375,7 @@ export type DashboardPayload = {
   marketData: Section<MarketDataSummary>;
   screener: Section<{ latestRun: ScreenerRun | null; activeUniverse: Universe | null }>;
   backtests: Section<{ recent: BacktestRun[] }>;
-  signalEngine: Section<{ stored: EngineStatus[]; workers: WorkerStatus[] }>;
+  signalEngine: Section<{ stored: EngineStatus[]; workers: WorkerStatus[]; lifecycles?: StrategyLifecycle[] }>;
   paper: Section<{ account: PaperAccount; openPositions: PaperLot[] }>;
   paperOnly?: boolean;
   liveOrdersEnabled?: boolean;

@@ -44,6 +44,8 @@ class MarketSignalWorker:
         maximum_backoff_seconds: float = 300.0,
         lookback_days: int = 2,
         engine_name: str | None = None,
+        automation_mode: str = "SIGNALS",
+        signal_source: str = "OPENDELTA",
     ) -> None:
         self.market = market
         self.engine = engine
@@ -56,6 +58,8 @@ class MarketSignalWorker:
         self.maximum_backoff_seconds = maximum_backoff_seconds
         self.lookback_days = lookback_days
         self.engine_name = engine_name or f"{ENGINE_NAME}:{engine.strategy.strategy_id}:{engine.timeframe}"
+        self.automation_mode = automation_mode
+        self.signal_source = signal_source
         daily_session_close = market.daily_session_close if engine.timeframe == "1d" else None
         self.processor = CandleProcessor(
             bar_minutes=market.minutes(engine.timeframe),
@@ -69,7 +73,33 @@ class MarketSignalWorker:
         self._symbols: list[str] = []
         self._last_daily_poll_date = None
         self._last_market_candle: dict[str, pd.Timestamp] = {}
-        self._state: dict[str, Any] = {"status": "STOPPED", "connectionStatus": "DISCONNECTED", "message": "Not started", "consecutiveFailures": 0, "polls": 0}
+        self._state: dict[str, Any] = {
+            "status": "STOPPED",
+            "connectionStatus": "DISCONNECTED",
+            "message": "Not started",
+            "consecutiveFailures": 0,
+            "polls": 0,
+            "lifecycle": {
+                "cycleId": None,
+                "status": "IDLE",
+                "startedAt": None,
+                "completedAt": None,
+                "nextCheckAt": None,
+                "symbolsRequested": 0,
+                "symbolsDownloaded": 0,
+                "symbolsEvaluated": 0,
+                "signalsCreated": 0,
+                "failures": 0,
+                "lastSignalId": None,
+                "lastSignalSymbol": None,
+                "stages": {
+                    "data": {"status": "WAITING", "message": "Waiting for the first data check"},
+                    "signal": {"status": "WAITING", "message": "Waiting for market data"},
+                    "paper": {"status": "WAITING", "message": "Waiting for a strategy decision"},
+                },
+            },
+            "lastSignal": None,
+        }
         self.candle_listeners: list[Callable[[str, Any, datetime], None]] = []
         self.market_candle_listeners: list[Callable[[str, Any, datetime], None]] = []
         self.market_symbols: Callable[[], Sequence[str]] | None = None
@@ -133,6 +163,7 @@ class MarketSignalWorker:
                         backoff = min(backoff * 2, self.maximum_backoff_seconds)
                         self._set_state(status="ERROR", connection="DISCONNECTED", message=f"Market tracking failed, retrying in {int(backoff)}s: {error}"[:240], failure=True)
                 else:
+                    self._pause_lifecycle(now, "MARKET_CLOSED", f"{self.market.market} session is closed")
                     self._set_state(status="MARKET_CLOSED", connection="DISCONNECTED", message=f"{self.market.market} session is closed")
                 self._stop.wait(self.closed_poll_seconds)
                 continue
@@ -150,6 +181,7 @@ class MarketSignalWorker:
                 self._stop.wait(self.poll_seconds)
             except Exception as error:  # noqa: BLE001 - keep polling; expose the failure
                 backoff = min(backoff * 2, self.maximum_backoff_seconds)
+                self._fail_lifecycle(self.clock(), error, backoff)
                 self._set_state(status="ERROR", connection="DISCONNECTED", message=f"Poll failed, retrying in {int(backoff)}s: {error}"[:240], failure=True)
                 self._stop.wait(backoff)
 
@@ -193,17 +225,26 @@ class MarketSignalWorker:
         now = self.clock()
         with self._lock:
             symbols = list(self._symbols)
+        self._begin_lifecycle(now, len(symbols))
         created = 0
+        downloaded = 0
+        evaluated = 0
+        latest_signal: dict[str, Any] | None = None
         failures: list[str] = []
         for symbol in symbols:
             if self._stop.is_set():
                 break
             try:
                 frame = self.source.candles(symbol, self.engine.timeframe, now - timedelta(days=self.lookback_days), now, warmup_bars=self.engine.history.maximum_bars)
+                downloaded += 1
                 completed = self.processor.completed(frame, now)
                 before = self.engine.history.latest_timestamp(symbol)
-                if self.engine.process_completed_candle(symbol, completed) is not None:
+                evaluations_before = self.engine.evaluations
+                stored = self.engine.process_completed_candle(symbol, completed)
+                evaluated += self.engine.evaluations - evaluations_before
+                if stored is not None:
                     created += 1
+                    latest_signal = stored
                 if self.candle_listeners:
                     fresh = completed[completed.index > before] if before is not None else completed
                     for stamp, row in fresh.iterrows():
@@ -216,6 +257,15 @@ class MarketSignalWorker:
                 failures.append(f"{symbol}: {error}"[:120])
         with self._lock:
             self._state["polls"] += 1
+        self._finish_lifecycle(
+            self.clock(),
+            requested=len(symbols),
+            downloaded=downloaded,
+            evaluated=evaluated,
+            created=created,
+            failures=len(failures),
+            latest_signal=latest_signal,
+        )
         if failures and len(failures) == len(symbols) and symbols:
             raise RuntimeError("every symbol failed; " + failures[0])
         return created
@@ -261,6 +311,124 @@ class MarketSignalWorker:
 
     # ---- status --------------------------------------------------------------------
 
+    def _begin_lifecycle(self, moment: datetime, requested: int) -> None:
+        started = moment.isoformat()
+        with self._lock:
+            sequence = int(self._state["polls"]) + 1
+            self._state["lifecycle"] = {
+                "cycleId": f"{self.engine_name}:{sequence}",
+                "status": "RUNNING",
+                "startedAt": started,
+                "completedAt": None,
+                "nextCheckAt": None,
+                "symbolsRequested": requested,
+                "symbolsDownloaded": 0,
+                "symbolsEvaluated": 0,
+                "signalsCreated": 0,
+                "failures": 0,
+                "lastSignalId": None,
+                "lastSignalSymbol": None,
+                "stages": {
+                    "data": {"status": "RUNNING", "message": f"Downloading candles for {requested} symbols"},
+                    "signal": {"status": "WAITING", "message": "Starts after candle validation"},
+                    "paper": {"status": "WAITING", "message": "Starts only when a BUY is stored"},
+                },
+            }
+
+    def _finish_lifecycle(
+        self,
+        moment: datetime,
+        *,
+        requested: int,
+        downloaded: int,
+        evaluated: int,
+        created: int,
+        failures: int,
+        latest_signal: Mapping[str, Any] | None,
+    ) -> None:
+        finished = moment.isoformat()
+        next_check = (moment + timedelta(seconds=self.poll_seconds)).isoformat()
+        data_status = "EMPTY" if requested == 0 else "FAILED" if downloaded == 0 else "PARTIAL" if failures else "COMPLETE"
+        data_message = (
+            "No symbols are configured"
+            if requested == 0
+            else f"{downloaded}/{requested} symbols downloaded" + (f" · {failures} failed" if failures else "")
+        )
+        signal_status = "GENERATED" if created else "NO_SIGNAL" if evaluated else "NO_NEW_CANDLE"
+        signal_message = (
+            f"{created} BUY signal{'s' if created != 1 else ''} stored"
+            if created
+            else f"{evaluated} symbol evaluation{'s' if evaluated != 1 else ''} · no BUY"
+            if evaluated
+            else "No newly completed candle to evaluate"
+        )
+        signal_summary = (
+            {
+                "signalId": latest_signal.get("signalId"),
+                "symbol": latest_signal.get("symbol"),
+                "signalType": latest_signal.get("signalType"),
+                "candleTimestamp": latest_signal.get("candleTimestamp"),
+                "createdAt": latest_signal.get("createdAt"),
+            }
+            if latest_signal
+            else None
+        )
+        with self._lock:
+            current = dict(self._state.get("lifecycle") or {})
+            self._state["lifecycle"] = {
+                **current,
+                "status": "FAILED" if data_status == "FAILED" else "COMPLETE",
+                "completedAt": finished,
+                "nextCheckAt": next_check,
+                "symbolsRequested": requested,
+                "symbolsDownloaded": downloaded,
+                "symbolsEvaluated": evaluated,
+                "signalsCreated": created,
+                "failures": failures,
+                "lastSignalId": signal_summary.get("signalId") if signal_summary else None,
+                "lastSignalSymbol": signal_summary.get("symbol") if signal_summary else None,
+                "stages": {
+                    "data": {"status": data_status, "message": data_message, "timestamp": finished},
+                    "signal": {"status": signal_status, "message": signal_message, "timestamp": finished},
+                    "paper": {
+                        "status": "PENDING" if created else "NOT_REQUIRED",
+                        "message": "Resolving the stored signal" if created else "No BUY signal in this cycle",
+                        "timestamp": finished,
+                    },
+                },
+            }
+            if signal_summary is not None:
+                self._state["lastSignal"] = signal_summary
+
+    def _pause_lifecycle(self, moment: datetime, status: str, message: str) -> None:
+        timestamp = moment.isoformat()
+        with self._lock:
+            current = dict(self._state.get("lifecycle") or {})
+            self._state["lifecycle"] = {
+                **current,
+                "status": status,
+                "nextCheckAt": (moment + timedelta(seconds=self.closed_poll_seconds)).isoformat(),
+                "stages": {
+                    "data": {"status": status, "message": message, "timestamp": timestamp},
+                    "signal": {"status": "PAUSED", "message": "Strategy checks resume with the market", "timestamp": timestamp},
+                    "paper": {"status": "PAUSED", "message": "No new paper entry while the market is closed", "timestamp": timestamp},
+                },
+            }
+
+    def _fail_lifecycle(self, moment: datetime, error: Exception, retry_seconds: float) -> None:
+        timestamp = moment.isoformat()
+        with self._lock:
+            current = dict(self._state.get("lifecycle") or {})
+            stages = dict(current.get("stages") or {})
+            stages["data"] = {"status": "FAILED", "message": str(error)[:160], "timestamp": timestamp}
+            self._state["lifecycle"] = {
+                **current,
+                "status": "FAILED",
+                "completedAt": timestamp,
+                "nextCheckAt": (moment + timedelta(seconds=retry_seconds)).isoformat(),
+                "stages": stages,
+            }
+
     def _set_state(self, *, status: str, connection: str, message: str, details: Mapping[str, Any] | None = None, failure: bool = False, reset_failures: bool = False) -> None:
         with self._lock:
             self._state.update({"status": status, "connectionStatus": connection, "message": message})
@@ -291,4 +459,10 @@ class MarketSignalWorker:
         with self._lock:
             state = dict(self._state)
             state["symbols"] = list(self._symbols)
-        return {**self.engine.snapshot(), **state, "engine": self.engine_name}
+        return {
+            **self.engine.snapshot(),
+            **state,
+            "engine": self.engine_name,
+            "mode": self.automation_mode,
+            "signalSource": self.signal_source,
+        }

@@ -1,15 +1,16 @@
 "use client";
 
-import { Activity, AlertTriangle, Database, Gauge, RefreshCw, ScanSearch, Wallet } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, CircleDashed, Database, Gauge, RefreshCw, ScanSearch, Wallet } from "lucide-react";
 import { useCallback, type ReactNode } from "react";
 import { formatAge, formatDateTime, formatInteger, formatMoney, formatNumber, humanize, marketLabel, shortId, tone } from "./platform/format";
 import type { PlatformMarket } from "./platform/platform-client";
 import { useV2Resource } from "./platform/use-v2";
 import { v2Get } from "./platform/v2-client";
-import type { DashboardPayload, PaperOrder, Section, TradingViewActivityResponse } from "./platform/v2-types";
+import type { DashboardPayload, LifecycleStage, PaperOrder, Section, StrategyLifecycle, TradingViewActivityResponse } from "./platform/v2-types";
 import { EmptyState, LoadingState, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, SectionError, StatusBadge, WorkspaceHeader } from "./platform/workspace-ui";
 
-const DASHBOARD_REFRESH_MS = 30_000;
+const DASHBOARD_REFRESH_MS = 10_000;
+const OPERATIONS_REFRESH_MS = 30_000;
 
 function marketQuery(market: PlatformMarket): string {
   return market === "CRYPTO" ? "?market=CRYPTO" : "";
@@ -24,6 +25,53 @@ function readable(value: unknown): string {
   return value ? humanize(String(value)) : "Unavailable";
 }
 
+function lifecycleTone(status: string | null | undefined): "good" | "warn" | "bad" | "neutral" {
+  const key = String(status ?? "").toUpperCase();
+  if (["COMPLETE", "GENERATED", "PLACED", "READY", "RUNNING"].includes(key)) return "good";
+  if (["FAILED", "ERROR", "REJECTED", "NOT_PLACED", "EMPTY"].includes(key)) return "bad";
+  if (["PARTIAL", "QUEUED", "WAITING", "NO_SIGNAL", "NO_NEW_CANDLE", "MARKET_CLOSED", "PAUSED"].includes(key)) return "warn";
+  return "neutral";
+}
+
+function cycleTime(value: string | null | undefined, market: PlatformMarket): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  const zone = market === "NSE" ? "Asia/Kolkata" : "UTC";
+  return parsed.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false, timeZone: zone }) + (market === "NSE" ? " IST" : " UTC");
+}
+
+function LifecycleStep({ label, stage }: { label: string; stage?: LifecycleStage | null }) {
+  const status = stage?.status ?? "WAITING";
+  const stageTone = lifecycleTone(status);
+  return <div className="quant-lifecycle-step" data-tone={stageTone}>
+    <span className="quant-lifecycle-step-icon">{stageTone === "good" ? <CheckCircle2 size={16} /> : <CircleDashed size={16} />}</span>
+    <div><small>{label}</small><strong>{humanize(status)}</strong><span>{stage?.message ?? "Waiting for activity"}</span></div>
+  </div>;
+}
+
+function StrategyCycle({ lifecycle, market }: { lifecycle: StrategyLifecycle; market: PlatformMarket }) {
+  const cycle = lifecycle.cycle;
+  const stages = cycle?.stages ?? {};
+  const paperStage = cycle?.lastSignalId ? lifecycle.paper : stages.paper;
+  return <article className="quant-lifecycle-card">
+    <header>
+      <div><strong>{humanize(lifecycle.strategyId)}</strong><span>{lifecycle.timeframe} · {humanize(lifecycle.signalSource ?? "OPENDELTA")}</span></div>
+      <div className="quant-lifecycle-card-status"><StatusBadge tone={lifecycleTone(cycle?.status)}>{readable(cycle?.status ?? lifecycle.workerStatus)}</StatusBadge><small>{lifecycle.mode === "PAPER" ? "Paper mode" : "Signals mode"}</small></div>
+    </header>
+    <div className="quant-lifecycle-rail">
+      <LifecycleStep label="Market data" stage={stages.data} />
+      <LifecycleStep label="Signal check" stage={stages.signal} />
+      <LifecycleStep label="Paper trade" stage={paperStage} />
+    </div>
+    <footer>
+      <span>Last cycle <b>{cycleTime(cycle?.completedAt ?? cycle?.startedAt, market)}</b></span>
+      <span>Next check <b>{cycle?.status === "MARKET_CLOSED" ? "when market opens" : cycleTime(cycle?.nextCheckAt, market)}</b></span>
+      {lifecycle.lastSignal?.symbol && <span>Latest BUY <b>{lifecycle.lastSignal.symbol}</b> · {humanize(lifecycle.paper?.status ?? "waiting")}</span>}
+    </footer>
+  </article>;
+}
+
 export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const load = useCallback(() => v2Get<DashboardPayload>("dashboard", { market }), [market]);
   const { data, error, loading, reload, refresh } = useV2Resource(load, DASHBOARD_REFRESH_MS);
@@ -34,7 +82,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
     ]);
     return { tradingView: tradingView.events, orders: orders.orders };
   }, [market]);
-  const operations = useV2Resource(loadOperations, DASHBOARD_REFRESH_MS);
+  const operations = useV2Resource(loadOperations, OPERATIONS_REFRESH_MS);
   const query = marketQuery(market);
   const account = data?.paper.available ? data.paper.data?.account ?? null : null;
   const signalWorkers = data?.signalEngine.data?.workers ?? [];
@@ -42,6 +90,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const worker = signalWorkers[0] ?? storedWorkers[0] ?? null;
   const freshness = data?.marketData.data?.dataFreshness ?? null;
   const universe = data?.screener.data?.activeUniverse ?? null;
+  const lifecycles = data?.signalEngine.data?.lifecycles ?? [];
   const marketClosed = freshness?.reason === "MARKET_CLOSED_LAST_SESSION_CURRENT";
   const operationalAlerts = [
     ...(freshness?.status === "STALE" ? [`Market data is stale (${formatAge(freshness.ageSeconds)}).`] : []),
@@ -62,6 +111,10 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
 
       {!worker && <section className="quant-dashboard-next-step" aria-label="Strategy setup required"><div><strong>No strategy automation is running</strong><span>Save a strategy configuration, then choose Signals or Paper. Until then the dashboard has no signals or simulated trades to display.</span></div><a className="quant-action-link" href={"/settings" + query}>Configure strategy</a></section>}
       {operationalAlerts.length > 0 && <section className="quant-dashboard-next-step" aria-label="Operational notifications"><AlertTriangle size={18} /><div><strong>{operationalAlerts.length} operational notification{operationalAlerts.length === 1 ? "" : "s"}</strong><span>{operationalAlerts.join(" ")}</span></div><a className="quant-action-link" href={"/signals" + query}>Inspect activity</a></section>}
+
+      <Panel className="quant-lifecycle-panel" icon={<Activity size={18} />} title="Live strategy lifecycle" description="Actual data, signal and paper outcome for each active strategy." aside={<span className="quant-live-refresh"><i />Live · refreshes every 10s</span>}>
+        {lifecycles.length ? <div className="quant-lifecycle-list">{lifecycles.map((item) => <StrategyCycle key={`${item.strategyId}:${item.timeframe}`} lifecycle={item} market={market} />)}</div> : <EmptyState title="No active strategy lifecycle" description="Enable Signals or Paper from Strategies to start a monitored cycle." />}
+      </Panel>
 
       <Panel className="quant-primary-panel" icon={<Wallet size={18} />} title="Paper portfolio" description="Current simulated account performance." aside={<a className="quant-action-link" href={"/paper-trading" + query}>View account</a>}>
         <SectionBody section={data.paper}>{(section) => <div className="quant-portfolio-hero">

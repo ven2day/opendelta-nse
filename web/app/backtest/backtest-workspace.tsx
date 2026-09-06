@@ -15,7 +15,8 @@ const TRADES_POLL_MS = 6_000;
 const RUNS_REFRESH_MS = 15_000;
 const TRADES_PAGE_SIZE = 50;
 const ACTIVE_STATUSES = new Set(["QUEUED", "RUNNING"]);
-const DEFAULT_LOOKBACK_DAYS = 90;
+// A 60-day 5m Crypto run stays below the market-data service's 20,000-bar interactive limit.
+const DEFAULT_LOOKBACK_DAYS = 60;
 const DEFAULT_TIMEFRAME = "5m";
 type Notice = { kind: "success" | "error"; text: string } | null;
 type TradeSort = "symbol" | "status" | "entryTimestamp" | "entryPrice" | "quantity" | "targetPrice" | "stopPrice" | "exitTimestamp" | "exitPrice" | "netPnl" | "maePct" | "holdingMinutes";

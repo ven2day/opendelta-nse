@@ -185,6 +185,26 @@ class BacktestRouteTests(unittest.TestCase):
         self.assertIn("20,000 bars", caught.exception.detail)
         self.assertEqual(self.runner.submitted, [])
 
+        allowed = self._create(
+            market="CRYPTO",
+            strategyId="rsi_dip_ladder_v1",
+            symbols=["BTC-USD"],
+            startDate=date(2026, 6, 30),
+            endDate=date(2026, 9, 6),
+            configuration={},
+        )
+        self.assertEqual(allowed["status"], "QUEUED")
+
+        with self.assertRaises(HTTPException):
+            self._create(
+                market="CRYPTO",
+                strategyId="rsi_dip_ladder_v1",
+                symbols=["BTC-USD"],
+                startDate=date(2026, 6, 29),
+                endDate=date(2026, 9, 6),
+                configuration={},
+            )
+
     def test_create_resolves_built_in_universe_to_an_immutable_symbol_snapshot(self) -> None:
         record = self._create(symbols=[], universePresetId="nifty_top_20")
         self.assertEqual(len(record["symbols"]), 20)

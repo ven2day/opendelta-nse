@@ -6,11 +6,12 @@ process.env.APP_USERNAME = "test-admin";
 process.env.APP_PASSWORD = "test-password-123";
 process.env.AUTH_SECRET = "test-secret-that-is-at-least-32-characters-long";
 
-const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Indicators", "Signals", "Paper Trading", "Strategies"];
+const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Strategies"];
 const ROUTES = [
   { path: "/", title: "Dashboard" },
   { path: "/screener", title: "Watchlist" },
   { path: "/backtest", title: "Backtest" },
+  { path: "/research", title: "Research Lab" },
   { path: "/indicators", title: "Indicators" },
   { path: "/signals", title: "Signals" },
   { path: "/paper-trading", title: "Paper Trading" },
@@ -399,6 +400,14 @@ test("completed backtests expose the immutable strategy chart workspace", async 
   assert.match(chart, /indicator-studio\/sources/);
   assert.match(types, /export type BacktestChartResponse/);
   assert.doesNotMatch(chart, /placeOrder|marketOrder|Approve for Paper/);
+});
+
+test("Research Lab creates immutable grouped backtest variants without deployment actions", async () => {
+  const source = await readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /New controlled experiment/);
+  assert.match(source, /research\/experiments/);
+  assert.match(source, /Run \$\{variants\.length\} variants/);
+  assert.doesNotMatch(source, /backtests\/\$\{.*\}\/approve|strategy-deployments|paper-trading/);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

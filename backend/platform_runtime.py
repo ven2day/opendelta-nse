@@ -58,6 +58,7 @@ from backend.signals.configuration import LiveStrategyBinding, live_strategy_bin
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
+from backend.strategies.adapter_v2 import StrategyRunnerClient, StrategyV2BacktestAdapter
 
 LIVE_TIMEFRAME = "5m"
 
@@ -545,8 +546,14 @@ class PlatformRuntime:
     def _engine(self, request: BacktestRequest, cancel_event: threading.Event) -> BacktestEngine:
         spec = market_spec(request.market)
         source = self.candle_sources[request.market]()
+        if request.strategy_source_id:
+            source_record = self.strategy_sources().get(request.strategy_source_id)
+            socket_path = os.environ.get("STRATEGY_V2_RUNNER_SOCKET", "/run/opendelta-strategy/runner.sock")
+            strategy = StrategyV2BacktestAdapter(source_record, StrategyRunnerClient(socket_path))
+        else:
+            strategy = STRATEGIES.get(request.strategy_id)
         return BacktestEngine(
-            strategy=STRATEGIES.get(request.strategy_id),
+            strategy=strategy,
             market=spec,
             source=source,
             writer=DatabaseResultWriter(self.runs(), self.trades()),
@@ -590,6 +597,7 @@ def install_platform(
         registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner,
         configs=runtime.strategy_configs, deployments=runtime.strategy_deployments,
         universes=runtime.universes, approvals=runtime.strategy_approvals,
+        sources=runtime.strategy_sources,
         deployment_changed=runtime.reconcile_signal_workers,
     )
     app.router.routes.extend(create_backtest_router(services).routes)

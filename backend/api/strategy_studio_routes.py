@@ -1,7 +1,9 @@
 """Strategy Studio V2 authoring endpoints.
 
 These routes validate and version source only. They never execute submitted
-Python, and saved sources do not automatically enter the live registry.
+Python in the API process, and saved sources do not automatically enter the
+live registry. Backtests execute a selected immutable version through the
+separate Strategy V2 runner.
 """
 
 from __future__ import annotations

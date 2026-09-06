@@ -19,6 +19,7 @@ from backend.backtest.engine import BacktestRequest
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import BacktestTradeRepository
 from backend.strategies import STRATEGIES
+from backend.strategies.source_v2 import starter_source, validate_source
 from fastapi import HTTPException
 
 
@@ -76,6 +77,21 @@ class FakeRunner:
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         return self.runs.request_cancel(run_id)
+
+
+class FakeStrategySources:
+    def __init__(self) -> None:
+        validation = validate_source(starter_source())
+        self.row = {
+            "sourceId": str(uuid.uuid4()), "sourceCode": starter_source(),
+            "strategyId": validation.manifest["strategyId"], "strategyVersion": validation.manifest["version"],
+            "manifest": validation.manifest, "validation": validation.public(),
+        }
+
+    def get(self, source_id):
+        if source_id != self.row["sourceId"]:
+            raise KeyError(source_id)
+        return self.row
 
 
 class ApprovalFakes:
@@ -155,6 +171,34 @@ class BacktestRouteTests(unittest.TestCase):
             configuration={},
         )
         self.assertEqual(record["executionSettings"]["executionTimeframe"], "5m")
+
+    def test_v2_source_is_pinned_and_queued_for_backtest_only(self) -> None:
+        sources = FakeStrategySources()
+        api = endpoints(create_backtest_router(BacktestServices(
+            registry=STRATEGIES, runs=lambda: self.runs, trades=lambda: self.trades,
+            runner=lambda: self.runner, sources=lambda: sources,
+        )))
+        record = api["POST /v2/backtests"](BacktestCreateRequest(
+            market="CRYPTO", strategyId="my_strategy_v2", strategySourceId=sources.row["sourceId"],
+            symbols=["BTC-USDT"], timeframe="5m", startDate=date(2026, 9, 1), endDate=date(2026, 9, 2),
+            configuration={"rsi_length": 10}, execution={"initialQuantity": 0.01, "minimumQuantity": 1e-8},
+        ))
+        self.assertEqual(record["strategySourceId"], sources.row["sourceId"])
+        self.assertEqual(record["strategyVersion"], "1.0.0")
+        self.assertEqual(self.runner.submitted[-1].strategy_source_id, sources.row["sourceId"])
+
+        self.runs.records[record["runId"]]["status"] = "COMPLETE"
+        universe_id = str(uuid.uuid4())
+        fakes = ApprovalFakes(universe_id, record["symbols"])
+        guarded = endpoints(create_backtest_router(BacktestServices(
+            registry=STRATEGIES, runs=lambda: self.runs, trades=lambda: self.trades, runner=lambda: self.runner,
+            configs=lambda: fakes, deployments=lambda: fakes, universes=lambda: fakes, approvals=lambda: fakes,
+            sources=lambda: sources,
+        )))
+        with self.assertRaises(HTTPException) as blocked:
+            guarded["POST /v2/backtests/{run_id}/approve"](record["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id))
+        self.assertEqual(blocked.exception.status_code, 409)
+        self.assertIn("live runner phase", blocked.exception.detail)
 
     def test_crypto_run_accepts_fractional_lot_quantities(self) -> None:
         record = self._create(

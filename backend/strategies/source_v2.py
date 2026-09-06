@@ -29,6 +29,14 @@ FORBIDDEN_ROOTS = frozenset(
         "sys", "urllib",
     }
 )
+FORBIDDEN_ATTRIBUTES = frozenset(
+    {
+        "read_csv", "read_excel", "read_feather", "read_fwf", "read_html", "read_json",
+        "read_orc", "read_parquet", "read_pickle", "read_sas", "read_sql", "read_stata",
+        "load", "loadtxt", "save", "savetxt", "to_csv", "to_excel", "to_feather",
+        "to_json", "to_orc", "to_parquet", "to_pickle", "to_sql",
+    }
+)
 STRATEGY_ID = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 MARKETS = frozenset({"NSE", "CRYPTO"})
@@ -144,6 +152,8 @@ def validate_source(source: str) -> SourceValidation:
                 errors.append(f"Call '{name}' is not allowed.")
         elif isinstance(walked, ast.Attribute) and walked.attr.startswith("__"):
             errors.append("Dunder attribute access is not allowed.")
+        elif isinstance(walked, ast.Attribute) and walked.attr in FORBIDDEN_ATTRIBUTES:
+            errors.append(f"Data/file method '{walked.attr}' is not allowed in strategy source.")
 
     if "shift(-" in source.replace(" ", ""):
         errors.append("Negative shift is not allowed because it can introduce look-ahead bias.")
@@ -173,6 +183,7 @@ def _validate_manifest(raw: dict[Any, Any], errors: list[str]) -> dict[str, Any]
     markets = raw.get("markets", [])
     timeframes = raw.get("timeframes", [])
     parameters = raw.get("parameters", {})
+    required_history = raw.get("requiredHistory", 1)
     if not STRATEGY_ID.fullmatch(strategy_id):
         errors.append("STRATEGY.id must be 3-64 lowercase letters, numbers or underscores, starting with a letter.")
     if not name or len(name) > 120:
@@ -191,6 +202,23 @@ def _validate_manifest(raw: dict[Any, Any], errors: list[str]) -> dict[str, Any]
             json.dumps(parameters, allow_nan=False)
         except (TypeError, ValueError):
             errors.append("STRATEGY.parameters must contain JSON-compatible finite values only.")
+        for parameter_name, parameter_value in parameters.items():
+            valid_name = isinstance(parameter_name, str) and bool(parameter_name.strip())
+            valid_value = (
+                isinstance(parameter_value, (str, bool, int, float))
+                and not isinstance(parameter_value, complex)
+            ) or (
+                isinstance(parameter_value, list)
+                and all(isinstance(item, int) and not isinstance(item, bool) for item in parameter_value)
+            )
+            if not valid_name or not valid_value:
+                errors.append(
+                    "STRATEGY.parameters supports named string, boolean, number, or whole-number array defaults only."
+                )
+                break
+    if isinstance(required_history, bool) or not isinstance(required_history, int) or not 1 <= required_history <= 5_000:
+        errors.append("STRATEGY.requiredHistory must be a whole number between 1 and 5000.")
+        required_history = 1
     return {
         "strategyId": strategy_id,
         "name": name,
@@ -199,4 +227,5 @@ def _validate_manifest(raw: dict[Any, Any], errors: list[str]) -> dict[str, Any]
         "supportedMarkets": list(dict.fromkeys(markets)) if isinstance(markets, list) else [],
         "supportedTimeframes": list(dict.fromkeys(timeframes)) if isinstance(timeframes, list) else [],
         "parameters": parameters,
+        "requiredHistory": required_history,
     }

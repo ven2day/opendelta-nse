@@ -20,10 +20,12 @@ from backend.data.repositories import (
     StrategyApprovalRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
+    StrategySourceRepository,
 )
 from backend.data.universe_presets import get_universe_preset
 from backend.markets.common import MAX_INTERACTIVE_CANDLE_BARS, TIMEFRAME_SECONDS
 from backend.paper_trading.execution import ExecutionPolicy
+from backend.strategies.adapter_v2 import StrategyRunnerClient, StrategyV2BacktestAdapter
 from backend.strategies.registry import StrategyRegistry
 
 MAX_SYMBOLS = 2_000
@@ -32,6 +34,7 @@ MAX_SYMBOLS = 2_000
 class BacktestCreateRequest(BaseModel):
     market: str = Field(pattern="^(NSE|CRYPTO)$")
     strategyId: str = Field(min_length=1, max_length=80)
+    strategySourceId: str | None = None
     symbols: list[str] = Field(default_factory=list, max_length=MAX_SYMBOLS)
     universePresetId: str | None = Field(default=None, min_length=1, max_length=80)
     timeframe: str = Field(default="5m", min_length=1, max_length=8)
@@ -61,6 +64,7 @@ class BacktestServices:
         deployments: Callable[[], StrategyDeploymentRepository] | None = None,
         universes: Callable[[], SavedUniverseRepository] | None = None,
         approvals: Callable[[], StrategyApprovalRepository] | None = None,
+        sources: Callable[[], StrategySourceRepository] | None = None,
         deployment_changed: Callable[[str], None] | None = None,
     ) -> None:
         self.registry = registry
@@ -71,6 +75,7 @@ class BacktestServices:
         self.deployments = deployments
         self.universes = universes
         self.approvals = approvals
+        self.sources = sources
         self.deployment_changed = deployment_changed
 
     def runs(self) -> BacktestRunRepository:
@@ -96,10 +101,22 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
     def create_backtest(request: BacktestCreateRequest) -> dict[str, Any]:
         if request.market not in MARKETS:
             raise HTTPException(status_code=422, detail="market must be NSE or CRYPTO")
-        try:
-            strategy = services.registry.get(request.strategyId)
-        except KeyError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        strategy_source = None
+        if request.strategySourceId:
+            if services.sources is None:
+                raise HTTPException(status_code=503, detail="Strategy V2 source storage is not configured")
+            try:
+                strategy_source = _guard(services.sources).get(request.strategySourceId)
+            except (KeyError, ValueError) as error:
+                raise HTTPException(status_code=422, detail="Strategy V2 source was not found") from error
+            strategy = StrategyV2BacktestAdapter(strategy_source, StrategyRunnerClient("/not-used-during-validation"))
+            if strategy.strategy_id != request.strategyId:
+                raise HTTPException(status_code=422, detail="strategyId does not match the selected Strategy V2 source")
+        else:
+            try:
+                strategy = services.registry.get(request.strategyId)
+            except KeyError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
         if request.market not in strategy.supported_markets:
             raise HTTPException(status_code=422, detail=f"{strategy.strategy_id} does not support {request.market}")
         if request.timeframe not in strategy.supported_timeframes:
@@ -152,12 +169,14 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             symbols=symbols,
             start_date=request.startDate,
             end_date=request.endDate,
+            strategy_source_id=request.strategySourceId,
         )
         _guard(services.runner).submit(
             BacktestRequest(
                 run_id=record["runId"],
                 market=request.market,
                 strategy_id=strategy.strategy_id,
+                strategy_source_id=request.strategySourceId,
                 symbols=symbols,
                 timeframe=request.timeframe,
                 start_date=request.startDate,
@@ -193,6 +212,8 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=404, detail="Backtest run or watchlist was not found") from error
         if run["status"] != "COMPLETE":
             raise HTTPException(status_code=409, detail="Only a completed backtest can be approved")
+        if run.get("strategySourceId"):
+            raise HTTPException(status_code=409, detail="Strategy V2 backtests cannot be approved for Signals or Paper until the live runner phase is enabled")
         try:
             strategy = services.registry.get(run["strategyId"])
         except KeyError as error:

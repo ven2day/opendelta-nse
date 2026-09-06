@@ -1,0 +1,27 @@
+[Unit]
+Description=OpenDelta isolated Strategy V2 runner
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/strategy-runner
+ExecStartPre=-/usr/bin/docker rm -f opendelta-strategy-runner
+ExecStart=/usr/bin/docker run --rm --name opendelta-strategy-runner \
+  --network none \
+  --mount type=bind,source=/var/lib/opendelta/strategy-runner,target=/run/opendelta-strategy \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
+  --pids-limit 32 \
+  --memory 2g \
+  opendelta-strategy-runner:current
+ExecStop=/usr/bin/docker stop -t 10 opendelta-strategy-runner
+Restart=always
+RestartSec=3
+TimeoutStartSec=2min
+TimeoutStopSec=20s
+
+[Install]
+WantedBy=multi-user.target

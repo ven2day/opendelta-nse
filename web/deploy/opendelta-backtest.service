@@ -1,7 +1,7 @@
 [Unit]
 Description=OpenDelta historical backtest API
-After=docker.service network-online.target
-Requires=docker.service
+After=docker.service network-online.target opendelta-strategy-runner.service
+Requires=docker.service opendelta-strategy-runner.service
 Wants=network-online.target
 
 [Service]
@@ -9,6 +9,7 @@ Type=simple
 ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/backtest
 ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/dhan
 ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/opendelta/data
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/opendelta/strategy-runner
 ExecStartPre=-/usr/bin/docker network create opendelta-internal
 ExecStartPre=-/usr/bin/docker rm -f opendelta-backtest
 ExecStart=/usr/bin/docker run --rm --name opendelta-backtest \
@@ -20,6 +21,7 @@ ExecStart=/usr/bin/docker run --rm --name opendelta-backtest \
   --env CRYPTO_SIGNAL_ENGINE_ENABLED=true \
   --env CRYPTO_MARKET_DIR=/var/lib/opendelta/backtest/crypto-market \
   --env PLATFORM_DATA_DIR=/var/lib/opendelta/backtest/platform \
+  --env STRATEGY_V2_RUNNER_SOCKET=/run/opendelta-strategy/runner.sock \
   --env RESEARCH_ENGINE_V2_ENABLED=false \
   --env LIVE_SIGNAL_DIR=/var/lib/opendelta/backtest/live-signals \
   --env LIVE_MARKET_DATA_FILE=/var/lib/opendelta/data/nse_symbols_rsi_volume.csv \
@@ -29,6 +31,7 @@ ExecStart=/usr/bin/docker run --rm --name opendelta-backtest \
   --mount type=bind,source=/var/lib/opendelta/backtest,target=/var/lib/opendelta/backtest \
   --mount type=bind,source=/var/lib/opendelta/dhan,target=/var/lib/opendelta/dhan \
   --mount type=bind,source=/var/lib/opendelta/data,target=/var/lib/opendelta/data \
+  --mount type=bind,source=/var/lib/opendelta/strategy-runner,target=/run/opendelta-strategy \
   --publish 127.0.0.1:3200:8000 \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=128m \

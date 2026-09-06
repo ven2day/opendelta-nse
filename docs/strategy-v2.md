@@ -17,17 +17,23 @@ Metadata declares the stable strategy id, semantic version, supported markets,
 supported timeframes and parameter defaults. A saved `(strategy id, version)` is
 immutable. Editing requires a new semantic version.
 
-## Phase 1 safety boundary
+## Safety boundary
 
 The API parses the source into a Python AST and validates metadata, imports,
-function signatures and common unsafe/look-ahead constructs. It does **not**
-import or execute submitted code. Saving a source does not register, backtest,
+function signatures and common unsafe/look-ahead constructs. The API process
+does **not** import or execute submitted code. Saving a source does not register,
 approve, deploy or run it.
 
-Execution will be introduced through a separate resource-limited worker with no
-network, filesystem, database, subprocess or secret access. That worker must be
-in place before a V2 source can be promoted into the existing Backtest → Signals
-→ Paper lifecycle.
+For a backtest, OpenDelta sends the immutable source snapshot, resolved
+parameters and one symbol's completed candles to a separate resource-limited
+runner over a Unix socket. Production runs that service in a read-only Docker
+container with no network, environment secrets, database connection,
+subprocess capability or writable filesystem. Each request executes in a fresh,
+time-limited child process.
+
+Strategy V2 is currently **backtest-only**. A V2 backtest cannot be approved for
+Signals or Paper. That deliberate lock remains until the live-runner phase adds
+the same version/config/watchlist approval controls used by built-in strategies.
 
 ## Allowed analysis imports
 

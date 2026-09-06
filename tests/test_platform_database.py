@@ -68,6 +68,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "010_tradingview_signal_ingestion",
                 "011_strategy_governance",
                 "012_strategy_sources",
+                "013_strategy_v2_backtests",
             ],
         )
         self.assertEqual(self.database.migrate(), [])

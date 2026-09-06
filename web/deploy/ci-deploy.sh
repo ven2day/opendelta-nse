@@ -34,6 +34,11 @@ log "building images"
 "${REPO_DIR}/web/deploy/install-release.sh" "${release_id}"
 
 previous_backtest_image="$(docker inspect --format '{{.Image}}' opendelta-backtest 2>/dev/null || true)"
+previous_strategy_runner_image="$(docker inspect --format '{{.Image}}' opendelta-strategy-runner 2>/dev/null || true)"
+
+install -m 0644 "${REPO_DIR}/web/deploy/opendelta-strategy-runner.service" /etc/systemd/system/opendelta-strategy-runner.service
+install -m 0644 "${REPO_DIR}/web/deploy/opendelta-backtest.service" /etc/systemd/system/opendelta-backtest.service
+systemctl daemon-reload
 
 log "applying platform schema migrations"
 if docker run --rm \
@@ -44,12 +49,45 @@ if docker run --rm \
   log "platform schema current"
 else
   migration_rc=$?
-  log "schema migration exited ${migration_rc}; restoring previous backtest image"
+  log "schema migration exited ${migration_rc}; restoring previous service images"
   if [[ -n "${previous_backtest_image}" ]]; then
     docker tag "${previous_backtest_image}" opendelta-backtest:current
   fi
+  if [[ -n "${previous_strategy_runner_image}" ]]; then
+    docker tag "${previous_strategy_runner_image}" opendelta-strategy-runner:current
+  fi
   exit 1
 fi
+
+log "cutting over isolated Strategy V2 runner"
+if ! systemctl enable --now opendelta-strategy-runner.service || ! systemctl restart opendelta-strategy-runner.service; then
+  log "strategy runner failed to restart; restoring previous image"
+  if [[ -n "${previous_strategy_runner_image}" ]]; then
+    docker tag "${previous_strategy_runner_image}" opendelta-strategy-runner:current
+    systemctl restart opendelta-strategy-runner.service
+  fi
+  exit 1
+fi
+
+strategy_runner_healthy=false
+for _ in $(seq 1 60); do
+  status="$(docker inspect --format '{{.State.Health.Status}}' opendelta-strategy-runner 2>/dev/null || echo starting)"
+  if [[ "${status}" == "healthy" ]]; then
+    strategy_runner_healthy=true
+    break
+  fi
+  [[ "${status}" == "unhealthy" ]] && break
+  sleep 1
+done
+if [[ "${strategy_runner_healthy}" != true ]]; then
+  log "strategy runner failed health check"
+  if [[ -n "${previous_strategy_runner_image}" ]]; then
+    docker tag "${previous_strategy_runner_image}" opendelta-strategy-runner:current
+    systemctl restart opendelta-strategy-runner.service
+  fi
+  exit 1
+fi
+log "strategy runner healthy"
 
 log "cutting over backtest service"
 if ! systemctl restart opendelta-backtest.service; then
@@ -73,11 +111,15 @@ for _ in $(seq 1 90); do
 done
 
 if [[ "${backtest_healthy}" != true ]]; then
-  log "backtest failed to become healthy; rolling back image"
+  log "backtest failed to become healthy; rolling back service images"
   if [[ -n "${previous_backtest_image}" ]]; then
     docker tag "${previous_backtest_image}" opendelta-backtest:current
-    systemctl restart opendelta-backtest.service
   fi
+  if [[ -n "${previous_strategy_runner_image}" ]]; then
+    docker tag "${previous_strategy_runner_image}" opendelta-strategy-runner:current
+    systemctl restart opendelta-strategy-runner.service
+  fi
+  systemctl restart opendelta-backtest.service
   log "deploy aborted: backtest rollback complete, dashboard untouched"
   exit 1
 fi

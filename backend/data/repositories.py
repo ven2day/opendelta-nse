@@ -23,6 +23,7 @@ def _public_run(row: Mapping[str, Any]) -> dict[str, Any]:
         "market": row["market"],
         "strategyId": row["strategy_id"],
         "strategyVersion": row["strategy_version"],
+        "strategySourceId": str(row["strategy_source_id"]) if row.get("strategy_source_id") else None,
         "configurationSnapshot": row["configuration_snapshot"],
         "executionSettings": row["execution_settings"],
         "timeframe": row["timeframe"],
@@ -60,16 +61,17 @@ class BacktestRunRepository:
         symbols: Sequence[str],
         start_date: date,
         end_date: date,
+        strategy_source_id: uuid.UUID | str | None = None,
     ) -> dict[str, Any]:
         run_id = uuid.uuid4()
         self.database.execute(
             """
             INSERT INTO backtest_runs (
-                run_id, market, strategy_id, strategy_version, configuration_snapshot, execution_settings,
+                run_id, market, strategy_id, strategy_version, strategy_source_id, configuration_snapshot, execution_settings,
                 timeframe, symbols, start_date, end_date, status, symbols_total
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s)
             """,
-            (run_id, market, strategy_id, strategy_version, jsonb(dict(configuration_snapshot)), jsonb(dict(execution_settings)), timeframe, jsonb(list(symbols)), start_date, end_date, len(symbols)),
+            (run_id, market, strategy_id, strategy_version, uuid.UUID(str(strategy_source_id)) if strategy_source_id else None, jsonb(dict(configuration_snapshot)), jsonb(dict(execution_settings)), timeframe, jsonb(list(symbols)), start_date, end_date, len(symbols)),
         )
         return self.get(run_id)
 

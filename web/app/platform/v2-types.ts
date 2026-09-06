@@ -149,6 +149,7 @@ export type StrategySourceManifest = {
   supportedMarkets: PlatformMarket[];
   supportedTimeframes: string[];
   parameters: ConfigValues;
+  requiredHistory?: number;
 };
 export type StrategySourceValidation = {
   valid: boolean;
@@ -199,6 +200,7 @@ export type BacktestRun = {
   market: PlatformMarket;
   strategyId: string;
   strategyVersion?: string | null;
+  strategySourceId?: string | null;
   configurationSnapshot?: ConfigValues | null;
   executionSettings?: ConfigValues | null;
   timeframe: string;

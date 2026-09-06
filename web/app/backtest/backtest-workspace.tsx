@@ -7,7 +7,7 @@ import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, pickValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
-import type { BacktestApproval, BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, StrategyDeploymentsResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
+import type { BacktestApproval, BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, Strategy, StrategyConfigResponse, StrategyDeploymentsResponse, StrategySourcesResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
 import { ConfirmDialog, EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
@@ -21,6 +21,7 @@ const DEFAULT_TIMEFRAME = "5m";
 type Notice = { kind: "success" | "error"; text: string } | null;
 type TradeSort = "symbol" | "status" | "entryTimestamp" | "entryPrice" | "quantity" | "targetPrice" | "stopPrice" | "exitTimestamp" | "exitPrice" | "netPnl" | "maePct" | "holdingMinutes";
 type SortDirection = "asc" | "desc";
+type BacktestStrategyOption = { key: string; strategy: Strategy; strategySourceId: string | null };
 
 function SortableHeading({ label, column, active, direction, numeric, onSort }: { label: string; column: TradeSort; active: boolean; direction: SortDirection; numeric?: boolean; onSort: (column: TradeSort) => void }) {
   const icon: ReactNode = active ? (direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />) : <ChevronsUpDown size={12} />;
@@ -106,11 +107,13 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
   const loadRuns = useCallback(() => v2Get<BacktestRunsResponse>("backtests", { market, limit: 20 }), [market]);
   const loadDeployments = useCallback(() => v2Get<StrategyDeploymentsResponse>("strategy-deployments", { market }), [market]);
+  const loadStrategySources = useCallback(() => v2Get<StrategySourcesResponse>("strategy-studio/sources", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
   const universes = useV2Resource(loadUniverses);
   const presets = useV2Resource(loadPresets);
   const runs = useV2Resource(loadRuns, RUNS_REFRESH_MS);
   const deployments = useV2Resource(loadDeployments);
+  const strategySources = useV2Resource(loadStrategySources);
   const { refresh: refreshRuns } = runs;
 
   const [strategyChoice, setStrategyChoice] = useState<string | null>(null);
@@ -135,12 +138,26 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const [tradeOffset, setTradeOffset] = useState(0);
 
   const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((strategy) => !strategy.supportedMarkets?.length || strategy.supportedMarkets.includes(market)), [strategies.data, market]);
-  const strategy = marketStrategies.find((item) => item.strategyId === strategyChoice) ?? marketStrategies[0] ?? null;
+  const strategyOptions = useMemo<BacktestStrategyOption[]>(() => [
+    ...marketStrategies.map((strategy) => ({ key: `builtin:${strategy.strategyId}`, strategy, strategySourceId: null })),
+    ...(strategySources.data?.sources ?? []).map((source) => ({
+      key: `v2:${source.sourceId}`,
+      strategySourceId: source.sourceId,
+      strategy: {
+        strategyId: source.strategyId, name: `${source.name} (V2)`, version: source.strategyVersion,
+        supportedMarkets: source.manifest.supportedMarkets,
+        supportedTimeframes: source.manifest.supportedTimeframes,
+        configSchema: schemaFromValues(source.manifest.parameters), defaults: source.manifest.parameters,
+      },
+    })),
+  ], [marketStrategies, strategySources.data]);
+  const selectedStrategyOption = strategyOptions.find((item) => item.key === strategyChoice) ?? strategyOptions[0] ?? null;
+  const strategy = selectedStrategyOption?.strategy ?? null;
   const strategyId = strategy?.strategyId ?? null;
-  const loadConfig = useCallback(() => (strategyId ? v2Get<StrategyConfigResponse>(`strategies/${strategyId}/config`, { market }) : Promise.resolve(null)), [strategyId, market]);
+  const loadConfig = useCallback(() => (strategyId && !selectedStrategyOption?.strategySourceId ? v2Get<StrategyConfigResponse>(`strategies/${strategyId}/config`, { market }) : Promise.resolve(null)), [strategyId, selectedStrategyOption?.strategySourceId, market]);
   const config = useV2Resource(loadConfig);
 
-  const configKey = `${market}:${strategyId ?? ""}`;
+  const configKey = `${market}:${selectedStrategyOption?.key ?? ""}`;
   const configuration = strategy ? schemaDefaults(strategy.configSchema, config.data?.effectiveConfiguration, strategy.defaults) : {};
   const executionSchema = useMemo(() => executionSchemaFrom(strategies.data), [strategies.data]);
   const execution = schemaDefaults(executionSchema, config.data?.effectiveRiskSettings, strategies.data?.riskDefaults);
@@ -210,6 +227,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
       const created = await v2Post<BacktestRun>("backtests", {
         market,
         strategyId: strategy.strategyId,
+        strategySourceId: selectedStrategyOption?.strategySourceId ?? undefined,
         ...(selectedPreset ? { universePresetId: selectedPreset.presetId } : { symbols }),
         timeframe,
         startDate,
@@ -268,10 +286,10 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     />
 
     <Panel icon={<FlaskConical size={17} />} title="Run backtest">
-      {strategies.loading || universes.loading ? <LoadingState label="Loading strategies and universes" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies for this market" description={`No registered strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={submit} noValidate>
+      {strategies.loading || universes.loading || strategySources.loading ? <LoadingState label="Loading strategies and universes" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies for this market" description={`No registered or V2 strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={submit} noValidate>
         <div className="quant-panel-body">
           <div className="quant-form-grid quant-backtest-run-grid">
-            <label className="strategy"><span>Strategy</span><select value={strategy.strategyId} onChange={(event) => setStrategyChoice(event.target.value)}>{marketStrategies.map((item) => <option key={item.strategyId} value={item.strategyId}>{item.name} · v{item.version}</option>)}</select></label>
+            <label className="strategy"><span>Strategy</span><select value={selectedStrategyOption?.key ?? ""} onChange={(event) => setStrategyChoice(event.target.value)}><optgroup label="OpenDelta built-in">{strategyOptions.filter((item) => !item.strategySourceId).map((item) => <option key={item.key} value={item.key}>{item.strategy.name} · v{item.strategy.version}</option>)}</optgroup>{strategyOptions.some((item) => item.strategySourceId) && <optgroup label="Strategy Studio V2">{strategyOptions.filter((item) => item.strategySourceId).map((item) => <option key={item.key} value={item.key}>{item.strategy.name} · v{item.strategy.version}</option>)}</optgroup>}</select></label>
             <label><span>Timeframe</span><select value={timeframe} onChange={(event) => setTimeframeChoice(event.target.value)}>{timeframes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <label><span>Start date</span><input type="date" value={startDate} max={endDate} onChange={(event) => setStartDate(event.target.value)} /></label>
             <label><span>End date</span><input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label>
@@ -279,6 +297,8 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <div className="quant-backtest-run-action"><span>Action</span><button type="submit" className="primary" disabled={submitting || config.loading}>{submitting ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}{submitting ? "Starting…" : "Run backtest"}</button></div>
           </div>
           {universes.error && <p className="quant-inline-note">Saved universes unavailable: {universes.error.message}</p>}
+          {strategySources.error && <p className="quant-inline-note">Strategy V2 sources unavailable: {strategySources.error.message}</p>}
+          {selectedStrategyOption?.strategySourceId && <p className="quant-inline-note">Strategy V2 runs in the isolated, networkless backtest runner. It cannot be approved for Signals or Paper yet.</p>}
           {presets.error && <p className="quant-inline-note">Ready-made universes unavailable: {presets.error.message}</p>}
           {selectedPreset && <p className="quant-inline-note">{selectedPreset.name} · official snapshot {selectedPreset.asOf} · {selectedPreset.symbols.length} symbols</p>}
           {effectiveSymbolSource === "custom" && <label className="quant-backtest-custom-symbols"><span>Custom symbols</span><input value={customSymbols} placeholder="RELIANCE, TCS, INFY" onChange={(event) => setCustomSymbols(event.target.value)} /><small>{symbols.length} symbols selected</small></label>}
@@ -313,7 +333,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <dl><div><dt>Win rate</dt><dd>{metrics.winRate != null ? formatPercent(metrics.winRate, 1) : "—"}</dd></div><div><dt>Completed trades</dt><dd>{formatInteger(metrics.completedTrades)}</dd></div><div><dt>Max drawdown</dt><dd>{formatMoney(metrics.maximumDrawdown, market)}</dd></div><div><dt>Costs</dt><dd>{formatMoney((metrics.fees ?? 0) + (metrics.slippage ?? 0), market)}</dd></div></dl>
           </section>
           <details className="quant-secondary-disclosure"><summary><span>Execution metrics</span><small>Outcomes, excursions and coverage</small></summary><dl className="quant-facts"><div><dt>Signals / open</dt><dd>{formatInteger(metrics.totalSignals)} / {formatInteger(metrics.openTrades)}</dd></div><div><dt>Targets / stops / expiries</dt><dd>{formatInteger(metrics.targetHits)} / {formatInteger(metrics.stoppedTrades)} / {formatInteger(metrics.expiredTrades)}</dd></div><div><dt>Average MAE / MFE</dt><dd>{formatPercent(metrics.averageMaePct)} / {formatPercent(metrics.averageMfePct)}</dd></div><div><dt>Average / median holding</dt><dd>{formatMinutes(metrics.averageHoldingMinutes)} / {formatMinutes(metrics.medianHoldingMinutes)}</dd></div><div><dt>Symbols processed / failed</dt><dd>{formatInteger(metrics.symbolsProcessed)} / {formatInteger(metrics.symbolsFailed)}</dd></div><div><dt>Fees / slippage</dt><dd>{formatMoney(metrics.fees, market)} / {formatMoney(metrics.slippage, market)}</dd></div></dl></details>
-          {run.status === "COMPLETE" && <section className="quant-form-actions" aria-label="Backtest approval workflow"><button type="button" disabled={Boolean(approving) || !approvalUniverse} onClick={() => void approve("SIGNALS")}><CheckCircle2 size={14} />{approving === "SIGNALS" ? "Approving…" : approvals.data?.approvals.some((item) => item.mode === "SIGNALS") ? "Signals approved" : "Approve for Signals"}</button><button type="button" className="primary" disabled={Boolean(approving) || !approvalUniverse || !(approvedSignalsRun === run.runId || approvals.data?.approvals.some((item) => item.mode === "SIGNALS"))} onClick={() => void approve("PAPER")}><CheckCircle2 size={14} />{approving === "PAPER" ? "Approving…" : approvals.data?.approvals.some((item) => item.mode === "PAPER") ? "Paper approved" : "Approve for Paper"}</button><span>{approvalUniverse ? `Pinned to watchlist “${approvalUniverse.name}” and ${approvalSource === "TRADINGVIEW" ? "TradingView" : "OpenDelta"}. Paper unlocks after Signals approval.` : "Save a watchlist containing exactly this run’s symbols before approval."}</span></section>}
+          {run.status === "COMPLETE" && (run.strategySourceId ? <Message kind="success">Strategy V2 backtest completed in isolation. Promotion to Signals and Paper remains locked until the live-runner phase.</Message> : <section className="quant-form-actions" aria-label="Backtest approval workflow"><button type="button" disabled={Boolean(approving) || !approvalUniverse} onClick={() => void approve("SIGNALS")}><CheckCircle2 size={14} />{approving === "SIGNALS" ? "Approving…" : approvals.data?.approvals.some((item) => item.mode === "SIGNALS") ? "Signals approved" : "Approve for Signals"}</button><button type="button" className="primary" disabled={Boolean(approving) || !approvalUniverse || !(approvedSignalsRun === run.runId || approvals.data?.approvals.some((item) => item.mode === "SIGNALS"))} onClick={() => void approve("PAPER")}><CheckCircle2 size={14} />{approving === "PAPER" ? "Approving…" : approvals.data?.approvals.some((item) => item.mode === "PAPER") ? "Paper approved" : "Approve for Paper"}</button><span>{approvalUniverse ? `Pinned to watchlist “${approvalUniverse.name}” and ${approvalSource === "TRADINGVIEW" ? "TradingView" : "OpenDelta"}. Paper unlocks after Signals approval.` : "Save a watchlist containing exactly this run’s symbols before approval."}</span></section>)}
         </div> : <div className="quant-panel-body"><p className="quant-inline-note">{runActive ? "Metrics are published when the run completes." : "No metrics were recorded for this run."}</p></div>}
         {run.failedSymbols && run.failedSymbols.length > 0 && <div className="quant-panel-body"><details className="quant-details"><summary>{formatInteger(run.failedSymbols.length)} failed symbols</summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Symbol</th><th>Message</th></tr></thead><tbody>{run.failedSymbols.map((item) => <tr key={item.symbol}><td><strong>{item.symbol}</strong></td><td>{item.message}</td></tr>)}</tbody></table></div></details></div>}
       </>}

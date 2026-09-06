@@ -98,6 +98,7 @@ export function schemaFromValues(values: ConfigValues, labels?: Record<string, s
     const label = labels?.[key];
     if (typeof value === "boolean") schema[key] = { type: "boolean", default: value, label };
     else if (typeof value === "number") schema[key] = { type: Number.isInteger(value) ? "integer" : "number", default: value, label, minimum: 0 };
+    else if (Array.isArray(value) && value.every((item) => typeof item === "number" && Number.isInteger(item))) schema[key] = { type: "integer_array", default: value, label };
     else schema[key] = { type: "string", default: value === null || value === undefined ? "" : String(value), label };
   }
   return schema;

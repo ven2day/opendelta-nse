@@ -4,6 +4,7 @@
 import {
   Activity,
   Gauge,
+  FlaskConical,
   LineChart,
   LayoutDashboard,
   LogOut,
@@ -37,6 +38,7 @@ export const navigation: NavigationItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (path) => path === "/" },
   { href: "/screener", label: "Watchlist", icon: ScanSearch, match: (path) => path.startsWith("/screener") },
   { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") },
+  { href: "/research", label: "Research", icon: FlaskConical, match: (path) => path.startsWith("/research") },
   { href: "/indicators", label: "Indicators", icon: LineChart, match: (path) => path.startsWith("/indicators") },
   { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
   { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },

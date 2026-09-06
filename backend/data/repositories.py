@@ -314,6 +314,345 @@ class ResearchExperimentRepository:
         }
 
 
+class WalkForwardValidationRepository:
+    """Durable fold graph; every training/test observation is an immutable backtest run."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def nse_sessions(self, start_date: date, end_date: date) -> list[date]:
+        rows = self.database.fetch_all(
+            """
+            SELECT session_date FROM market_sessions
+            WHERE market = 'NSE' AND is_trading_day = true AND session_date BETWEEN %s AND %s
+            ORDER BY session_date
+            """,
+            (start_date, end_date),
+        )
+        return [row["session_date"] for row in rows]
+
+    def create_generated(
+        self,
+        *,
+        name: str,
+        mode: str,
+        market: str,
+        strategy_id: str,
+        strategy_version: str,
+        strategy_source_id: uuid.UUID | str | None,
+        timeframe: str,
+        symbols: Sequence[str],
+        universe_id: uuid.UUID | str | None,
+        universe_name: str,
+        overall_start_date: date,
+        overall_end_date: date,
+        training_window: int,
+        testing_window: int,
+        step_length: int,
+        maximum_folds: int,
+        candidate_experiment_id: uuid.UUID | str,
+        ranking_objective: str,
+        minimum_required_trades: int,
+        transaction_cost_bps: float,
+        slippage_bps: float,
+        preview_hash: str,
+        idempotency_key: str,
+        workload: Mapping[str, int],
+        folds: Sequence[Mapping[str, Any]],
+        candidates: Sequence[Mapping[str, Any]],
+    ) -> tuple[dict[str, Any], bool]:
+        validation_id = uuid.uuid4()
+        created = False
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO walk_forward_validations (
+                    validation_id, name, mode, market, strategy_id, strategy_version, strategy_source_id,
+                    timeframe, symbols, universe_id, universe_name, overall_start_date, overall_end_date,
+                    training_window, testing_window, step_length, maximum_folds, candidate_experiment_id,
+                    ranking_objective, minimum_required_trades, transaction_cost_bps, slippage_bps,
+                    preview_hash, idempotency_key, fold_count, candidate_count, child_run_count,
+                    symbol_count, estimated_symbol_runs, estimated_candle_workload
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                ) ON CONFLICT (idempotency_key) DO NOTHING RETURNING validation_id
+                """,
+                (
+                    validation_id, name, mode, market, strategy_id, strategy_version,
+                    uuid.UUID(str(strategy_source_id)) if strategy_source_id else None,
+                    timeframe, jsonb(list(symbols)), uuid.UUID(str(universe_id)) if universe_id else None,
+                    universe_name, overall_start_date, overall_end_date, training_window, testing_window,
+                    step_length, maximum_folds, uuid.UUID(str(candidate_experiment_id)), ranking_objective,
+                    minimum_required_trades, transaction_cost_bps, slippage_bps, preview_hash,
+                    idempotency_key.strip(), workload["foldCount"], workload["candidateCount"],
+                    workload["childRunCount"], workload["symbolCount"], workload["estimatedSymbolRuns"],
+                    workload["estimatedCandleWorkload"],
+                ),
+            )
+            inserted = cursor.fetchone()
+            if inserted is None:
+                cursor.execute(
+                    "SELECT validation_id FROM walk_forward_validations WHERE idempotency_key = %s",
+                    (idempotency_key.strip(),),
+                )
+                existing = cursor.fetchone()
+                if existing is None:
+                    raise RuntimeError("Idempotent walk-forward lookup failed")
+                validation_id = existing["validation_id"]
+            else:
+                created = True
+
+            if created:
+                for fold in folds:
+                    fold_id = uuid.uuid4()
+                    cursor.execute(
+                        """
+                        INSERT INTO walk_forward_folds (
+                            fold_id, validation_id, position, training_start_date, training_end_date,
+                            testing_start_date, testing_end_date, training_sessions, testing_sessions
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            fold_id, validation_id, fold["position"], fold["trainingStart"], fold["trainingEnd"],
+                            fold["testingStart"], fold["testingEnd"], fold["trainingSessions"],
+                            fold["testingSessions"],
+                        ),
+                    )
+                    for candidate in candidates:
+                        run_id = uuid.uuid4()
+                        execution = {
+                            **dict(candidate["execution"]),
+                            "transactionCostBps": transaction_cost_bps,
+                            "slippageBps": slippage_bps,
+                        }
+                        cursor.execute(
+                            """
+                            INSERT INTO backtest_runs (
+                                run_id, market, strategy_id, strategy_version, strategy_source_id,
+                                configuration_snapshot, execution_settings, timeframe, symbols,
+                                start_date, end_date, status, symbols_total
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s)
+                            """,
+                            (
+                                run_id, market, strategy_id, strategy_version,
+                                uuid.UUID(str(strategy_source_id)) if strategy_source_id else None,
+                                jsonb(dict(candidate["configuration"])), jsonb(execution), timeframe,
+                                jsonb(list(symbols)), fold["trainingStart"], fold["trainingEnd"], len(symbols),
+                            ),
+                        )
+                        cursor.execute(
+                            """
+                            INSERT INTO walk_forward_training_runs (
+                                fold_id, candidate_variant_id, candidate_name, position, run_id
+                            ) VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                fold_id, uuid.UUID(str(candidate["variantId"])), candidate["name"],
+                                candidate["position"], run_id,
+                            ),
+                        )
+        return self.get(validation_id), created
+
+    def create_test_run(
+        self,
+        *,
+        fold_id: uuid.UUID | str,
+        candidate: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        with self.database.transaction() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT f.*, v.* FROM walk_forward_folds f
+                JOIN walk_forward_validations v ON v.validation_id = f.validation_id
+                WHERE f.fold_id = %s FOR UPDATE
+                """,
+                (uuid.UUID(str(fold_id)),),
+            )
+            fold = cursor.fetchone()
+            if fold is None:
+                raise KeyError(f"Walk-forward fold {fold_id} was not found")
+            if fold["test_run_id"] is not None:
+                cursor.execute("SELECT * FROM backtest_runs WHERE run_id = %s", (fold["test_run_id"],))
+                return _public_run(cursor.fetchone())
+            run_id = uuid.uuid4()
+            cursor.execute(
+                """
+                INSERT INTO backtest_runs (
+                    run_id, market, strategy_id, strategy_version, strategy_source_id,
+                    configuration_snapshot, execution_settings, timeframe, symbols,
+                    start_date, end_date, status, symbols_total
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s)
+                """,
+                (
+                    run_id, fold["market"], fold["strategy_id"], fold["strategy_version"],
+                    fold["strategy_source_id"], jsonb(dict(candidate["configuration"])),
+                    jsonb(dict(candidate["execution"])), fold["timeframe"], jsonb(list(fold["symbols"])),
+                    fold["testing_start_date"], fold["testing_end_date"], len(fold["symbols"]),
+                ),
+            )
+            cursor.execute(
+                """
+                UPDATE walk_forward_folds SET
+                    selected_variant_id = %s, selected_candidate_name = %s,
+                    selected_configuration = %s, selected_execution_settings = %s,
+                    training_rank = 1, test_run_id = %s, status = 'TESTING'
+                WHERE fold_id = %s
+                """,
+                (
+                    uuid.UUID(str(candidate["variantId"])), candidate["name"],
+                    jsonb(dict(candidate["configuration"])), jsonb(dict(candidate["execution"])),
+                    run_id, uuid.UUID(str(fold_id)),
+                ),
+            )
+            cursor.execute("SELECT * FROM backtest_runs WHERE run_id = %s", (run_id,))
+            return _public_run(cursor.fetchone())
+
+    def update_fold(self, fold_id: uuid.UUID | str, *, status: str, error: str | None = None) -> None:
+        completed_at = _now() if status in {"COMPLETE", "FAILED", "CANCELLED"} else None
+        self.database.execute(
+            "UPDATE walk_forward_folds SET status = %s, error = %s, completed_at = %s WHERE fold_id = %s",
+            (status, error, completed_at, uuid.UUID(str(fold_id))),
+        )
+
+    def finish(self, validation_id: uuid.UUID | str, aggregate: Mapping[str, Any]) -> None:
+        self.database.execute(
+            """
+            UPDATE walk_forward_validations
+            SET aggregate_unseen_metrics = %s, completed_at = %s
+            WHERE validation_id = %s
+            """,
+            (jsonb(dict(aggregate)), _now(), uuid.UUID(str(validation_id))),
+        )
+
+    def request_cancel(self, validation_id: uuid.UUID | str) -> dict[str, Any]:
+        self.database.execute(
+            "UPDATE walk_forward_validations SET cancel_requested = true WHERE validation_id = %s",
+            (uuid.UUID(str(validation_id)),),
+        )
+        return self.get(validation_id)
+
+    def get_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one(
+            "SELECT validation_id FROM walk_forward_validations WHERE idempotency_key = %s",
+            (idempotency_key.strip(),),
+        )
+        return self.get(row["validation_id"]) if row is not None else None
+
+    def list(self, market: str | None = None, *, limit: int = 50) -> list[dict[str, Any]]:
+        if market:
+            rows = self.database.fetch_all(
+                "SELECT validation_id FROM walk_forward_validations WHERE market = %s ORDER BY created_at DESC LIMIT %s",
+                (market, limit),
+            )
+        else:
+            rows = self.database.fetch_all(
+                "SELECT validation_id FROM walk_forward_validations ORDER BY created_at DESC LIMIT %s", (limit,)
+            )
+        return [self.get(row["validation_id"]) for row in rows]
+
+    def get(self, validation_id: uuid.UUID | str) -> dict[str, Any]:
+        key = uuid.UUID(str(validation_id))
+        row = self.database.fetch_one("SELECT * FROM walk_forward_validations WHERE validation_id = %s", (key,))
+        if row is None:
+            raise KeyError(f"Walk-forward validation {validation_id} was not found")
+        folds = self.database.fetch_all(
+            "SELECT * FROM walk_forward_folds WHERE validation_id = %s ORDER BY position", (key,)
+        )
+        public_folds: list[dict[str, Any]] = []
+        all_runs: list[dict[str, Any]] = []
+        for fold in folds:
+            candidates = self.database.fetch_all(
+                """
+                SELECT t.candidate_variant_id, t.candidate_name, t.position AS candidate_position, r.*
+                FROM walk_forward_training_runs t JOIN backtest_runs r ON r.run_id = t.run_id
+                WHERE t.fold_id = %s ORDER BY t.position
+                """,
+                (fold["fold_id"],),
+            )
+            public_candidates = [
+                {
+                    "variantId": str(candidate["candidate_variant_id"]),
+                    "name": candidate["candidate_name"],
+                    "position": int(candidate["candidate_position"]),
+                    "configuration": candidate["configuration_snapshot"],
+                    "execution": candidate["execution_settings"],
+                    "run": _public_run(candidate),
+                }
+                for candidate in candidates
+            ]
+            all_runs.extend(candidate["run"] for candidate in public_candidates)
+            test_run = None
+            if fold["test_run_id"] is not None:
+                test_row = self.database.fetch_one("SELECT * FROM backtest_runs WHERE run_id = %s", (fold["test_run_id"],))
+                test_run = _public_run(test_row)
+                all_runs.append(test_run)
+            public_folds.append({
+                "foldId": str(fold["fold_id"]), "position": int(fold["position"]),
+                "trainingStart": fold["training_start_date"].isoformat(),
+                "trainingEnd": fold["training_end_date"].isoformat(),
+                "testingStart": fold["testing_start_date"].isoformat(),
+                "testingEnd": fold["testing_end_date"].isoformat(),
+                "trainingSessions": int(fold["training_sessions"]),
+                "testingSessions": int(fold["testing_sessions"]),
+                "status": fold["status"], "error": fold["error"],
+                "selectedVariantId": str(fold["selected_variant_id"]) if fold["selected_variant_id"] else None,
+                "selectedCandidateName": fold["selected_candidate_name"],
+                "selectedConfiguration": fold["selected_configuration"],
+                "selectedExecution": fold["selected_execution_settings"],
+                "trainingRank": fold["training_rank"],
+                "trainingCandidates": public_candidates, "testRun": test_run,
+                "completedAt": fold["completed_at"].isoformat() if fold["completed_at"] else None,
+            })
+        run_counts = dict.fromkeys(("QUEUED", "RUNNING", "COMPLETE", "FAILED", "CANCELLED", "INTERRUPTED"), 0)
+        for run in all_runs:
+            run_counts[run["status"]] = run_counts.get(run["status"], 0) + 1
+        fold_counts = dict.fromkeys(("QUEUED", "TRAINING", "TESTING", "COMPLETE", "FAILED", "CANCELLED"), 0)
+        for fold in public_folds:
+            fold_counts[fold["status"]] = fold_counts.get(fold["status"], 0) + 1
+        if fold_counts["COMPLETE"] == len(public_folds):
+            status = "COMPLETE"
+        elif fold_counts["CANCELLED"] == len(public_folds):
+            status = "CANCELLED"
+        elif fold_counts["FAILED"] and fold_counts["FAILED"] + fold_counts["CANCELLED"] == len(public_folds):
+            status = "FAILED"
+        elif fold_counts["TESTING"] or fold_counts["TRAINING"]:
+            status = "RUNNING"
+        elif row["cancel_requested"]:
+            status = "CANCELLING"
+        elif fold_counts["COMPLETE"] + fold_counts["FAILED"] + fold_counts["CANCELLED"] == len(public_folds):
+            status = "PARTIAL"
+        else:
+            status = "QUEUED"
+        return {
+            "validationId": str(row["validation_id"]), "name": row["name"], "mode": row["mode"],
+            "strategyId": row["strategy_id"], "strategyVersion": row["strategy_version"],
+            "strategySourceId": str(row["strategy_source_id"]) if row["strategy_source_id"] else None,
+            "market": row["market"], "timeframe": row["timeframe"], "symbols": row["symbols"],
+            "universeId": str(row["universe_id"]) if row["universe_id"] else None,
+            "universeName": row["universe_name"],
+            "overallStartDate": row["overall_start_date"].isoformat(),
+            "overallEndDate": row["overall_end_date"].isoformat(),
+            "trainingWindow": int(row["training_window"]), "testingWindow": int(row["testing_window"]),
+            "step": int(row["step_length"]), "maximumFolds": int(row["maximum_folds"]),
+            "candidateExperimentId": str(row["candidate_experiment_id"]),
+            "rankingObjective": row["ranking_objective"],
+            "minimumRequiredTrades": int(row["minimum_required_trades"]),
+            "transactionCostBps": float(row["transaction_cost_bps"]),
+            "slippageBps": float(row["slippage_bps"]),
+            "previewHash": row["preview_hash"], "foldCount": int(row["fold_count"]),
+            "candidateCount": int(row["candidate_count"]), "childRunCount": int(row["child_run_count"]),
+            "symbolCount": int(row["symbol_count"]),
+            "estimatedSymbolRuns": int(row["estimated_symbol_runs"]),
+            "estimatedCandleWorkload": int(row["estimated_candle_workload"]),
+            "cancelRequested": bool(row["cancel_requested"]), "status": status,
+            "foldStatusCounts": fold_counts, "childRunStatusCounts": run_counts,
+            "aggregateUnseenMetrics": row["aggregate_unseen_metrics"], "folds": public_folds,
+            "createdAt": row["created_at"].isoformat(),
+            "completedAt": row["completed_at"].isoformat() if row["completed_at"] else None,
+        }
+
+
 class StrategyApprovalRepository:
     """Immutable evidence linking a completed backtest to an enabled deployment."""
 

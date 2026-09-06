@@ -18,6 +18,7 @@ from backend.data.repositories import (
     StrategyConfigRepository,
     StrategyDeploymentRepository,
     StrategySourceRepository,
+    WalkForwardValidationRepository,
 )
 from psycopg.errors import CheckViolation
 
@@ -76,6 +77,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "015_indicator_sources",
                 "016_research_experiments",
                 "017_parameter_experiments",
+                "018_walk_forward_validations",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -98,6 +100,9 @@ class PlatformDatabaseTests(unittest.TestCase):
             "indicator_sources",
             "research_experiments",
             "research_variants",
+            "walk_forward_validations",
+            "walk_forward_folds",
+            "walk_forward_training_runs",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -145,6 +150,17 @@ class PlatformDatabaseTests(unittest.TestCase):
         }
         self.assertIn("research_experiments_workload", constraints)
         self.assertIn("research_experiments_date_range", constraints)
+        walk_forward_constraints = {
+            row["constraint_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT constraint_name FROM information_schema.table_constraints
+                WHERE table_schema = 'public' AND table_name = 'walk_forward_validations'
+                """
+            )
+        }
+        self.assertIn("walk_forward_validations_date_range", walk_forward_constraints)
+        self.assertIn("walk_forward_validations_workload", walk_forward_constraints)
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)
@@ -314,6 +330,67 @@ class PlatformDatabaseTests(unittest.TestCase):
         after = self.database.fetch_one("SELECT count(*) AS count FROM backtest_runs")["count"]
         self.assertEqual(before, after)
         self.assertIsNone(repository.get_by_idempotency_key("database:phase7:rollback"))
+
+    def test_walk_forward_graph_is_atomic_idempotent_and_pins_every_run(self) -> None:
+        experiments = ResearchExperimentRepository(self.database)
+        experiment, _ = experiments.create_generated(
+            name="Phase 8 candidates", generation_mode="MANUAL", sweep_definitions=[],
+            preview_hash="sha256:" + "c" * 64, idempotency_key="database:phase8:candidates",
+            market="CRYPTO", strategy_id="crypto_pullback_v1", strategy_version="1.0.0",
+            strategy_source_id=None, timeframe="5m", symbols=["BTC-USDT"],
+            start_date=date(2026, 1, 1), end_date=date(2026, 1, 31),
+            universe_id=None, universe_name="Crypto snapshot",
+            variants=[
+                {"name": "candidate-a", "configuration": {}, "execution": {}},
+                {"name": "candidate-b", "configuration": {}, "execution": {}},
+            ],
+        )
+        repository = WalkForwardValidationRepository(self.database)
+        common = {
+            "name": "Phase 8 database contract", "mode": "ROLLING", "market": "CRYPTO",
+            "strategy_id": "crypto_pullback_v1", "strategy_version": "1.0.0",
+            "strategy_source_id": None, "timeframe": "5m", "symbols": ["BTC-USDT"],
+            "universe_id": None, "universe_name": "Crypto snapshot",
+            "overall_start_date": date(2026, 1, 1), "overall_end_date": date(2026, 1, 31),
+            "training_window": 5, "testing_window": 2, "step_length": 2, "maximum_folds": 2,
+            "candidate_experiment_id": experiment["experimentId"], "ranking_objective": "NET_PNL",
+            "minimum_required_trades": 1, "transaction_cost_bps": 8, "slippage_bps": 2,
+            "preview_hash": "sha256:" + "d" * 64, "idempotency_key": "database:phase8:validation",
+            "workload": {
+                "foldCount": 2, "candidateCount": 2, "childRunCount": 6,
+                "symbolCount": 1, "estimatedSymbolRuns": 6, "estimatedCandleWorkload": 3168,
+            },
+            "folds": [
+                {
+                    "position": 1, "trainingStart": "2026-01-01", "trainingEnd": "2026-01-05",
+                    "testingStart": "2026-01-06", "testingEnd": "2026-01-07",
+                    "trainingSessions": 5, "testingSessions": 2,
+                },
+                {
+                    "position": 2, "trainingStart": "2026-01-03", "trainingEnd": "2026-01-07",
+                    "testingStart": "2026-01-08", "testingEnd": "2026-01-09",
+                    "trainingSessions": 5, "testingSessions": 2,
+                },
+            ],
+            "candidates": experiment["variants"],
+        }
+        created, was_created = repository.create_generated(**common)
+        repeated, repeated_created = repository.create_generated(**common)
+        self.assertTrue(was_created)
+        self.assertFalse(repeated_created)
+        self.assertEqual(created["validationId"], repeated["validationId"])
+        self.assertEqual(len(created["folds"]), 2)
+        self.assertEqual(len(created["folds"][0]["trainingCandidates"]), 2)
+        training_run_ids = {
+            candidate["run"]["runId"] for fold in created["folds"] for candidate in fold["trainingCandidates"]
+        }
+        self.assertEqual(len(training_run_ids), 4)
+        winner = created["folds"][0]["trainingCandidates"][0]
+        test_run = repository.create_test_run(fold_id=created["folds"][0]["foldId"], candidate=winner)
+        same_test_run = repository.create_test_run(fold_id=created["folds"][0]["foldId"], candidate=winner)
+        self.assertEqual(test_run["runId"], same_test_run["runId"])
+        cancelled = repository.request_cancel(created["validationId"])
+        self.assertTrue(cancelled["cancelRequested"])
 
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()

@@ -83,7 +83,7 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 | GET | `/v2/backtests/{id}/trades?symbol=&limit=&offset=` | Paged trades, one row per lot. |
 | GET | `/v2/backtests/{id}/chart?symbol=&indicatorSourceId=` | Up to 5,000 completed candles for one run symbol, its immutable trade annotations, and optional isolated Indicator V2 output for the chart workspace. |
 
-`execution`: `targetPct?, stopLossPct?, maximumHoldingBars?, initialQuantity, allowAdditionalBuys, additionalQuantityPct, additionalSizingMode (REDUCE_EVERY_NEW_LOT|FIXED_PERCENTAGE_OF_FIRST_LOT), minimumQuantity, maximumEntriesPerCycle, batchSize`.
+`execution`: `targetPct?, stopLossPct?, maximumHoldingBars?, initialQuantity, allowAdditionalBuys, additionalQuantityPct, additionalSizingMode (REDUCE_EVERY_NEW_LOT|FIXED_PERCENTAGE_OF_FIRST_LOT), minimumQuantity, maximumEntriesPerCycle, batchSize, transactionCostBps?, slippageBps?`. The two optional basis-point overrides are research-only and must be supplied together.
 
 `metrics`: `totalSignals, completedTrades, targetHits, stoppedTrades, expiredTrades, openTrades, realizedPnl, unrealizedPnl, fees, slippage, winRate, averageMaePct, averageMfePct, averageHoldingMinutes, medianHoldingMinutes, maximumDrawdown, symbolsProcessed, symbolsFailed`.
 
@@ -107,6 +107,28 @@ Grid paths are explicit `{section, parameter}` pairs; `section` is only
 100 variants, the existing 2,000-symbol limit, and 20,000 symbol-runs. Numeric
 ranges use decimal stepping and contain the maximum only when it lands on a
 step. Random generation is not supported.
+
+## Walk-forward validation
+
+Walk-forward validation reuses an existing immutable Research Lab experiment as
+the candidate set. Candidate runs are evaluated on each training interval; only
+completed candidates meeting the minimum-trades rule are ranked. The winner is
+then frozen and run on the corresponding unseen interval.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/v2/research/walk-forward/preview` | Generate anchored or rolling folds using exact NSE sessions or continuous Crypto UTC dates. Validates every candidate and returns workload plus a deterministic `previewHash`; writes no rows and starts no runs. |
+| POST | `/v2/research/walk-forward/from-preview` | Regenerates the preview, verifies its hash, reserves bounded queue capacity, and atomically persists the validation, folds and training child runs. Requires `idempotencyKey`; returns 202. |
+| GET | `/v2/research/walk-forward?market=&limit=` | List validations with fold and child-run status counts. |
+| GET | `/v2/research/walk-forward/{id}` | Exact folds, candidates, frozen winners, immutable training/test run IDs and aggregate unseen metrics. |
+| DELETE | `/v2/research/walk-forward/{id}` | Idempotently cancels non-terminal child runs; completed folds and runs remain immutable. |
+
+Objectives are `NET_PNL`, `RETURN_DRAWDOWN`, `LOWEST_DRAWDOWN`, and
+`HIGHEST_WIN_RATE`. Return / drawdown is the documented non-Sharpe score
+`netPnl / max(abs(maximumDrawdown), 1)`. Limits are 12 folds, 20 candidates per
+fold, 120 total child runs, 20,000 symbol-runs, and 25,000,000 estimated candle
+bars. The aggregate contains only completed unseen-test folds and never uses
+test results to select a candidate.
 
 Comparison uses recorded metrics and trades. The optional Return / drawdown
 score is `netPnl / max(abs(maximumDrawdown), 1)` and is not a Sharpe ratio.

@@ -200,6 +200,7 @@ opendelta-nse/
 | `NSE_LIVE_STRATEGY`, `NSE_LIVE_TIMEFRAME` | legacy single-binding variables, used only when the plural JSON variable is absent |
 | `DHAN_*` | Dhan credentials, read only by `backend/collector.py` |
 | `BACKTEST_WORKERS`, `BACKTEST_QUEUE_LIMIT`, `BACKTEST_CACHE_DIR` | bounded backtest worker/queue tuning (queue default `200`) and candle cache |
+| `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded walk-forward coordinators (default `10`) and child-run polling cadence |
 | `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
 | `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 

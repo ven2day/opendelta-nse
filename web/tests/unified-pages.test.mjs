@@ -437,6 +437,30 @@ test("Research Lab compares completed variants and opens their immutable charts"
   assert.match(backtest, /useState<string \| null>\(initialRunId \?\? null\)/);
 });
 
+test("Research Lab walk-forward validation separates training from unseen tests and stays research-only", async () => {
+  const [workspace, walkForward, types, css] = await Promise.all([
+    readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/research/walk-forward-section.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/trading-terminal.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /<WalkForwardSection/);
+  assert.match(walkForward, /Anchored/);
+  assert.match(walkForward, /Rolling/);
+  assert.match(walkForward, /TRAINING/);
+  assert.match(walkForward, /UNSEEN TEST/);
+  assert.match(walkForward, /research\/walk-forward\/preview/);
+  assert.match(walkForward, /research\/walk-forward\/from-preview/);
+  assert.match(walkForward, /disabled=\{!previewFresh \|\| submitting\}/);
+  assert.match(walkForward, /Candle workload/);
+  assert.match(walkForward, /Training chart/);
+  assert.match(walkForward, /Unseen chart/);
+  assert.match(types, /export type WalkForwardValidation/);
+  assert.match(css, /\.research-walk-forward-grid/);
+  assert.match(css, /@media \(max-width: 680px\)/);
+  assert.doesNotMatch(walkForward, /Approve for|Deploy strategy|Enable live|Place order/);
+});
+
 test("signal filters stay collapsed and reason codes are humanized", async () => {
   const source = await readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className="quant-filter-menu">/);

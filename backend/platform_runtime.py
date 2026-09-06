@@ -26,6 +26,7 @@ from backend.api.settings_routes import create_settings_router
 from backend.api.signal_routes import create_signal_router
 from backend.api.strategy_studio_routes import create_strategy_studio_router
 from backend.api.tradingview_routes import create_tradingview_router
+from backend.api.walk_forward_routes import WalkForwardServices, create_walk_forward_router
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
@@ -50,6 +51,7 @@ from backend.data.repositories import (
     StrategyDeploymentRepository,
     StrategySourceRepository,
     TradingViewWebhookEventRepository,
+    WalkForwardValidationRepository,
     WatchlistProfileRepository,
 )
 from backend.integrations.tradingview import TradingViewIngestionService
@@ -57,6 +59,7 @@ from backend.markets.base import CandleSource, market_spec
 from backend.observability import get_logger
 from backend.paper_trading.broker import PaperBroker, PaperRepositories
 from backend.paper_trading.execution import ExecutionPolicy
+from backend.research.walk_forward_jobs import WalkForwardJobRunner
 from backend.screener.engine import ScreenerEngine
 from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
 from backend.signals.engine import RiskSettings, SignalEngine
@@ -88,6 +91,7 @@ class PlatformRuntime:
         self._screener: ScreenerServices | None = None
         self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
+        self._walk_forward_runner: WalkForwardJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
         self._worker_signatures: dict[str, tuple[str, str | None, str | None, str, str | None, str]] = {}
         self._brokers: dict[str, PaperBroker] = {}
@@ -137,12 +141,15 @@ class PlatformRuntime:
     def stop(self) -> None:
         with self._lock:
             runner, self._runner = self._runner, None
+            walk_forward, self._walk_forward_runner = self._walk_forward_runner, None
             workers, self._workers = dict(self._workers), {}
             self._worker_signatures = {}
         for worker in workers.values():
             worker.stop()
         if runner is not None:
             runner.shutdown()
+        if walk_forward is not None:
+            walk_forward.shutdown()
         if self._screener is not None:
             self._screener.shutdown()
         if self.database is not None:
@@ -558,6 +565,20 @@ class PlatformRuntime:
     def research_experiments(self) -> ResearchExperimentRepository:
         return ResearchExperimentRepository(self.require_database())
 
+    def walk_forward_validations(self) -> WalkForwardValidationRepository:
+        return WalkForwardValidationRepository(self.require_database())
+
+    def walk_forward_runner(self) -> WalkForwardJobRunner:
+        backtests = self.runner()
+        with self._lock:
+            if self._walk_forward_runner is None:
+                self._walk_forward_runner = WalkForwardJobRunner(
+                    self.walk_forward_validations(), backtests,
+                    poll_seconds=float(os.environ.get("WALK_FORWARD_POLL_SECONDS", "1")),
+                    max_pending=int(os.environ.get("WALK_FORWARD_QUEUE_LIMIT", "20")),
+                )
+            return self._walk_forward_runner
+
     def tradingview_events(self) -> TradingViewWebhookEventRepository:
         return TradingViewWebhookEventRepository(self.require_database())
 
@@ -639,6 +660,9 @@ class PlatformRuntime:
             "disabledReason": self.disabled_reason,
             "migratedVersions": self.migrated_versions,
             "activeBacktests": self._runner.active_run_ids() if self._runner else [],
+            "activeWalkForwardValidations": (
+                self._walk_forward_runner.active_validation_ids() if self._walk_forward_runner else []
+            ),
             "signalWorkers": workers,
             "strategies": STRATEGIES.ids(),
         }
@@ -693,6 +717,15 @@ def install_platform(
         runner=runtime.runner,
         universes=runtime.universes,
         sources=runtime.strategy_sources,
+    )).routes)
+    research_services = ResearchServices(
+        registry=STRATEGIES, experiments=runtime.research_experiments, runner=runtime.runner,
+        universes=runtime.universes, sources=runtime.strategy_sources,
+    )
+    app.router.routes.extend(create_walk_forward_router(WalkForwardServices(
+        registry=STRATEGIES, validations=runtime.walk_forward_validations,
+        experiments=runtime.research_experiments, backtests=runtime.runner,
+        coordinator=runtime.walk_forward_runner, research=research_services,
     )).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(create_strategy_studio_router(runtime.strategy_sources).routes)

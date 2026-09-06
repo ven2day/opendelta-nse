@@ -118,6 +118,14 @@ Duplicate protection: `live_signals` is unique on
 `paper_orders` allows one filled BUY per signal per account; `backtest_trades`
 is unique per `(run_id, lot_id)`.
 
+Research Lab parameter experiments are durable groups of immutable backtests.
+Walk-forward validations build on those candidate groups: the database stores
+the exact market-aware fold boundaries, training run graph, frozen winner, and
+unseen test run. A single bounded coordinator observes the existing bounded
+backtest pool; it does not create a worker or engine per variant. Preview is
+read-only, submission revalidates a deterministic hash, and all related initial
+rows are inserted in one transaction.
+
 ## Runtime flags (all default off / safe)
 
 | Variable | Effect |
@@ -132,6 +140,7 @@ is unique per `(run_id, lot_id)`.
 | `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
 | `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | backwards-compatible single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
+| `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded validation coordinators and durable-run polling cadence |
 
 Example with the daily swing strategy plus a future scalping strategy:
 
@@ -164,6 +173,7 @@ until the v2 workers are switched on and the legacy routes are retired.
 - `GET /v2/screener/filters`, `GET /v2/screener/presets`, `POST /v2/screener/runs`, `GET /v2/screener/runs[/{id}[/results]]`,
   `POST /v2/screener/universes`, `GET /v2/screener/universes`, `POST /v2/screener/universes/{id}/activate`
 - `POST|GET /v2/backtests`, `GET|DELETE /v2/backtests/{id}`, `GET /v2/backtests/{id}/trades`
+- `POST /v2/research/walk-forward/preview`, `POST /v2/research/walk-forward/from-preview`, `GET|DELETE /v2/research/walk-forward[/{id}]`
 - `GET /v2/signals`, `GET /v2/signals/health`
 - `GET /v2/paper/accounts[/{market}]`, `POST /v2/paper/accounts[/{market}/reset]`,
   `GET /v2/paper/positions|orders|trades|lots`, `POST /v2/paper/lots/{id}/close`

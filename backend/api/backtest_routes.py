@@ -267,6 +267,8 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         execution = dict(run["executionSettings"])
         execution.pop("executionTimeframe", None)
         execution.pop("batchSize", None)  # Backtest persistence tuning, not a paper-execution rule.
+        execution.pop("transactionCostBps", None)  # Research-only fee-model overrides never become live policy.
+        execution.pop("slippageBps", None)
         target_override = execution.pop("targetPct", None)
         if target_override is not None:
             if "target_pct" not in strategy.config_schema:

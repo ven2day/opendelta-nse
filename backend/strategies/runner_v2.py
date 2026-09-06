@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backend.indicators.source_v2 import validate_source as validate_indicator_source
 from backend.strategies.source_v2 import validate_source
 
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
@@ -92,7 +93,7 @@ def _normalise_decision(value: Any, close: float, params: dict[str, Any]) -> dic
     }
 
 
-def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def evaluate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     source = str(payload.get("sourceCode", ""))
     validation = validate_source(source)
     if not validation.valid:
@@ -125,6 +126,67 @@ def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
         data = SimpleNamespace(candles=frame.iloc[: position + 1], current=frame.iloc[position])
         rows.append(_normalise_decision(handle_data(context, data), float(frame.iloc[position]["close"]), params))
     return {"rows": rows}
+
+
+def evaluate_indicator_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    source = str(payload.get("sourceCode", ""))
+    validation = validate_indicator_source(source)
+    if not validation.valid or validation.manifest is None:
+        raise ValueError("Indicator source failed validation: " + " ".join(validation.errors))
+    candles = payload.get("candles")
+    if not isinstance(candles, dict):
+        raise ValueError("candles must be a column dictionary")
+    frame = pd.DataFrame(candles)
+    required = ["timestamp", "open", "high", "low", "close", "volume"]
+    if any(name not in frame for name in required):
+        raise ValueError("candles are missing required columns")
+    frame.index = pd.to_datetime(frame.pop("timestamp"), utc=True)
+    frame = frame[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="raise")
+    params = dict(validation.manifest.get("parameters") or {})
+    params.update(dict(payload.get("params") or {}))
+    namespace: dict[str, Any] = {"__builtins__": SAFE_BUILTINS, "pd": pd, "np": np, "math": math}
+    exec(compile(source, "indicator_v2.py", "exec"), namespace, namespace)  # noqa: S102 - isolated worker purpose
+    calculate = namespace["calculate"]
+    context = SimpleNamespace(
+        state={}, params=params, market=str(payload["market"]), symbol=str(payload["symbol"]),
+        timeframe=str(payload["timeframe"]),
+    )
+    output_names = [item["name"] for item in validation.manifest["outputs"]]
+    warmup = max(1, int(validation.manifest.get("requiredHistory", 1)))
+    rows: list[dict[str, float | None]] = []
+    for position in range(len(frame)):
+        if position + 1 < warmup:
+            rows.append(dict.fromkeys(output_names))
+            continue
+        data = SimpleNamespace(candles=frame.iloc[: position + 1], current=frame.iloc[position])
+        raw = calculate(context, data)
+        if not isinstance(raw, dict):
+            raise ValueError("calculate must return a dictionary")
+        unknown = set(raw) - set(output_names)
+        missing = set(output_names) - set(raw)
+        if unknown or missing:
+            raise ValueError("calculate output keys must exactly match INDICATOR.outputs")
+        row: dict[str, float | None] = {}
+        for name in output_names:
+            value = raw[name]
+            if value is None:
+                row[name] = None
+            else:
+                number = float(value)
+                if not math.isfinite(number):
+                    raise ValueError(f"Indicator output {name!r} must be finite or None")
+                row[name] = number
+        rows.append(row)
+    return {"rows": rows, "outputs": validation.manifest["outputs"]}
+
+
+def evaluate_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    payload_type = str(payload.get("payloadType", "strategy")).casefold()
+    if payload_type == "strategy":
+        return evaluate_strategy_payload(payload)
+    if payload_type == "indicator":
+        return evaluate_indicator_payload(payload)
+    raise ValueError(f"Unsupported runner payload type {payload_type!r}")
 
 
 def _child(payload: dict[str, Any], connection: Any) -> None:

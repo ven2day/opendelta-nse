@@ -29,6 +29,28 @@ configured or its schema is behind (`python -m backend.data.migrate`).
 
 `configSchema` entries are `{type: integer|integer_array|number|boolean|string, default, minimum?, maximum?, enum?, label?}`. Integer arrays also support `minItems` and `maxItems` and are used by finite quantity ladders.
 
+## Indicator Studio V2
+
+Indicator source is stored separately from strategy source. Saving a valid
+source creates an immutable `(indicatorId, version)` snapshot; changing code
+requires a new semantic version. Source is statically validated in the API and
+is executed only by the resource-limited Strategy V2 runner.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/indicator-studio/template` | Safe starter source implementing `calculate(context, data)`. |
+| POST | `/v2/indicator-studio/validate` | Body `{sourceCode}`. Parses the source without importing or executing it. |
+| POST | `/v2/indicator-studio/sources` | Save a valid immutable version. Returns 201. |
+| GET | `/v2/indicator-studio/sources?status=` | List source metadata; optional status is `VALIDATED` or `ARCHIVED`. |
+| GET | `/v2/indicator-studio/sources/{sourceId}` | Retrieve one version including its Python source. |
+| POST | `/v2/indicator-studio/sources/{sourceId}/archive` | Archive a version. Archived source remains auditable but cannot be previewed. |
+| POST | `/v2/indicator-studio/sources/{sourceId}/preview` | Evaluate supplied completed candle columns in the isolated runner and return one row per candle. |
+
+`INDICATOR` declares `id`, `name`, semantic `version`, parameter defaults,
+`requiredHistory`, and one or more outputs. Each output selects a chart
+`display` (`LINE`, `HISTOGRAM`, `BAND`, `POINTS`) and `pane` (`OVERLAY`,
+`PANEL`). The Phase 5 chart workspace will consume this output metadata.
+
 ## Screener
 
 | Method | Path | Notes |

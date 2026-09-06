@@ -22,6 +22,7 @@ from backend.data.repositories import (
     StrategyDeploymentRepository,
 )
 from backend.data.universe_presets import get_universe_preset
+from backend.markets.common import MAX_INTERACTIVE_CANDLE_BARS, TIMEFRAME_SECONDS
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.strategies.registry import StrategyRegistry
 
@@ -105,6 +106,18 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=422, detail=f"{strategy.strategy_id} does not support the {request.timeframe} timeframe")
         if request.endDate < request.startDate:
             raise HTTPException(status_code=422, detail="endDate must not be before startDate")
+        if request.market == "CRYPTO":
+            # Both dates are inclusive: the runner expands endDate to the end of that UTC day.
+            requested_seconds = ((request.endDate - request.startDate).days + 1) * 86_400
+            requested_bars = requested_seconds // TIMEFRAME_SECONDS[request.timeframe]
+            if requested_bars > MAX_INTERACTIVE_CANDLE_BARS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"The selected {request.timeframe} Crypto range contains about {requested_bars:,} bars; "
+                        f"choose a shorter range (maximum {MAX_INTERACTIVE_CANDLE_BARS:,} bars)"
+                    ),
+                )
         if request.universePresetId is not None and request.symbols:
             raise HTTPException(status_code=422, detail="Use either universePresetId or symbols, not both")
         if request.universePresetId is not None:

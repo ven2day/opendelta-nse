@@ -23,6 +23,7 @@ from backend.markets.crypto.strategy import (
     signal_payload,
 )
 from backend.markets.common import (
+    MAX_INTERACTIVE_CANDLE_BARS,
     TIMEFRAME_SECONDS,
     MarketCandle,
     MarketInstrument,
@@ -437,9 +438,10 @@ class CryptoMarketService:
         if timeframe not in TIMEFRAME_SECONDS:
             raise ValueError("Unsupported timeframe")
         expected_bars = max(0, int((end - start).total_seconds() / TIMEFRAME_SECONDS[timeframe]))
-        if expected_bars > 20_000:
+        if expected_bars > MAX_INTERACTIVE_CANDLE_BARS:
             raise ValueError(
-                f"Requested window contains about {expected_bars:,} bars; the interactive limit is 20,000"
+                f"Requested window contains about {expected_bars:,} bars; "
+                f"the interactive limit is {MAX_INTERACTIVE_CANDLE_BARS:,}"
             )
         cached = self.repository.candles(instrument, timeframe, start, end)
         fetch_start = start

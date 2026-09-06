@@ -18,9 +18,11 @@ TIMEFRAME_SECONDS: dict[str, int] = {
     "15m": 900,
     "30m": 1_800,
     "1h": 3_600,
+    "4h": 14_400,
     "6h": 21_600,
     "1d": 86_400,
 }
+MAX_INTERACTIVE_CANDLE_BARS = 20_000
 
 
 def utc_datetime(value: datetime | str | int | float) -> datetime:

@@ -66,7 +66,7 @@ class CryptoStrategyConfigurationRequest(BaseModel):
 
 class CryptoBacktestRequest(BaseModel):
     instrumentId: str = Field(min_length=5, max_length=80)
-    timeframe: Literal["1m", "5m", "15m", "30m", "1h", "6h", "1d"] = "5m"
+    timeframe: Literal["1m", "5m", "15m", "30m", "1h", "4h", "6h", "1d"] = "5m"
     durationDays: int = Field(default=30, ge=1, le=730)
     configuration: CryptoStrategyConfigurationRequest = Field(default_factory=CryptoStrategyConfigurationRequest)
 
@@ -130,7 +130,7 @@ def create_crypto_router(service_factory: Callable[[], CryptoMarketService]) -> 
 
     @router.post("/signals/scan")
     def scan_signals(
-        timeframe: Literal["1m", "5m", "15m", "30m", "1h", "6h", "1d"] = "5m",
+        timeframe: Literal["1m", "5m", "15m", "30m", "1h", "4h", "6h", "1d"] = "5m",
     ) -> dict[str, Any]:
         try:
             return service_factory().scan(timeframe)

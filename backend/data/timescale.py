@@ -27,7 +27,7 @@ HealthStatus = Literal[
     "UNSUPPORTED",
 ]
 
-TIMEFRAME_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "1d": 86400}
+TIMEFRAME_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 UTC_ZONE = ZoneInfo("UTC")
 NSE_ZONE = ZoneInfo("Asia/Kolkata")
 

@@ -96,6 +96,7 @@ class OkxPublicProvider:
         "15m": "15m",
         "30m": "30m",
         "1h": "1H",
+        "4h": "4H",
         "6h": "6Hutc",
         "1d": "1Dutc",
     }

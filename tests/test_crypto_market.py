@@ -136,6 +136,20 @@ def test_okx_retries_a_rate_limited_public_request() -> None:
     assert delays == [0.5]
 
 
+def test_okx_uses_the_supported_four_hour_bar_token() -> None:
+    opened = datetime(2026, 8, 1, tzinfo=UTC)
+
+    def transport(url: str):
+        query = parse_qs(urlparse(url).query)
+        assert query["bar"] == ["4H"]
+        return {"code": "0", "data": []}
+
+    candles = OkxPublicProvider(transport=transport).candles(
+        okx_instrument(), "4h", opened, opened + timedelta(hours=4)
+    )
+    assert candles == []
+
+
 def test_valr_catalog_and_bucket_contract() -> None:
     opened = datetime.now(UTC).replace(second=0, microsecond=0) - timedelta(minutes=10)
     urls: list[str] = []

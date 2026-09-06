@@ -660,6 +660,8 @@ def install_platform(
         configs=runtime.strategy_configs, deployments=runtime.strategy_deployments,
         universes=runtime.universes, approvals=runtime.strategy_approvals,
         sources=runtime.strategy_sources,
+        indicator_sources=runtime.indicator_sources,
+        candle_source=lambda market: runtime.candle_sources[market](),
         deployment_changed=runtime.reconcile_signal_workers,
     )
     app.router.routes.extend(create_backtest_router(services).routes)

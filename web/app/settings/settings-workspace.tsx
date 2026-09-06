@@ -1,3 +1,4 @@
+?? web/test-results/
 "use client";
 
 import { Braces, Code2, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";
@@ -231,7 +232,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
       <summary><span><Code2 size={15} />Strategy Studio V2</span><small>Python editor · validation and immutable versions</small></summary>
       <div className="quant-panel-body">
         <div className={styles.studioIntro}><div><strong>Create a Strategy V2</strong><small>Edit Python here. Validation is static: saving never runs or deploys the code.</small></div><StatusBadge tone="warn">Runner not enabled</StatusBadge></div>
-        {sourceTemplate.loading ? <LoadingState label="Loading Strategy V2 template" /> : sourceTemplate.error ? <RequestErrorState error={sourceTemplate.error} retry={sourceTemplate.reload} /> : <>
+        {sourceTemplate.loading ? <LoadingState label="Loading Strategy V2 template" /> : sourceTemplate.error ? <Message kind="error">Strategy Studio is unavailable while the V2 service is offline. <button type="button" onClick={sourceTemplate.reload}>Retry</button></Message> : <>
           <textarea className={styles.codeEditor} aria-label="Strategy V2 Python source" spellCheck={false} value={currentSource} disabled={sourceBusy !== null} onChange={(event) => { setStrategySource(event.target.value); setSourceValidation(null); setSourceNotice(null); }} />
           <div className={styles.studioActions}><button type="button" disabled={sourceBusy !== null} onClick={() => { setStrategySource(sourceTemplate.data?.sourceCode ?? ""); setSourceValidation(null); setSourceNotice(null); }}>Reset template</button><button type="button" disabled={sourceBusy !== null || !currentSource.trim()} onClick={() => void validateStrategySource()}>{sourceBusy === "validate" ? "Validating…" : "Validate"}</button><button type="button" className="primary" disabled={sourceBusy !== null || !currentSource.trim() || sourceValidation?.valid === false} onClick={() => void saveStrategySource()}><Save size={15} />{sourceBusy === "save" ? "Saving…" : "Save new version"}</button></div>
         </>}

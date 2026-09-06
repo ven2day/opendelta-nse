@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.backtest.engine import BacktestRequest, ExecutionSettings
-from backend.backtest.jobs import BacktestJobRunner
+from backend.backtest.jobs import BacktestJobRunner, BacktestQueueFull
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import (
@@ -117,6 +117,8 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
                 strategy_source = _guard(services.sources).get(request.strategySourceId)
             except (KeyError, ValueError) as error:
                 raise HTTPException(status_code=422, detail="Strategy V2 source was not found") from error
+            if strategy_source["status"] != "VALIDATED":
+                raise HTTPException(status_code=409, detail="Archived Strategy V2 sources cannot be backtested")
             strategy = StrategyV2BacktestAdapter(strategy_source, StrategyRunnerClient("/not-used-during-validation"))
             if strategy.strategy_id != request.strategyId:
                 raise HTTPException(status_code=422, detail="strategyId does not match the selected Strategy V2 source")
@@ -164,23 +166,28 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        runs = _guard(services.runs)
         execution_snapshot = execution.public()
         execution_snapshot["executionTimeframe"] = "5m" if request.market == "NSE" and request.timeframe == "1d" else request.timeframe
-        record = runs.create(
-            market=request.market,
-            strategy_id=strategy.strategy_id,
-            strategy_version=strategy.version,
-            configuration_snapshot=snapshot,
-            execution_settings=execution_snapshot,
-            timeframe=request.timeframe,
-            symbols=symbols,
-            start_date=request.startDate,
-            end_date=request.endDate,
-            strategy_source_id=request.strategySourceId,
-        )
-        _guard(services.runner).submit(
-            BacktestRequest(
+        runner = _guard(services.runner)
+        try:
+            reservation = runner.reserve(1)
+        except BacktestQueueFull as error:
+            raise HTTPException(status_code=429, detail=str(error)) from error
+        with reservation:
+            runs = _guard(services.runs)
+            record = runs.create(
+                market=request.market,
+                strategy_id=strategy.strategy_id,
+                strategy_version=strategy.version,
+                configuration_snapshot=snapshot,
+                execution_settings=execution_snapshot,
+                timeframe=request.timeframe,
+                symbols=symbols,
+                start_date=request.startDate,
+                end_date=request.endDate,
+                strategy_source_id=request.strategySourceId,
+            )
+            reservation.submit([BacktestRequest(
                 run_id=record["runId"],
                 market=request.market,
                 strategy_id=strategy.strategy_id,
@@ -191,8 +198,7 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
                 end_date=request.endDate,
                 configuration=snapshot,
                 execution=execution,
-            )
-        )
+            )])
         return record
 
     @router.get("")

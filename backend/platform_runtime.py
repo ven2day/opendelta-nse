@@ -20,6 +20,7 @@ from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
 from backend.api.indicator_studio_routes import create_indicator_studio_router
 from backend.api.paper_trading_routes import create_paper_trading_router
+from backend.api.research_routes import ResearchServices, create_research_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
 from backend.api.settings_routes import create_settings_router
 from backend.api.signal_routes import create_signal_router
@@ -40,6 +41,7 @@ from backend.data.repositories import (
     PaperOrderRepository,
     PaperPendingEntryRepository,
     PaperTradeRepository,
+    ResearchExperimentRepository,
     SavedUniverseRepository,
     ScreenerResultRepository,
     ScreenerRunRepository,
@@ -553,6 +555,9 @@ class PlatformRuntime:
     def indicator_sources(self) -> IndicatorSourceRepository:
         return IndicatorSourceRepository(self.require_database())
 
+    def research_experiments(self) -> ResearchExperimentRepository:
+        return ResearchExperimentRepository(self.require_database())
+
     def tradingview_events(self) -> TradingViewWebhookEventRepository:
         return TradingViewWebhookEventRepository(self.require_database())
 
@@ -602,7 +607,10 @@ class PlatformRuntime:
     def runner(self) -> BacktestJobRunner:
         with self._lock:
             if self._runner is None:
-                self._runner = BacktestJobRunner(self.runs(), self._engine, max_workers=_backtest_workers())
+                self._runner = BacktestJobRunner(
+                    self.runs(), self._engine,
+                    max_workers=_backtest_workers(), max_pending=_backtest_queue_limit(),
+                )
             return self._runner
 
     def _engine(self, request: BacktestRequest, cancel_event: threading.Event) -> BacktestEngine:
@@ -652,6 +660,19 @@ def _backtest_workers() -> int:
     return value
 
 
+def _backtest_queue_limit() -> int:
+    """Maximum queued plus running backtests across direct runs and experiments."""
+    raw = os.environ.get("BACKTEST_QUEUE_LIMIT", "200").strip()
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError("BACKTEST_QUEUE_LIMIT must be a whole number") from error
+    workers = _backtest_workers()
+    if value < workers or value > 10_000:
+        raise RuntimeError(f"BACKTEST_QUEUE_LIMIT must be between {workers} and 10000")
+    return value
+
+
 def install_platform(
     app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[str], dict[str, Any]] | None = None
 ) -> None:
@@ -664,7 +685,15 @@ def install_platform(
         candle_source=lambda market: runtime.candle_sources[market](),
         deployment_changed=runtime.reconcile_signal_workers,
     )
-    app.router.routes.extend(create_backtest_router(services).routes)
+    backtest_router = create_backtest_router(services)
+    app.router.routes.extend(backtest_router.routes)
+    app.router.routes.extend(create_research_router(ResearchServices(
+        registry=STRATEGIES,
+        experiments=runtime.research_experiments,
+        runner=runtime.runner,
+        universes=runtime.universes,
+        sources=runtime.strategy_sources,
+    )).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(create_strategy_studio_router(runtime.strategy_sources).routes)
     app.router.routes.extend(create_indicator_studio_router(

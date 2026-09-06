@@ -94,6 +94,8 @@ export type StrategiesResponse = {
   riskDefaults: ConfigValues;
   /** Schema for the risk/execution settings (same shape as `configSchema`); older services omit it. */
   riskSchema?: ConfigSchema | null;
+  /** Exact settings accepted by POST /v2/backtests `execution`. */
+  executionSchema?: ConfigSchema | null;
 };
 export type StrategyConfig = {
   configId: string;
@@ -302,6 +304,38 @@ export type BacktestChartResponse = {
   trades: BacktestTrade[];
   indicator: null | { sourceId: string; name: string; version: string; outputs: IndicatorOutput[]; rows: Array<Record<string, number | null>> };
 };
+
+export type ResearchGenerationMode = "MANUAL" | "GRID";
+export type ResearchParameterDefinition = {
+  section: "strategy" | "execution";
+  parameter: string;
+  type: "number" | "integer" | "boolean" | "enum";
+  method: "EXPLICIT_VALUES" | "NUMERIC_RANGE" | "FIXED";
+  values?: unknown[];
+  minimum?: number;
+  maximum?: number;
+  step?: number;
+  value?: unknown;
+};
+export type ResearchPreviewVariant = { name: string; configuration: ConfigValues; execution: ConfigValues };
+export type ResearchExperimentPreview = {
+  previewHash: string; name: string; mode: ResearchGenerationMode; strategyId: string; strategyVersion: string;
+  strategySourceId?: string | null; market: PlatformMarket; timeframe: string; universeId?: string | null;
+  universePresetId?: string | null; universeName: string; symbols: string[]; startDate: string; endDate: string;
+  sweepDefinitions: ResearchParameterDefinition[]; parameterCount: number; variantCount: number; symbolCount: number;
+  estimatedSymbolRuns: number; variants: ResearchPreviewVariant[]; warnings: string[];
+};
+export type ResearchVariant = { variantId: string; position: number; name: string; configuration: ConfigValues; execution: ConfigValues; run: BacktestRun };
+export type ResearchExperiment = {
+  experimentId: string; name: string; mode: ResearchGenerationMode; market: PlatformMarket;
+  strategyId: string; strategyVersion: string; strategySourceId?: string | null; timeframe: string;
+  universeId?: string | null; universeName?: string | null; symbols: string[]; startDate: string; endDate: string;
+  sweepDefinitions: ResearchParameterDefinition[]; previewHash: string; variantCount: number; symbolCount: number;
+  estimatedSymbolRuns: number; status: string; variantStatusCounts: Record<string, number>;
+  progress: { variantsTotal: number; symbolsTotal: number; symbolsCompleted: number };
+  variants: ResearchVariant[]; createdAt: string;
+};
+export type ResearchExperimentsResponse = { experiments: ResearchExperiment[] };
 
 export type EngineStatus = {
   market?: PlatformMarket | string | null;

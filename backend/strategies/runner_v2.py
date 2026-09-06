@@ -13,7 +13,6 @@ import json
 import math
 import multiprocessing
 import os
-import resource
 import socketserver
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +22,11 @@ import pandas as pd
 
 from backend.indicators.source_v2 import validate_source as validate_indicator_source
 from backend.strategies.source_v2 import validate_source
+
+try:
+    import resource
+except ModuleNotFoundError:  # Windows test/development hosts do not provide POSIX rlimits.
+    resource = None  # type: ignore[assignment]
 
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
@@ -47,10 +51,11 @@ SAFE_BUILTINS = {
 
 
 def _apply_limits() -> None:
-    resource.setrlimit(resource.RLIMIT_CPU, (60, 65))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
-    resource.setrlimit(resource.RLIMIT_NPROC, (8, 8))
+    if resource is not None:
+        resource.setrlimit(resource.RLIMIT_CPU, (60, 65))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+        resource.setrlimit(resource.RLIMIT_NPROC, (8, 8))
     os.environ.clear()
 
 
@@ -234,10 +239,21 @@ class _Handler(socketserver.StreamRequestHandler):
         self.wfile.write(encoded)
 
 
-class _ThreadingUnixStreamServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    """Keep live evaluations responsive while independent backtests are running."""
+if hasattr(socketserver, "UnixStreamServer"):
 
-    daemon_threads = True
+    class _ThreadingUnixStreamServer(
+        socketserver.ThreadingMixIn,
+        socketserver.UnixStreamServer,
+    ):
+        """Keep live evaluations responsive while independent backtests are running."""
+
+        daemon_threads = True
+
+else:
+
+    class _ThreadingUnixStreamServer:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("The Strategy V2 service requires Unix-domain sockets")
 
 
 def serve(socket_path: str) -> None:

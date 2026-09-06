@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from backend.backtest.result_writer import DatabaseResultWriter
 from backend.data.database import Database
@@ -13,11 +13,13 @@ from backend.data.repositories import (
     BacktestTradeRepository,
     IndicatorSourceRepository,
     LiveSignalRepository,
+    ResearchExperimentRepository,
     SavedUniverseRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
     StrategySourceRepository,
 )
+from psycopg.errors import CheckViolation
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 
@@ -38,17 +40,17 @@ class PlatformDatabaseTests(unittest.TestCase):
         cls.database.close()
 
     def _run(self, **overrides):
-        values = dict(
-            market="NSE",
-            strategy_id="ema_vwap_strong_buy",
-            strategy_version="1.0.0",
-            configuration_snapshot={"target_pct": 1.0},
-            execution_settings={"batchSize": 500},
-            timeframe="5m",
-            symbols=["RELIANCE", "TCS"],
-            start_date=date(2026, 8, 1),
-            end_date=date(2026, 8, 31),
-        )
+        values = {
+            "market": "NSE",
+            "strategy_id": "ema_vwap_strong_buy",
+            "strategy_version": "1.0.0",
+            "configuration_snapshot": {"target_pct": 1.0},
+            "execution_settings": {"batchSize": 500},
+            "timeframe": "5m",
+            "symbols": ["RELIANCE", "TCS"],
+            "start_date": date(2026, 8, 1),
+            "end_date": date(2026, 8, 31),
+        }
         values.update(overrides)
         return self.runs.create(**values)
 
@@ -72,6 +74,8 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "013_strategy_v2_backtests",
                 "014_strategy_v2_live",
                 "015_indicator_sources",
+                "016_research_experiments",
+                "017_parameter_experiments",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -92,6 +96,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             "strategy_approvals",
             "strategy_sources",
             "indicator_sources",
+            "research_experiments",
+            "research_variants",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -105,6 +111,40 @@ class PlatformDatabaseTests(unittest.TestCase):
             "schema_migrations",
         ):
             self.assertIn(expected, tables)
+        research_columns = {
+            row["column_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'research_experiments'
+                """
+            )
+        }
+        self.assertTrue(
+            {
+                "generation_mode",
+                "sweep_definitions",
+                "preview_hash",
+                "variant_count",
+                "symbol_count",
+                "estimated_symbol_runs",
+                "idempotency_key",
+                "universe_id",
+                "universe_name",
+            }
+            <= research_columns
+        )
+        constraints = {
+            row["constraint_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT constraint_name FROM information_schema.table_constraints
+                WHERE table_schema = 'public' AND table_name = 'research_experiments'
+                """
+            )
+        }
+        self.assertIn("research_experiments_workload", constraints)
+        self.assertIn("research_experiments_date_range", constraints)
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)
@@ -134,22 +174,22 @@ class PlatformDatabaseTests(unittest.TestCase):
 
     def test_different_strategy_ids_do_not_collide_at_same_candle(self) -> None:
         signals = LiveSignalRepository(self.database)
-        stamp = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
-        common = dict(
-            market="NSE",
-            strategy_version="1.0.0",
-            symbol="TCS",
-            timeframe="5m",
-            candle_timestamp=stamp,
-            signal_type="BUY",
-            signal_price=100.0,
-            target_price=101.0,
-            stop_price=None,
-            expires_at=None,
-            reasons=["TEST"],
-            indicators={},
-            configuration_snapshot={"target_pct": 1.0},
-        )
+        stamp = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+        common = {
+            "market": "NSE",
+            "strategy_version": "1.0.0",
+            "symbol": "TCS",
+            "timeframe": "5m",
+            "candle_timestamp": stamp,
+            "signal_type": "BUY",
+            "signal_price": 100.0,
+            "target_price": 101.0,
+            "stop_price": None,
+            "expires_at": None,
+            "reasons": ["TEST"],
+            "indicators": {},
+            "configuration_snapshot": {"target_pct": 1.0},
+        }
         first = signals.insert_new(strategy_id="ema_vwap_strong_buy", **common)
         second = signals.insert_new(strategy_id="rsi_dip_ladder_v1", **common)
         duplicate = signals.insert_new(strategy_id="ema_vwap_strong_buy", **common)
@@ -195,6 +235,86 @@ class PlatformDatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.runs.finish(record["runId"], status="RUNNING", metrics=None)
 
+    def test_research_experiment_is_atomic_idempotent_and_aggregates_status(self) -> None:
+        repository = ResearchExperimentRepository(self.database)
+        common = {
+            "name": "Phase 7 database contract",
+            "generation_mode": "GRID",
+            "sweep_definitions": [
+                {
+                    "section": "strategy",
+                    "parameter": "rsi_low",
+                    "type": "number",
+                    "method": "EXPLICIT_VALUES",
+                    "values": [25, 30],
+                }
+            ],
+            "preview_hash": "sha256:" + ("a" * 64),
+            "idempotency_key": "database:phase7:idempotency",
+            "market": "NSE",
+            "strategy_id": "rsi_dip_ladder_v1",
+            "strategy_version": "1.0.0",
+            "strategy_source_id": None,
+            "timeframe": "5m",
+            "symbols": ["INFY", "TCS"],
+            "start_date": date(2026, 8, 1),
+            "end_date": date(2026, 8, 31),
+            "universe_id": None,
+            "universe_name": "Explicit symbol snapshot",
+            "variants": [
+                {
+                    "name": "rsi_low=25",
+                    "configuration": {"rsi_low": 25},
+                    "execution": {"targetPct": 0.5},
+                },
+                {
+                    "name": "rsi_low=30",
+                    "configuration": {"rsi_low": 30},
+                    "execution": {"targetPct": 0.75},
+                },
+            ],
+        }
+        created, was_created = repository.create_generated(**common)
+        repeated, repeated_created = repository.create_generated(**common)
+        self.assertTrue(was_created)
+        self.assertFalse(repeated_created)
+        self.assertEqual(created["experimentId"], repeated["experimentId"])
+        self.assertEqual(created["estimatedSymbolRuns"], 4)
+        self.assertEqual(
+            [item["position"] for item in created["variants"]],
+            [1, 2],
+        )
+        self.assertEqual(
+            created["variants"][0]["configuration"],
+            {"rsi_low": 25},
+        )
+
+        first_run, second_run = [item["run"]["runId"] for item in created["variants"]]
+        self.runs.finish(first_run, status="COMPLETE", metrics={"realizedPnl": 25})
+        partial = repository.get(created["experimentId"])
+        self.assertEqual(partial["status"], "QUEUED")
+        self.assertEqual(partial["variantStatusCounts"]["COMPLETE"], 1)
+        self.runs.finish(second_run, status="COMPLETE", metrics={"realizedPnl": 30})
+        complete = repository.get(created["experimentId"])
+        self.assertEqual(complete["status"], "COMPLETE")
+        self.assertEqual(complete["variantStatusCounts"]["COMPLETE"], 2)
+
+        before = self.database.fetch_one("SELECT count(*) AS count FROM backtest_runs")["count"]
+        invalid = {
+            **common,
+            "idempotency_key": "database:phase7:rollback",
+            "preview_hash": "sha256:" + ("b" * 64),
+            "variants": [
+                common["variants"][0],
+                {**common["variants"][1], "name": "x" * 81},
+            ],
+        }
+        with self.assertRaises(CheckViolation):
+            repository.create_generated(**invalid)
+        after = self.database.fetch_one("SELECT count(*) AS count FROM backtest_runs")["count"]
+        self.assertEqual(before, after)
+        self.assertIsNone(repository.get_by_idempotency_key("database:phase7:rollback"))
+
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()
         self.assertFalse(self.runs.cancel_requested(record["runId"]))
@@ -212,7 +332,7 @@ class PlatformDatabaseTests(unittest.TestCase):
         record = self._run()
         writer = DatabaseResultWriter(self.runs, self.trades)
         writer.started(record["runId"])
-        stamp = datetime(2026, 8, 4, 9, 30, tzinfo=timezone.utc)
+        stamp = datetime(2026, 8, 4, 9, 30, tzinfo=UTC)
         row = {
             "run_id": record["runId"],
             "market": "NSE",

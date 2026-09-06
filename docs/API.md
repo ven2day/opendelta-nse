@@ -23,7 +23,7 @@ configured or its schema is behind (`python -m backend.data.migrate`).
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/v2/strategies?market=` | Registry catalogue: `strategies[{strategyId,name,version,supportedMarkets,supportedTimeframes,configSchema,defaults}]`, `markets`, `riskDefaults`, `riskSchema`. UI dropdowns and forms are generated from `configSchema` / `riskSchema`. |
+| GET | `/v2/strategies?market=` | Registry catalogue: `strategies[{strategyId,name,version,supportedMarkets,supportedTimeframes,configSchema,defaults}]`, `markets`, `riskDefaults`, `riskSchema`, `executionSchema`. UI dropdowns and forms are generated from the published schemas. |
 | GET | `/v2/strategies/{id}/config?market=` | `active` config (or null), `effectiveConfiguration`, `effectiveRiskSettings`, `all` saved configs for the market. |
 | POST | `/v2/strategies/{id}/config` | Body `{market, name, configuration, riskSettings, activate}`. Validated through the strategy's schema and rules; one active config per market and strategy. Returns 201. |
 
@@ -86,6 +86,33 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 `execution`: `targetPct?, stopLossPct?, maximumHoldingBars?, initialQuantity, allowAdditionalBuys, additionalQuantityPct, additionalSizingMode (REDUCE_EVERY_NEW_LOT|FIXED_PERCENTAGE_OF_FIRST_LOT), minimumQuantity, maximumEntriesPerCycle, batchSize`.
 
 `metrics`: `totalSignals, completedTrades, targetHits, stoppedTrades, expiredTrades, openTrades, realizedPnl, unrealizedPnl, fees, slippage, winRate, averageMaePct, averageMfePct, averageHoldingMinutes, medianHoldingMinutes, maximumDrawdown, symbolsProcessed, symbolsFailed`.
+
+## Research Lab parameter experiments
+
+Research experiments group immutable child backtest runs; they never approve a
+strategy, activate Signals or Paper, or mutate a deployment.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST | `/v2/research/experiments/preview` | Validate an exact built-in or `VALIDATED` Strategy V2 version, resolve the selected active watchlist/preset, generate and validate every manual or grid variant, and return the deterministic combinations, workload and `previewHash`. This endpoint writes no rows and starts no runs. |
+| POST | `/v2/research/experiments/from-preview` | Body repeats the preview request and adds `previewHash` plus `idempotencyKey`. The server regenerates the preview, rejects a stale hash, atomically creates experiment/variant/run rows, and queues the existing backtest engine. Returns 202. |
+| POST | `/v2/research/experiments` | Compatibility submission path with the same mandatory preview-hash contract. |
+| GET | `/v2/research/experiments?market=&limit=` | Durable experiments with provenance, workload, aggregate status, status counts, exact variants, and exact child run IDs. |
+| GET | `/v2/research/experiments/{id}` | One durable experiment and all exact immutable child runs. |
+| DELETE | `/v2/research/experiments/{id}` | Idempotently requests cancellation for non-terminal child runs. Completed children remain immutable. |
+
+Grid paths are explicit `{section, parameter}` pairs; `section` is only
+`strategy` or `execution`. Methods are `EXPLICIT_VALUES`, `NUMERIC_RANGE`, and
+`FIXED`. The server limits a sweep to 8 parameters, 20 values per parameter,
+100 variants, the existing 2,000-symbol limit, and 20,000 symbol-runs. Numeric
+ranges use decimal stepping and contain the maximum only when it lands on a
+step. Random generation is not supported.
+
+Comparison uses recorded metrics and trades. The optional Return / drawdown
+score is `netPnl / max(abs(maximumDrawdown), 1)` and is not a Sharpe ratio.
+Failed symbols remain a separate operational metric. Rejected-trade analytics
+are unavailable because the engine does not yet persist decision-event
+candidates; a strategy emitting no BUY is not counted as a rejection.
 
 ## Signals
 

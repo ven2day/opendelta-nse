@@ -75,6 +75,23 @@ class FakeRunner:
     def submit(self, request: BacktestRequest) -> None:
         self.submitted.append(request)
 
+    def reserve(self, count: int):
+        runner = self
+
+        class Reservation:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def submit(self, requests):
+                if len(requests) != count:
+                    raise AssertionError("reservation count mismatch")
+                runner.submitted.extend(requests)
+
+        return Reservation()
+
     def cancel(self, run_id: str) -> dict[str, Any]:
         return self.runs.request_cancel(run_id)
 
@@ -85,7 +102,7 @@ class FakeStrategySources:
         self.row = {
             "sourceId": str(uuid.uuid4()), "sourceCode": starter_source(),
             "strategyId": validation.manifest["strategyId"], "strategyVersion": validation.manifest["version"],
-            "manifest": validation.manifest, "validation": validation.public(),
+            "manifest": validation.manifest, "validation": validation.public(), "status": "VALIDATED",
         }
 
     def get(self, source_id):
@@ -284,6 +301,8 @@ class BacktestRouteTests(unittest.TestCase):
             {"configuration": {"ema_fast": 50, "ema_slow": 20}},
             {"configuration": {"mystery": 1}},
             {"execution": {"stopLossPct": 500}},
+            {"execution": {"targetPct": True}},
+            {"execution": {"batchSize": 1.5}},
             {"startDate": date(2026, 9, 1), "endDate": date(2026, 8, 1)},
             {"symbols": ["   "]},
         ):

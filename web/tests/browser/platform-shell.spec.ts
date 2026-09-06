@@ -38,8 +38,8 @@ test.beforeEach(async ({ page }) => {
 test("route-aware shell has no duplicate navigation or viewport overflow", async ({ page }) => {
   test.setTimeout(240_000);
   const authenticatedRoutes = [
-    "/", "/screener", "/backtest", "/indicators", "/signals", "/paper-trading", "/settings",
-    "/?market=CRYPTO", "/screener?market=CRYPTO", "/backtest?market=CRYPTO", "/indicators?market=CRYPTO", "/signals?market=CRYPTO", "/paper-trading?market=CRYPTO",
+    "/", "/screener", "/backtest", "/research", "/indicators", "/signals", "/paper-trading", "/settings",
+    "/?market=CRYPTO", "/screener?market=CRYPTO", "/backtest?market=CRYPTO", "/research?market=CRYPTO", "/indicators?market=CRYPTO", "/signals?market=CRYPTO", "/paper-trading?market=CRYPTO",
     "/admin",
   ];
   const viewports = [
@@ -57,8 +57,8 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-topnav")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
-      await expect(page.locator(".platform-topnav a")).toHaveCount(7);
-      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Indicators", "Signals", "Paper Trading", "Strategies"]);
+      await expect(page.locator(".platform-topnav a")).toHaveCount(8);
+      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Strategies"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
@@ -109,6 +109,149 @@ test("the market switcher keeps the current page and carries the market into nav
   await expect(page.locator(".platform-environment")).toHaveText("CRYPTO");
   await expect(page.locator('.quant-market-tabs[aria-label="Market selector"]')).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Signals", exact: true })).toHaveAttribute("href", "/signals?market=CRYPTO");
+});
+
+test("research parameter sweeps preview safely and reuse comparison and chart workspaces", async ({ page }) => {
+  await page.unroute("**/api/v2/**");
+  let previewAttempts = 0;
+  const runs = [
+    "71111111-1111-4111-8111-111111111111",
+    "72222222-2222-4222-8222-222222222222",
+  ];
+  const variants = runs.map((runId, index) => ({
+    variantId: `70000000-0000-4000-8000-00000000000${index + 1}`,
+    position: index + 1,
+    name: `rsi_low=${25 + index * 5}`,
+    configuration: { rsi_low: 25 + index * 5 },
+    execution: { targetPct: 0.5, executionTimeframe: "5m" },
+    run: {
+      runId,
+      market: "NSE",
+      strategyId: "rsi_dip_ladder_v1",
+      strategyVersion: "1.0.0",
+      timeframe: "5m",
+      symbols: ["INFY", "TCS"],
+      startDate: "2026-08-01",
+      endDate: "2026-08-31",
+      status: "COMPLETE",
+      symbolsTotal: 2,
+      symbolsCompleted: 2,
+      failedSymbols: index ? [{ symbol: "INFY", message: "missing candle" }] : [],
+      metrics: {
+        realizedPnl: index ? 80 : 120,
+        unrealizedPnl: 0,
+        maximumDrawdown: index ? 15 : 20,
+        winRate: index ? 0.5 : 0.75,
+        fees: 4,
+        slippage: 2,
+      },
+      createdAt: "2026-09-05T09:00:00Z",
+    },
+  }));
+  const experiment = {
+    experimentId: "70000000-0000-4000-8000-000000000099",
+    name: "Completed RSI sweep",
+    mode: "GRID",
+    market: "NSE",
+    strategyId: "rsi_dip_ladder_v1",
+    strategyVersion: "1.0.0",
+    strategySourceId: null,
+    timeframe: "5m",
+    universeId: "60000000-0000-4000-8000-000000000001",
+    universeName: "Active NSE",
+    symbols: ["INFY", "TCS"],
+    startDate: "2026-08-01",
+    endDate: "2026-08-31",
+    sweepDefinitions: [{ section: "strategy", parameter: "rsi_low", type: "number", method: "EXPLICIT_VALUES", values: [25, 30] }],
+    previewHash: `sha256:${"a".repeat(64)}`,
+    variantCount: 2,
+    symbolCount: 2,
+    estimatedSymbolRuns: 4,
+    status: "COMPLETE",
+    variantStatusCounts: { QUEUED: 0, RUNNING: 0, COMPLETE: 2, FAILED: 0, CANCELLED: 0, INTERRUPTED: 0 },
+    progress: { variantsTotal: 2, symbolsTotal: 4, symbolsCompleted: 4 },
+    variants,
+    createdAt: "2026-09-05T09:00:00Z",
+  };
+
+  await page.route("**/api/v2/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/strategies")) return route.fulfill({ json: {
+      strategies: [{
+        strategyId: "rsi_dip_ladder_v1", name: "RSI Dip Ladder", version: "1.0.0",
+        supportedMarkets: ["NSE", "CRYPTO"], supportedTimeframes: ["5m", "1d"],
+        configSchema: { rsi_low: { type: "number", default: 30, minimum: 1, maximum: 90, label: "Low RSI" } }, defaults: { rsi_low: 30 },
+      }],
+      markets: ["NSE", "CRYPTO"], riskDefaults: {}, riskSchema: {},
+      executionSchema: { targetPct: { type: "number", default: null, minimum: 0.00000001, label: "Target %" } },
+    } });
+    if (path.endsWith("/strategy-studio/sources")) return route.fulfill({ json: { sources: [] } });
+    if (path.endsWith("/screener/universes")) return route.fulfill({ json: {
+      active: { NSE: { universeId: "60000000-0000-4000-8000-000000000001", market: "NSE", name: "Active NSE", symbols: ["INFY", "TCS"], active: true } },
+      universes: [],
+    } });
+    if (path.endsWith("/screener/presets")) return route.fulfill({ json: { presets: [] } });
+    if (path.endsWith("/research/experiments/preview") && request.method() === "POST") {
+      previewAttempts += 1;
+      if (previewAttempts > 1) return route.fulfill({ status: 422, json: { detail: "The experiment requires 20,100 symbol-runs; the limit is 20,000" } });
+      return route.fulfill({ json: {
+        previewHash: `sha256:${"b".repeat(64)}`,
+        name: "Controlled strategy experiment", mode: "GRID", strategyId: "rsi_dip_ladder_v1", strategyVersion: "1.0.0",
+        strategySourceId: null, market: "NSE", timeframe: "5m", universeId: "60000000-0000-4000-8000-000000000001",
+        universeName: "Active NSE", symbols: ["INFY", "TCS"], startDate: "2026-07-08", endDate: "2026-09-06",
+        sweepDefinitions: [{ section: "strategy", parameter: "rsi_low", type: "number", method: "EXPLICIT_VALUES", values: [25, 30] }],
+        parameterCount: 1, variantCount: 2, symbolCount: 2, estimatedSymbolRuns: 4,
+        variants: variants.map(({ name, configuration, execution }) => ({ name, configuration, execution })), warnings: [],
+      } });
+    }
+    if (path.endsWith("/research/experiments")) return route.fulfill({ json: { experiments: [experiment] } });
+    const runIndex = runs.findIndex((runId) => path.endsWith(`/backtests/${runId}/trades`));
+    if (runIndex >= 0) return route.fulfill({ json: {
+      runId: runs[runIndex], total: 2, limit: 5000, offset: 0,
+      trades: [
+        { symbol: "TCS", lotId: `lot-${runIndex}-1`, status: "TARGET_HIT", exitTimestamp: "2026-08-02T10:00:00Z", netPnl: 40, holdingMinutes: 20 },
+        { symbol: "TCS", lotId: `lot-${runIndex}-2`, status: "TARGET_HIT", exitTimestamp: "2026-08-03T10:00:00Z", netPnl: runIndex ? 40 : 80, holdingMinutes: 30 },
+      ],
+    } });
+    return route.fulfill({ status: 404, json: { detail: `Unexpected research route: ${path}` } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/research");
+  const runButton = page.getByRole("button", { name: "Run experiment" });
+  await expect(runButton).toBeDisabled();
+  await page.getByRole("button", { name: "Grid sweep" }).click();
+  await page.getByRole("button", { name: "Add parameter" }).click();
+  await page.getByLabel("rsi_low values").fill("[25, 30]");
+  await page.getByRole("button", { name: "Preview experiment" }).click();
+  await expect(page.getByRole("heading", { name: "Experiment preview" })).toBeVisible();
+  await expect(page.getByText("rsi_low=25", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Symbol-runs").first()).toBeVisible();
+  await expect(runButton).toBeEnabled();
+
+  const chart = page.getByRole("link", { name: "Chart" }).first();
+  await expect(chart).toHaveAttribute("href", `/backtest?market=NSE&runId=${runs[0]}`);
+  await page.getByLabel("Ranking").selectOption("RETURN_DRAWDOWN");
+  await expect(page.getByText("Leader", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Net P&L" }).click();
+  await expect(page.getByRole("columnheader", { name: "Net P&L" })).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.getByRole("group", { name: "Equity curve selection" }).getByRole("checkbox")).toHaveCount(2);
+
+  await page.getByLabel("rsi_low values").fill("[20, 25, 30]");
+  await expect(page.getByText(/Preview stale/)).toBeVisible();
+  await expect(runButton).toBeDisabled();
+  await page.getByLabel("rsi_low values").fill("[25, 30]");
+  await expect(runButton).toBeDisabled();
+  await page.getByLabel("rsi_low values").fill("[20, 25, 30]");
+  await page.getByRole("button", { name: "Preview experiment" }).click();
+  await expect(page.getByText(/20,100 symbol-runs/)).toBeVisible();
+  await expect(runButton).toBeDisabled();
+  await expect(page.getByText(/Approve for|Deploy/)).toHaveCount(0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
 });
 
 test("strategies adds a configured instrument with one compact control", async ({ page }) => {
@@ -263,9 +406,9 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
     linkWidths: Array.from(nav.querySelectorAll("a"), (link) => link.getBoundingClientRect().width),
     flexGrow: getComputedStyle(nav).flexGrow,
   }));
-  expect(compactNavigation.width).toBeLessThanOrEqual(310);
+  expect(compactNavigation.width).toBeLessThanOrEqual(350);
   expect(compactNavigation.flexGrow).toBe("0");
-  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40]);
+  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40, 40]);
   const settingsLink = page.getByRole("link", { name: "Strategies", exact: true });
   const collapsedWidth = await settingsLink.evaluate((link) => link.getBoundingClientRect().width);
   await settingsLink.hover();

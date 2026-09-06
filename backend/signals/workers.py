@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -25,6 +26,7 @@ from backend.signals.recovery import rebuild_histories
 logger = logging.getLogger("opendelta.signals.worker")
 
 ENGINE_NAME = "live-signals-v2"
+NSE_CLOSE_SETTLEMENT_GRACE = timedelta(minutes=15)
 
 
 class MarketSignalWorker:
@@ -158,7 +160,20 @@ class MarketSignalWorker:
     def _poll_is_due(self, moment: datetime) -> bool:
         """Intraday workers follow the session; NSE daily workers run once after close."""
         if self.engine.timeframe != "1d" or self.market.daily_session_close is None:
-            return self.market.session_is_open(moment)
+            if self.market.session_is_open(moment):
+                return True
+            if self.market.daily_session_close is None:
+                return False
+            local = self._local_moment(moment)
+            if local.weekday() >= 5:
+                return False
+            close = datetime.combine(
+                local.date(), self.market.daily_session_close, tzinfo=local.tzinfo
+            )
+            # Dhan's final intraday candles can settle shortly after the cash
+            # session closes. Keep polling briefly so 15:20/15:25 bars are not
+            # lost before the worker enters its overnight closed state.
+            return close < local <= close + NSE_CLOSE_SETTLEMENT_GRACE
         local = self._local_moment(moment)
         if local.weekday() >= 5 or local.time() < self.market.daily_session_close:
             return False

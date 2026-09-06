@@ -42,9 +42,10 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const worker = signalWorkers[0] ?? storedWorkers[0] ?? null;
   const freshness = data?.marketData.data?.dataFreshness ?? null;
   const universe = data?.screener.data?.activeUniverse ?? null;
+  const marketClosed = freshness?.reason === "MARKET_CLOSED_LAST_SESSION_CURRENT";
   const operationalAlerts = [
-    ...(freshness?.ageSeconds != null && freshness.ageSeconds > (market === "CRYPTO" ? 180 : 900) ? [`Market data is stale (${formatAge(freshness.ageSeconds)}).`] : []),
-    ...signalWorkers.filter((item) => item.status && !["READY", "RUNNING"].includes(item.status)).map((item) => `${humanize(item.strategyId ?? "Strategy")} worker is ${humanize(item.status ?? "stopped")}.`),
+    ...(freshness?.status === "STALE" ? [`Market data is stale (${formatAge(freshness.ageSeconds)}).`] : []),
+    ...signalWorkers.filter((item) => item.status && !["READY", "RUNNING"].includes(item.status) && !(marketClosed && item.status === "MARKET_CLOSED")).map((item) => `${humanize(item.strategyId ?? "Strategy")} worker is ${humanize(item.status ?? "stopped")}.`),
     ...(operations.data?.tradingView.find((item) => !item.accepted) ? [`Latest TradingView rejection: ${operations.data.tradingView.find((item) => !item.accepted)?.reason ?? "validation failed"}.`] : []),
     ...(operations.data?.orders.find((item) => item.status === "REJECTED") ? [`Latest paper rejection: ${operations.data.orders.find((item) => item.status === "REJECTED")?.reason ?? "execution rejected"}.`] : []),
   ];

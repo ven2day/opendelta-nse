@@ -354,6 +354,14 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(status["status"], "MARKET_CLOSED")
         self.assertEqual(source.calls, 2)  # recovery only, one call per unique symbol; no polling while closed
 
+    def test_nse_intraday_worker_polls_through_the_close_settlement_grace(self) -> None:
+        worker = self._worker(self.Source(self.candles))
+        zone = self.candles.index.tz
+        self.assertTrue(worker._poll_is_due(datetime(2026, 9, 1, 15, 30, tzinfo=zone)))
+        self.assertTrue(worker._poll_is_due(datetime(2026, 9, 1, 15, 44, tzinfo=zone)))
+        self.assertFalse(worker._poll_is_due(datetime(2026, 9, 1, 15, 46, tzinfo=zone)))
+        self.assertFalse(worker._poll_is_due(datetime(2026, 9, 6, 15, 35, tzinfo=zone)))
+
     def test_nse_daily_worker_polls_once_after_the_session_close(self) -> None:
         engine = SignalEngine(
             market=market_spec("NSE"),

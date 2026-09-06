@@ -597,9 +597,9 @@
 .quant-lifecycle-card > header > div:first-child { display: flex; min-width: 0; align-items: baseline; gap: 8px; }
 .quant-lifecycle-card > header strong { overflow: hidden; color: var(--od-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .quant-lifecycle-card > header span,
-.quant-lifecycle-card > footer { color: var(--od-muted); font-size: 10px; }
+.quant-lifecycle-card > footer { color: var(--od-muted); font-size: 11px; }
 .quant-lifecycle-card-status { display: flex; flex: none; align-items: center; gap: 8px; }
-.quant-lifecycle-card-status small { color: var(--od-faint); font-size: 10px; text-transform: uppercase; }
+.quant-lifecycle-card-status small { color: var(--od-faint); font-size: 11px; text-transform: uppercase; }
 .quant-lifecycle-rail { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .quant-lifecycle-step { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; min-width: 0; padding: 9px 10px; }
 .quant-lifecycle-step + .quant-lifecycle-step { border-left: 1px solid var(--od-border); }
@@ -608,9 +608,9 @@
 .quant-lifecycle-step[data-tone="warn"] .quant-lifecycle-step-icon { color: var(--od-warning); background: color-mix(in srgb, var(--od-warning) 12%, var(--od-surface)); }
 .quant-lifecycle-step[data-tone="bad"] .quant-lifecycle-step-icon { color: var(--od-danger); background: color-mix(in srgb, var(--od-danger) 12%, var(--od-surface)); }
 .quant-lifecycle-step > div { display: grid; min-width: 0; gap: 1px; }
-.quant-lifecycle-step small { color: var(--od-faint); font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.quant-lifecycle-step small { color: var(--od-faint); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
 .quant-lifecycle-step strong { color: var(--od-text); font-size: 12px; }
-.quant-lifecycle-step > div > span { overflow: hidden; color: var(--od-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-lifecycle-step > div > span { overflow: hidden; color: var(--od-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .quant-lifecycle-card > footer { justify-content: flex-start; flex-wrap: wrap; border-top: 1px solid var(--od-border); padding-block: 5px; }
 .quant-lifecycle-card > footer span + span::before { margin-right: 8px; color: var(--od-border-strong); content: "•"; }
 .quant-lifecycle-card > footer b { color: var(--od-text-secondary); font-weight: 700; }

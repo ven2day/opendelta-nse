@@ -1,4 +1,3 @@
-?? web/test-results/
 "use client";
 
 import { Braces, Code2, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";

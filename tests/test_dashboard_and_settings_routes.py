@@ -56,8 +56,8 @@ class FakeDeployments:
         row = self.rows.get((market, strategy_id))
         return dict(row) if row else None
 
-    def save(self, *, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode):
-        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "configId": config_id, "universeId": universe_id, "timeframe": timeframe, "mode": mode, "source": "DATABASE"}
+    def save(self, *, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode, signal_source="OPENDELTA"):
+        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "configId": config_id, "universeId": universe_id, "timeframe": timeframe, "mode": mode, "signalSource": signal_source, "source": "DATABASE"}
         self.rows[(market, strategy_id)] = row
         return dict(row)
 

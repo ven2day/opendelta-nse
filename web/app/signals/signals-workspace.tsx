@@ -70,7 +70,7 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
           <td>{formatDateTime(signal.expiresAt, market)}</td>
           <td>{signal.exitTimestamp ? <><span>{formatDateTime(signal.exitTimestamp, market)}</span><small>@ {formatNumber(signal.exitPrice)}</small></> : "—"}</td>
           <td><div className="quant-tag-list">{(signal.reasons ?? []).map((reason) => <Tag key={reason}>{humanize(reason)}</Tag>)}</div></td>
-          <td><StatusBadge tone={tone(signal.status)}>{signal.strategyId}{signal.strategyVersion ? ` v${signal.strategyVersion}` : ""}</StatusBadge></td>
+          <td><StatusBadge tone={tone(signal.status)}>{signal.strategyId}{signal.strategyVersion ? ` v${signal.strategyVersion}` : ""}</StatusBadge><small>{signal.source === "TRADINGVIEW" ? "TradingView" : "OpenDelta"}</small></td>
         </tr>)}</tbody>
       </table></div>}
     </Panel>

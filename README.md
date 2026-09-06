@@ -192,6 +192,8 @@ opendelta-nse/
 | `PLATFORM_CANDLE_READ_MODE` | Shared engine reader: `legacy`, `timescale-fallback`, or strict `timescale` |
 | `SCREENER_CANDLE_BATCH_SIZE` | Bounded TimescaleDB screener batch size (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE` | `true` to migrate at startup; otherwise `python -m backend.data.migrate` |
+| `TRADINGVIEW_WEBHOOK_KEY` | revocable key for TradingView JSON alerts; enables external signal ingestion |
+| `TRADINGVIEW_MAX_ALERT_AGE_SECONDS` | maximum accepted alert delivery age (default `900`) |
 | `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
 | `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |
 | `NSE_LIVE_STRATEGIES`, `CRYPTO_LIVE_STRATEGIES` | JSON array of live `strategyId` + `timeframe` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
@@ -208,6 +210,7 @@ are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 - [Architecture and how to add a strategy](docs/unified-platform.md)
 - [API reference](docs/API.md)
+- [TradingView signal integration](docs/tradingview-integration.md)
 - [Deployment](docs/DEPLOYMENT.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Market-data operations](docs/market-data-operations.md) · [TimescaleDB bootstrap](docs/timescaledb-production-bootstrap.md)
 - [Architecture decision records](docs/adr) · [Legacy strategy reports](docs/legacy)

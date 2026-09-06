@@ -114,6 +114,7 @@ export type StrategyConfigResponse = {
   all: StrategyConfig[];
 };
 export type StrategyDeploymentMode = "OFF" | "SIGNALS" | "PAPER";
+export type StrategySignalSource = "OPENDELTA" | "TRADINGVIEW";
 export type StrategyDeployment = {
   deploymentId?: string | null;
   market: PlatformMarket;
@@ -123,11 +124,13 @@ export type StrategyDeployment = {
   universeId?: string | null;
   timeframe: string;
   mode: StrategyDeploymentMode;
+  signalSource: StrategySignalSource;
   source: "DATABASE" | "ENVIRONMENT" | "DEFAULT";
   createdAt?: string | null;
   updatedAt?: string | null;
 };
 export type StrategyDeploymentsResponse = { deployments: StrategyDeployment[] };
+export type TradingViewStatus = { configured: boolean; ready: boolean; paperOnly: true; deployment?: StrategyDeployment | null };
 
 export type BacktestMetrics = {
   totalSignals?: number | null;
@@ -240,6 +243,9 @@ export type Signal = {
   reasons?: string[] | null;
   indicators?: Record<string, unknown> | null;
   configurationSnapshot?: ConfigValues | null;
+  source?: StrategySignalSource | null;
+  externalEventId?: string | null;
+  receivedAt?: string | null;
   lastPrice?: number | null;
   exitTimestamp?: string | null;
   exitPrice?: number | null;

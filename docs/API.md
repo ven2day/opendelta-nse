@@ -73,6 +73,17 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 
 Signals are unique on `(market, strategyVersion, symbol, timeframe, candleTimestamp, signalType)`; a duplicate is silently rejected by the database.
 
+## TradingView integration
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/integrations/tradingview/status?market=&strategy=` | Authenticated UI status; reports whether the server key and selected deployment are ready without returning the key. |
+| POST | `/v2/integrations/tradingview/webhook` | Internal FastAPI ingress for the public web proxy. Validates the v1 alert contract and returns 202. |
+| POST | `/api/tradingview/webhook` | Public HTTPS URL configured in TradingView. It is body-size limited and forwards to the internal ingress. |
+
+See [TradingView signal integration](tradingview-integration.md) for the alert
+contract and production setup.
+
 ## Paper trading
 
 | Method | Path | Notes |

@@ -1,6 +1,6 @@
 .deploymentControl {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) 100px minmax(190px, .8fr) auto;
+  grid-template-columns: minmax(170px, 1fr) 140px 90px minmax(170px, .8fr) auto;
   align-items: end;
   gap: 12px;
   padding: 12px;
@@ -23,7 +23,7 @@
 
 .strategyTable { overflow-x: auto; border: 1px solid var(--od-border); border-radius: var(--od-radius); }
 .strategyHeader,
-.strategyRow { display: grid; grid-template-columns: minmax(180px, 1.4fr) 90px minmax(150px, 1fr) 100px 100px; align-items: center; gap: 10px; min-width: 650px; padding: 9px 12px; text-align: left; }
+.strategyRow { display: grid; grid-template-columns: minmax(180px, 1.4fr) 100px 80px minmax(140px, 1fr) 90px 100px; align-items: center; gap: 10px; min-width: 760px; padding: 9px 12px; text-align: left; }
 .strategyHeader { color: var(--od-muted); background: var(--od-surface-raised); font-size: 10px; font-weight: 750; letter-spacing: .06em; text-transform: uppercase; }
 .strategyRow { border-top: 1px solid var(--od-border); color: var(--od-text); background: var(--od-surface); }
 .strategyRow:hover,

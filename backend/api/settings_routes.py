@@ -100,6 +100,7 @@ class StrategyDeploymentRequest(BaseModel):
     timeframe: str = Field(min_length=1, max_length=12)
     mode: str = Field(pattern="^(OFF|SIGNALS|PAPER)$")
     universeId: str | None = None
+    signalSource: str = Field(default="OPENDELTA", pattern="^(OPENDELTA|TRADINGVIEW)$")
 
 
 def create_settings_router(
@@ -149,7 +150,7 @@ def create_settings_router(
 
     def _default_deployment(strategy: Any, market: str) -> dict[str, Any]:
         timeframes = list(strategy.supported_timeframes)
-        return {"deploymentId": None, "market": market, "strategyId": strategy.strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
+        return {"deploymentId": None, "market": market, "strategyId": strategy.strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "signalSource": "OPENDELTA", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
     @router.get("/strategies")
     def list_strategies(market: str | None = Query(default=None)) -> dict[str, Any]:
@@ -212,6 +213,7 @@ def create_settings_router(
                     universe_id=current.get("universeId"),
                     timeframe=current["timeframe"],
                     mode=current["mode"],
+                    signal_source=current.get("signalSource", "OPENDELTA"),
                 )
         if request.activate and deployment_changed is not None:
             deployment_changed(request.market)
@@ -260,7 +262,9 @@ def create_settings_router(
                 raise HTTPException(status_code=404, detail=str(error)) from error
             if universe["market"] != request.market:
                 raise HTTPException(status_code=422, detail="The selected watchlist belongs to a different market")
-        saved = _deployments().save(market=request.market, strategy_id=strategy.strategy_id, strategy_version=strategy.version, config_id=(active or {}).get("configId"), universe_id=request.universeId, timeframe=request.timeframe, mode=request.mode)
+        if request.mode != "OFF" and request.signalSource == "TRADINGVIEW" and not request.universeId:
+            raise HTTPException(status_code=409, detail="Select a watchlist before enabling TradingView alerts")
+        saved = _deployments().save(market=request.market, strategy_id=strategy.strategy_id, strategy_version=strategy.version, config_id=(active or {}).get("configId"), universe_id=request.universeId, timeframe=request.timeframe, mode=request.mode, signal_source=request.signalSource)
         if deployment_changed is not None:
             deployment_changed(request.market)
         return saved

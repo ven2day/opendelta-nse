@@ -410,6 +410,19 @@ test("Research Lab creates immutable grouped backtest variants without deploymen
   assert.doesNotMatch(source, /backtests\/\$\{.*\}\/approve|strategy-deployments|paper-trading/);
 });
 
+test("Research Lab compares completed variants and opens their immutable charts", async () => {
+  const [research, backtestPage, backtest] = await Promise.all([
+    readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/backtest/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
+  ]);
+  for (const metric of ["Net P&amp;L", "Drawdown", "Win rate", "Costs", "Exposure", "Failed symbols"]) assert.match(research, new RegExp(metric));
+  assert.match(research, /Variant equity curves/);
+  assert.match(research, /runId: variant\.run\.runId/);
+  assert.match(backtestPage, /initialRunId=\{parameters\.runId\}/);
+  assert.match(backtest, /useState<string \| null>\(initialRunId \?\? null\)/);
+});
+
 test("signal filters stay collapsed and reason codes are humanized", async () => {
   const source = await readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className="quant-filter-menu">/);

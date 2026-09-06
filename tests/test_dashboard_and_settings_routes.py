@@ -92,6 +92,11 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertEqual(payload["riskSchema"]["maximumTotalExposurePct"]["maximum"], 100.0)
         self.assertEqual(payload["strategies"][0]["configSchema"]["target_pct"]["default"], 1.0)
 
+        crypto = self.api["GET /v2/strategies"](market="CRYPTO")
+        self.assertEqual(crypto["riskDefaults"]["initialQuantity"], 0.01)
+        self.assertEqual(crypto["riskDefaults"]["minimumQuantity"], 1e-8)
+        self.assertFalse(crypto["riskDefaults"]["wholeUnits"])
+
     def test_save_validates_through_the_strategy_and_activates_per_market(self) -> None:
         saved = self.api["POST /v2/strategies/{strategy_id}/config"](
             "ema_vwap_strong_buy",
@@ -118,7 +123,17 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertEqual(len(effective["all"]), 2)
         crypto = self.api["GET /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", market="CRYPTO")
         self.assertIsNone(crypto["active"])
+        self.assertEqual(crypto["effectiveRiskSettings"]["initialQuantity"], 0.01)
+        self.assertEqual(crypto["effectiveRiskSettings"]["minimumQuantity"], 1e-8)
         self.assertFalse(crypto["effectiveRiskSettings"]["wholeUnits"])
+
+        saved_crypto = self.api["POST /v2/strategies/{strategy_id}/config"](
+            "ema_vwap_strong_buy",
+            StrategyConfigRequest(market="CRYPTO", name="fractional", riskSettings={"maximumDailyTrades": 3}),
+        )
+        self.assertEqual(saved_crypto["riskSettings"]["initialQuantity"], 0.01)
+        self.assertEqual(saved_crypto["riskSettings"]["minimumQuantity"], 1e-8)
+        self.assertFalse(saved_crypto["riskSettings"]["wholeUnits"])
 
     def test_invalid_configuration_unknown_strategy_and_missing_storage(self) -> None:
         with self.assertRaises(HTTPException) as bad:

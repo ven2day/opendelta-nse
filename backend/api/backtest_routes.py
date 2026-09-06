@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,6 +18,7 @@ from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import (
     BacktestRunRepository,
     BacktestTradeRepository,
+    IndicatorSourceRepository,
     SavedUniverseRepository,
     StrategyApprovalRepository,
     StrategyConfigRepository,
@@ -23,6 +26,7 @@ from backend.data.repositories import (
     StrategySourceRepository,
 )
 from backend.data.universe_presets import get_universe_preset
+from backend.markets.base import CandleSource, market_spec
 from backend.markets.common import MAX_INTERACTIVE_CANDLE_BARS, TIMEFRAME_SECONDS
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.strategies.adapter_v2 import StrategyRunnerClient, StrategyV2BacktestAdapter
@@ -65,6 +69,8 @@ class BacktestServices:
         universes: Callable[[], SavedUniverseRepository] | None = None,
         approvals: Callable[[], StrategyApprovalRepository] | None = None,
         sources: Callable[[], StrategySourceRepository] | None = None,
+        indicator_sources: Callable[[], IndicatorSourceRepository] | None = None,
+        candle_source: Callable[[str], CandleSource] | None = None,
         deployment_changed: Callable[[str], None] | None = None,
     ) -> None:
         self.registry = registry
@@ -76,6 +82,8 @@ class BacktestServices:
         self.universes = universes
         self.approvals = approvals
         self.sources = sources
+        self.indicator_sources = indicator_sources
+        self.candle_source = candle_source
         self.deployment_changed = deployment_changed
 
     def runs(self) -> BacktestRunRepository:
@@ -341,5 +349,63 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return {"runId": run_id, "trades": page, "total": total, "limit": limit, "offset": offset}
+
+    @router.get("/{run_id}/chart")
+    def backtest_chart(
+        run_id: str,
+        symbol: str = Query(min_length=1, max_length=80),
+        indicator_source_id: str | None = Query(default=None, alias="indicatorSourceId"),
+    ) -> dict[str, Any]:
+        if services.candle_source is None:
+            raise HTTPException(status_code=503, detail="Chart candle storage is not configured")
+        try:
+            run = _guard(services.runs).get(run_id)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=404, detail="Backtest run was not found") from error
+        symbol_key = symbol.strip().upper()
+        if symbol_key not in run["symbols"]:
+            raise HTTPException(status_code=422, detail="Symbol was not part of this backtest")
+        spec = market_spec(run["market"])
+        timezone = ZoneInfo(spec.timezone)
+        start = datetime.combine(run["startDate"], time.min, tzinfo=timezone)
+        end = datetime.combine(run["endDate"] + timedelta(days=1), time.min, tzinfo=timezone)
+        try:
+            frame = services.candle_source(run["market"]).candles(
+                symbol_key, run["timeframe"], start, end, warmup_bars=0,
+            )
+        except Exception as error:  # noqa: BLE001 - provider failures become an API error
+            raise HTTPException(status_code=422, detail=f"Chart candles could not be loaded: {error}") from error
+        frame = frame[(frame.index >= start) & (frame.index < end)].tail(5_000)
+        if frame.empty:
+            raise HTTPException(status_code=422, detail="No completed candles were found for this chart")
+        candles = {
+            "timestamp": [stamp.isoformat() for stamp in frame.index],
+            "open": frame["Open"].astype(float).tolist(), "high": frame["High"].astype(float).tolist(),
+            "low": frame["Low"].astype(float).tolist(), "close": frame["Close"].astype(float).tolist(),
+            "volume": frame["Volume"].astype(float).tolist(),
+        }
+        trades = _guard(services.trades).list(run_id, symbol=symbol_key, limit=5_000)
+        indicator = None
+        if indicator_source_id:
+            if services.indicator_sources is None:
+                raise HTTPException(status_code=503, detail="Indicator source storage is not configured")
+            try:
+                source = _guard(services.indicator_sources).get(indicator_source_id)
+            except (KeyError, ValueError) as error:
+                raise HTTPException(status_code=404, detail="Indicator source was not found") from error
+            if source["status"] != "VALIDATED":
+                raise HTTPException(status_code=409, detail="Archived indicators cannot be charted")
+            socket_path = os.environ.get("STRATEGY_V2_RUNNER_SOCKET", "/run/opendelta-strategy/runner.sock")
+            client = StrategyRunnerClient(socket_path, timeout_seconds=20, execution_timeout_seconds=15)
+            try:
+                result = client.evaluate({
+                    "payloadType": "indicator", "sourceCode": source["sourceCode"], "market": run["market"],
+                    "symbol": symbol_key, "timeframe": run["timeframe"], "params": source["manifest"].get("parameters", {}),
+                    "candles": candles,
+                })
+            except (OSError, RuntimeError, TimeoutError, ValueError) as error:
+                raise HTTPException(status_code=422, detail=f"Indicator overlay failed: {error}") from error
+            indicator = {"sourceId": source["sourceId"], "name": source["name"], "version": source["indicatorVersion"], **result}
+        return {"run": run, "symbol": symbol_key, "candles": candles, "trades": trades, "indicator": indicator}
 
     return router

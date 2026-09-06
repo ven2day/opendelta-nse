@@ -272,6 +272,7 @@ export type BacktestTrade = {
   cycleId?: string | null;
   lotNumber?: number | null;
   signalTimestamp?: string | null;
+  signalPrice?: number | null;
   entryTimestamp?: string | null;
   entryPrice?: number | null;
   costBasisPrice?: number | null;
@@ -294,6 +295,13 @@ export type BacktestTrade = {
   holdingMinutes?: number | null;
 };
 export type BacktestTradesResponse = { trades: BacktestTrade[]; total: number; limit: number; offset: number };
+export type BacktestChartResponse = {
+  run: BacktestRun;
+  symbol: string;
+  candles: { timestamp: string[]; open: number[]; high: number[]; low: number[]; close: number[]; volume: number[] };
+  trades: BacktestTrade[];
+  indicator: null | { sourceId: string; name: string; version: string; outputs: IndicatorOutput[]; rows: Array<Record<string, number | null>> };
+};
 
 export type EngineStatus = {
   market?: PlatformMarket | string | null;

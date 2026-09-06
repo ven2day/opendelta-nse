@@ -81,6 +81,7 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 | GET | `/v2/backtests/{id}` | Status (`QUEUED, RUNNING, COMPLETE, FAILED, CANCELLED, INTERRUPTED`), `symbolsCompleted/symbolsTotal`, `currentSymbol`, `failedSymbols`, `metrics`, `configurationSnapshot`, `strategyVersion`. |
 | DELETE | `/v2/backtests/{id}` | Durable cancel request; honoured between symbols and every 500 bars. |
 | GET | `/v2/backtests/{id}/trades?symbol=&limit=&offset=` | Paged trades, one row per lot. |
+| GET | `/v2/backtests/{id}/chart?symbol=&indicatorSourceId=` | Up to 5,000 completed candles for one run symbol, its immutable trade annotations, and optional isolated Indicator V2 output for the chart workspace. |
 
 `execution`: `targetPct?, stopLossPct?, maximumHoldingBars?, initialQuantity, allowAdditionalBuys, additionalQuantityPct, additionalSizingMode (REDUCE_EVERY_NEW_LOT|FIXED_PERCENTAGE_OF_FIRST_LOT), minimumQuantity, maximumEntriesPerCycle, batchSize`.
 

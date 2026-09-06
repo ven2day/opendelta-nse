@@ -162,6 +162,20 @@ test("the unified navigation and proxy are wired exactly once", async () => {
   assert.match(client, /export async function v2Delete</);
 });
 
+test("dashboard presents a compact live strategy lifecycle refreshed every ten seconds", async () => {
+  const [dashboard, styles] = await Promise.all([
+    readFile(new URL("../app/dashboard-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/trading-terminal.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(dashboard, /DASHBOARD_REFRESH_MS = 10_000/);
+  assert.match(dashboard, /Live strategy lifecycle/);
+  assert.match(dashboard, /Market data/);
+  assert.match(dashboard, /Signal check/);
+  assert.match(dashboard, /Paper trade/);
+  assert.match(dashboard, /cycle\?\.lastSignalId \? lifecycle\.paper : stages\.paper/);
+  assert.match(styles, /\.quant-lifecycle-rail\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s);
+});
+
 test("production verification follows the Strategies navigation label", async () => {
   const script = new URL("../deploy/verify-container.sh", import.meta.url);
   const verification = await readFile(script, "utf8");

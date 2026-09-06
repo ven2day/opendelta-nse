@@ -197,7 +197,14 @@ class PlatformRuntime:
                     broker_tracking_owner = broker_tracking_owner or row["timeframe"] == "1d"
                     continue
             binding = LiveStrategyBinding(row["strategyId"], row["timeframe"])
-            worker = self.build_signal_worker(key, binding=binding, generation_enabled=row["mode"] != "OFF" and row.get("signalSource", "OPENDELTA") == "OPENDELTA", universe_id=row.get("universeId"))
+            worker = self.build_signal_worker(
+                key,
+                binding=binding,
+                generation_enabled=row["mode"] != "OFF" and row.get("signalSource", "OPENDELTA") == "OPENDELTA",
+                universe_id=row.get("universeId"),
+                automation_mode=row["mode"],
+                signal_source=row.get("signalSource", "OPENDELTA"),
+            )
             if broker is not None:
                 if row["mode"] == "PAPER":
                     worker.engine.publish = broker.on_signal
@@ -318,6 +325,8 @@ class PlatformRuntime:
         binding: LiveStrategyBinding | None = None,
         generation_enabled: bool = True,
         universe_id: str | None = None,
+        automation_mode: str = "SIGNALS",
+        signal_source: str = "OPENDELTA",
     ) -> MarketSignalWorker:
         spec = market_spec(market)
         selected = binding or (
@@ -363,6 +372,8 @@ class PlatformRuntime:
             lookback_days=int(
                 os.environ.get(f"{market}_SIGNAL_LOOKBACK_DAYS", "180" if selected.timeframe == "1d" else "2")
             ),
+            automation_mode=automation_mode,
+            signal_source=signal_source,
         )
 
     def worker_status(self, market: str) -> dict[str, Any] | None:
@@ -374,6 +385,90 @@ class PlatformRuntime:
         with self._lock:
             workers = [worker for key, worker in self._workers.items() if key.startswith(prefix)]
         return [worker.status() for worker in workers]
+
+    def strategy_lifecycles(self, market: str) -> list[dict[str, Any]]:
+        """Combine worker-cycle facts with the durable paper result for its latest signal."""
+        key = market.strip().upper()
+        deployments = {
+            (row["strategyId"], row["timeframe"]): row
+            for row in self.configured_deployments(key)
+            if row["mode"] != "OFF"
+        }
+        workers = self.worker_statuses(key)
+        if not deployments:
+            return []
+
+        paper_broker = self.paper_broker(key) if any(row["mode"] == "PAPER" for row in deployments.values()) else None
+        pending_by_signal: dict[str, dict[str, Any]] = {}
+        if paper_broker is not None:
+            pending_by_signal = {
+                str(row["signalId"]): row
+                for row in paper_broker.repositories.pending.list(paper_broker.account["accountId"])
+                if row.get("signalId")
+            }
+
+        lifecycles: list[dict[str, Any]] = []
+        for worker in workers:
+            deployment = deployments.get((worker.get("strategyId"), worker.get("timeframe")))
+            if deployment is None:
+                continue
+            last_signal = worker.get("lastSignal") or {}
+            signal_id = str(last_signal.get("signalId") or "")
+            paper = {
+                "status": "NOT_ENABLED",
+                "message": "Signals are recorded; paper execution is not enabled",
+                "timestamp": None,
+                "symbol": last_signal.get("symbol"),
+            }
+            if deployment["mode"] == "PAPER":
+                if not signal_id:
+                    paper = {
+                        "status": "WAITING",
+                        "message": "No BUY signal has required a paper action yet",
+                        "timestamp": None,
+                        "symbol": None,
+                    }
+                elif paper_broker is not None:
+                    orders = paper_broker.repositories.orders.for_signal(paper_broker.account["accountId"], signal_id)
+                    if orders:
+                        latest = orders[-1]
+                        paper = {
+                            "status": "PLACED" if latest["status"] == "FILLED" else latest["status"],
+                            "message": "Paper BUY filled" if latest["status"] == "FILLED" else latest.get("reason") or "Paper order not placed",
+                            "timestamp": latest.get("createdAt"),
+                            "symbol": latest.get("symbol"),
+                            "orderId": latest.get("orderId"),
+                        }
+                    elif signal_id in pending_by_signal:
+                        pending = pending_by_signal[signal_id]
+                        paper = {
+                            "status": "QUEUED",
+                            "message": "Waiting for the next completed candle open",
+                            "timestamp": pending.get("createdAt"),
+                            "symbol": pending.get("symbol"),
+                        }
+                    else:
+                        paper = {
+                            "status": "NOT_PLACED",
+                            "message": "No pending entry or paper order was recorded",
+                            "timestamp": last_signal.get("createdAt") or last_signal.get("candleTimestamp"),
+                            "symbol": last_signal.get("symbol"),
+                        }
+            lifecycles.append(
+                {
+                    "strategyId": worker.get("strategyId"),
+                    "strategyVersion": worker.get("strategyVersion"),
+                    "timeframe": worker.get("timeframe"),
+                    "mode": deployment["mode"],
+                    "signalSource": deployment.get("signalSource", "OPENDELTA"),
+                    "workerStatus": worker.get("status"),
+                    "connectionStatus": worker.get("connectionStatus"),
+                    "cycle": worker.get("lifecycle"),
+                    "lastSignal": last_signal or None,
+                    "paper": paper,
+                }
+            )
+        return lifecycles
 
     def signals(self) -> LiveSignalRepository:
         return LiveSignalRepository(self.require_database())
@@ -506,6 +601,7 @@ def install_platform(
                     if row["market"] == market and row["engine"].startswith("live-signals-v2")
                 ],
                 "workers": runtime.worker_statuses(market),
+                "lifecycles": runtime.strategy_lifecycles(market),
             },
             paper_summary=lambda market: runtime.paper_broker(market).summary(),
             paper_positions=lambda market: runtime.paper_broker(market).positions(),

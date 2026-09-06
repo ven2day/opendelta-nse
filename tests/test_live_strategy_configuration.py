@@ -105,6 +105,66 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
             started,
         )
 
+    def test_runtime_resolves_latest_paper_outcome_for_each_worker_cycle(self) -> None:
+        runtime = PlatformRuntime(database=None, candle_sources={})
+        deployments = [
+            {"strategyId": "rsi_dip_ladder_v1", "timeframe": "5m", "mode": "PAPER", "signalSource": "OPENDELTA"},
+            {"strategyId": "ema_vwap_strong_buy", "timeframe": "5m", "mode": "PAPER", "signalSource": "OPENDELTA"},
+        ]
+        workers = [
+            {
+                "strategyId": "rsi_dip_ladder_v1",
+                "strategyVersion": "1.0.0",
+                "timeframe": "5m",
+                "status": "READY",
+                "connectionStatus": "CONNECTED",
+                "lifecycle": {"status": "COMPLETE", "lastSignalId": "filled-signal"},
+                "lastSignal": {"signalId": "filled-signal", "symbol": "TCS"},
+            },
+            {
+                "strategyId": "ema_vwap_strong_buy",
+                "strategyVersion": "1.0.0",
+                "timeframe": "5m",
+                "status": "READY",
+                "connectionStatus": "CONNECTED",
+                "lifecycle": {"status": "COMPLETE", "lastSignalId": "queued-signal"},
+                "lastSignal": {"signalId": "queued-signal", "symbol": "INFY"},
+            },
+        ]
+        broker = SimpleNamespace(
+            account={"accountId": "paper-account"},
+            repositories=SimpleNamespace(
+                pending=SimpleNamespace(
+                    list=lambda _account: [
+                        {"signalId": "queued-signal", "symbol": "INFY", "createdAt": "2026-09-07T09:35:00+05:30"}
+                    ]
+                ),
+                orders=SimpleNamespace(
+                    for_signal=lambda _account, signal_id: [
+                        {
+                            "orderId": "order-1",
+                            "symbol": "TCS",
+                            "status": "FILLED",
+                            "createdAt": "2026-09-07T09:40:00+05:30",
+                        }
+                    ]
+                    if signal_id == "filled-signal"
+                    else []
+                ),
+            ),
+        )
+
+        with (
+            patch.object(runtime, "configured_deployments", return_value=deployments),
+            patch.object(runtime, "worker_statuses", return_value=workers),
+            patch.object(runtime, "paper_broker", return_value=broker),
+        ):
+            lifecycle = runtime.strategy_lifecycles("NSE")
+
+        self.assertEqual([item["paper"]["status"] for item in lifecycle], ["PLACED", "QUEUED"])
+        self.assertEqual(lifecycle[0]["paper"]["orderId"], "order-1")
+        self.assertEqual(lifecycle[1]["paper"]["symbol"], "INFY")
+
 
 if __name__ == "__main__":
     unittest.main()

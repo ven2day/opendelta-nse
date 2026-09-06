@@ -10,7 +10,8 @@ export const metadata: Metadata = {
   description: "Run registered strategies against a saved universe with database-backed incremental backtests.",
 };
 
-export default async function BacktestPage({ searchParams }: { searchParams: Promise<{ market?: string }> }) {
+export default async function BacktestPage({ searchParams }: { searchParams: Promise<{ market?: string; runId?: string }> }) {
   await requireSessionUser();
-  return <BacktestWorkspace market={parseMarket((await searchParams).market)} />;
+  const parameters = await searchParams;
+  return <BacktestWorkspace market={parseMarket(parameters.market)} initialRunId={parameters.runId} />;
 }

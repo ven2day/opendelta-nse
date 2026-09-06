@@ -7,7 +7,7 @@ import { platformGet, platformPost, type PlatformMarket } from "../platform/plat
 import { compactValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, TradingViewStatus, UniversesResponse } from "../platform/v2-types";
+import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, TradingViewStatus, TradingViewTestResult, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 import styles from "./settings-workspace.module.css";
 
@@ -53,6 +53,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const [instrumentSymbol, setInstrumentSymbol] = useState("");
   const [addingInstrument, setAddingInstrument] = useState(false);
   const [instrumentNotice, setInstrumentNotice] = useState<Notice>(null);
+  const [testingTradingView, setTestingTradingView] = useState(false);
 
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
@@ -84,6 +85,29 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const configurationJson = jsonEdits[key] ?? JSON.stringify(effectiveDocument, null, 2);
   const name = nameEdits[key] ?? (config.data?.active?.name ?? (selectedStrategy ? `${selectedStrategy.name} · ${marketLabel(market)}` : ""));
   const active = config.data?.active ?? null;
+
+  const openConfiguration = () => {
+    const details = document.querySelector<HTMLDetailsElement>("details.quant-config-disclosure");
+    if (details) {
+      details.open = true;
+      details.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.setTimeout(() => details.querySelector("textarea")?.focus(), 350);
+    }
+  };
+
+  const testTradingView = async () => {
+    if (!selectedStrategy) return;
+    setTestingTradingView(true);
+    setNotice(null);
+    try {
+      const result = await v2Post<TradingViewTestResult>("integrations/tradingview/test", { market, strategyId: selectedStrategy.strategyId });
+      setNotice({ kind: result.ready ? "success" : "error", text: result.message });
+    } catch (reason) {
+      setNotice({ kind: "error", text: errorMessage(reason, "TradingView validation failed") });
+    } finally {
+      setTestingTradingView(false);
+    }
+  };
 
   const changeMode = async (mode: StrategyDeploymentMode) => {
     if (!selectedStrategy || (mode !== "OFF" && !active)) return;
@@ -194,7 +218,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
               <label><span>Timeframe</span><select value={timeframe} disabled={changingMode} onChange={(event) => setTimeframeEdits((current) => ({ ...current, [key]: event.target.value }))}>{selectedStrategy.supportedTimeframes.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
               <label><span>Watchlist</span><select value={universeId} disabled={changingMode || universes.loading} onChange={(event) => setUniverseEdits((current) => ({ ...current, [key]: event.target.value }))}><option value="">Active market watchlist</option>{universes.data?.universes.map((item) => <option key={item.universeId} value={item.universeId}>{item.name} · {item.symbols.length} symbols</option>)}</select></label>
               <div className={styles.modeSwitch} role="group" aria-label="Strategy mode">{(["OFF", "SIGNALS", "PAPER"] as StrategyDeploymentMode[]).map((mode) => <button key={mode} type="button" className={deployment.data?.mode === mode && deployment.data?.signalSource === signalSource ? styles.active : ""} aria-pressed={deployment.data?.mode === mode && deployment.data?.signalSource === signalSource} disabled={changingMode || (mode !== "OFF" && (!active || (signalSource === "TRADINGVIEW" && !universeId)))} onClick={() => void changeMode(mode)}>{mode === "OFF" ? "Off" : mode === "SIGNALS" ? "Signals" : "Paper"}</button>)}</div>
-              <small className={styles.deploymentState}>{!active ? "Save a configuration before starting signals." : signalSource === "TRADINGVIEW" && !universeId ? "TradingView requires an explicit watchlist." : signalSource === "TRADINGVIEW" && tradingView.data && !tradingView.data.configured ? "Server webhook key is not configured yet; alerts will fail closed." : deployment.data?.mode === "PAPER" ? `${signalSource === "TRADINGVIEW" ? "Approved TradingView alerts" : "OpenDelta signals"} create simulated orders. Real broker orders remain disabled.` : deployment.data?.mode === "SIGNALS" ? "Approved signals are stored, but no new paper entries are opened." : "No new signals or paper entries. Existing paper positions continue to be monitored."}</small>
+              <div className={styles.deploymentState}>{!active ? <><span>Save a configuration to unlock Signals and Paper.</span><button type="button" className="quant-action-link" onClick={openConfiguration}>Configure now</button></> : signalSource === "TRADINGVIEW" && !universeId ? <span>Select an explicit watchlist to unlock TradingView modes.</span> : <span>{signalSource === "TRADINGVIEW" && tradingView.data && !tradingView.data.configured ? "Server webhook key is not configured yet; alerts will fail closed." : deployment.data?.mode === "PAPER" ? `${signalSource === "TRADINGVIEW" ? "Approved TradingView alerts" : "OpenDelta signals"} create simulated orders. Real broker orders remain disabled.` : deployment.data?.mode === "SIGNALS" ? "Approved signals are stored, but no new paper entries are opened." : "No new signals or paper entries. Existing paper positions continue to be monitored."}</span>}{signalSource === "TRADINGVIEW" && <button type="button" onClick={() => void testTradingView()} disabled={testingTradingView}>{testingTradingView ? "Testing…" : "Test alert pipeline"}</button>}</div>
             </section>}
             <details className="quant-config-disclosure">
               <summary><span><Braces size={15} />Edit JSON</span><small>Strategy and paper execution</small></summary>

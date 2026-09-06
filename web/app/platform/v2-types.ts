@@ -131,6 +131,15 @@ export type StrategyDeployment = {
 };
 export type StrategyDeploymentsResponse = { deployments: StrategyDeployment[] };
 export type TradingViewStatus = { configured: boolean; ready: boolean; paperOnly: true; deployment?: StrategyDeployment | null };
+export type TradingViewEvent = {
+  webhookEventId: string; eventId?: string | null; market: PlatformMarket; strategyId?: string | null;
+  strategyVersion?: string | null; symbol?: string | null; timeframe?: string | null; action?: string | null;
+  accepted: boolean; duplicate: boolean; mode?: string | null; signalId?: string | null; statusCode: number;
+  reason?: string | null; durationMs: number; receivedAt: string;
+};
+export type TradingViewActivityResponse = { events: TradingViewEvent[] };
+export type TradingViewTestResult = { safe: true; ready: boolean; checks: Record<string, boolean>; resolvedSymbol?: string | null; message: string };
+export type BacktestApproval = { approvalId: string; runId: string; mode: "SIGNALS" | "PAPER"; configId: string; universeId: string; signalSource: StrategySignalSource; approvedAt: string };
 
 export type BacktestMetrics = {
   totalSignals?: number | null;
@@ -276,6 +285,9 @@ export type PaperAccount = {
 };
 export type PaperLot = {
   lotId: string;
+  strategyId?: string | null;
+  strategyVersion?: string | null;
+  timeframe?: string | null;
   symbol: string;
   cycleId?: string | null;
   lotNumber?: number | null;
@@ -290,12 +302,15 @@ export type PaperLot = {
   status: string;
   lastPrice?: number | null;
   unrealizedPnl?: number | null;
+  realizedPnl?: number | null;
   maePct?: number | null;
   mfePct?: number | null;
   fees?: number | null;
 };
 export type PaperOrder = {
   orderId: string;
+  strategyId?: string | null;
+  strategyVersion?: string | null;
   symbol: string;
   side: string;
   quantity?: number | null;

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -12,7 +13,14 @@ from backend.backtest.engine import BacktestRequest, ExecutionSettings
 from backend.backtest.jobs import BacktestJobRunner
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
-from backend.data.repositories import BacktestRunRepository, BacktestTradeRepository
+from backend.data.repositories import (
+    BacktestRunRepository,
+    BacktestTradeRepository,
+    SavedUniverseRepository,
+    StrategyApprovalRepository,
+    StrategyConfigRepository,
+    StrategyDeploymentRepository,
+)
 from backend.data.universe_presets import get_universe_preset
 from backend.strategies.registry import StrategyRegistry
 
@@ -31,6 +39,12 @@ class BacktestCreateRequest(BaseModel):
     execution: dict[str, Any] = Field(default_factory=dict)
 
 
+class BacktestApprovalRequest(BaseModel):
+    mode: str = Field(pattern="^(SIGNALS|PAPER)$")
+    universeId: str
+    signalSource: str = Field(default="OPENDELTA", pattern="^(OPENDELTA|TRADINGVIEW)$")
+
+
 class BacktestServices:
     """Everything the router needs; resolved lazily so a missing database fails closed per request."""
 
@@ -41,11 +55,21 @@ class BacktestServices:
         runs: Callable[[], BacktestRunRepository],
         trades: Callable[[], BacktestTradeRepository],
         runner: Callable[[], BacktestJobRunner],
+        configs: Callable[[], StrategyConfigRepository] | None = None,
+        deployments: Callable[[], StrategyDeploymentRepository] | None = None,
+        universes: Callable[[], SavedUniverseRepository] | None = None,
+        approvals: Callable[[], StrategyApprovalRepository] | None = None,
+        deployment_changed: Callable[[str], None] | None = None,
     ) -> None:
         self.registry = registry
         self._runs = runs
         self._trades = trades
         self._runner = runner
+        self.configs = configs
+        self.deployments = deployments
+        self.universes = universes
+        self.approvals = approvals
+        self.deployment_changed = deployment_changed
 
     def runs(self) -> BacktestRunRepository:
         return self._runs()
@@ -143,6 +167,53 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             return _guard(services.runs).get(run_id)
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=404, detail="Backtest run was not found") from error
+
+    @router.post("/{run_id}/approve")
+    def approve_backtest(run_id: str, request: BacktestApprovalRequest) -> dict[str, Any]:
+        if not all((services.configs, services.deployments, services.universes, services.approvals)):
+            raise HTTPException(status_code=503, detail="Backtest approval storage is not configured")
+        try:
+            run = _guard(services.runs).get(run_id)
+            universe = _guard(services.universes).get(request.universeId)  # type: ignore[union-attr]
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=404, detail="Backtest run or watchlist was not found") from error
+        if run["status"] != "COMPLETE":
+            raise HTTPException(status_code=409, detail="Only a completed backtest can be approved")
+        if universe["market"] != run["market"]:
+            raise HTTPException(status_code=422, detail="The watchlist belongs to a different market")
+        approved_symbols = _guard(services.universes).symbols(request.universeId, market=run["market"])  # type: ignore[union-attr]
+        if set(approved_symbols) != set(run["symbols"]):
+            raise HTTPException(status_code=409, detail="The watchlist must contain exactly the symbols used by this backtest")
+        if request.mode == "PAPER" and _guard(services.approvals).get(run_id, "SIGNALS") is None:  # type: ignore[union-attr]
+            raise HTTPException(status_code=409, detail="Approve this backtest for Signals before approving Paper")
+        risk = {key: value for key, value in dict(run["executionSettings"]).items() if key != "executionTimeframe"}
+        config = _guard(services.configs).save(  # type: ignore[union-attr]
+            market=run["market"], strategy_id=run["strategyId"], strategy_version=run["strategyVersion"],
+            name=f"Approved {run['strategyId']} {run_id[:8]}", configuration=run["configurationSnapshot"],
+            risk_settings=risk, activate=True,
+        )
+        deployment = _guard(services.deployments).save(  # type: ignore[union-attr]
+            market=run["market"], strategy_id=run["strategyId"], strategy_version=run["strategyVersion"],
+            config_id=config["configId"], universe_id=request.universeId, timeframe=run["timeframe"],
+            mode=request.mode, signal_source=request.signalSource,
+        )
+        approval = _guard(services.approvals).save(  # type: ignore[union-attr]
+            run=run, config_id=config["configId"], universe_id=request.universeId,
+            mode=request.mode, signal_source=request.signalSource,
+        )
+        if services.deployment_changed:
+            services.deployment_changed(run["market"])
+        return {"approval": approval, "configuration": config, "deployment": deployment}
+
+    @router.get("/{run_id}/approvals")
+    def list_backtest_approvals(run_id: str) -> dict[str, Any]:
+        if not services.approvals:
+            return {"approvals": []}
+        try:
+            _guard(services.runs).get(run_id)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=404, detail="Backtest run was not found") from error
+        return {"approvals": _guard(services.approvals).list_run(run_id)}
 
     @router.delete("/{run_id}")
     def cancel_backtest(run_id: str) -> dict[str, Any]:

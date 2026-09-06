@@ -145,7 +145,7 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertEqual(missing.exception.status_code, 503)
         self.assertEqual(
             [item["strategyId"] for item in api["GET /v2/strategies"](market="CRYPTO")["strategies"]],
-            ["ema_vwap_strong_buy", "rsi_dip_ladder_v1"],
+            ["ema_vwap_strong_buy", "momentum_scalper_v1", "rsi_dip_ladder_v1"],
         )  # catalogue never needs the database
 
     def test_strategy_mode_requires_an_active_config_and_reconciles_immediately(self) -> None:
@@ -160,7 +160,7 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertIsNotNone(paper["configId"])
         self.assertEqual(paper["universeId"], "crypto-watchlist")
         listed = self.api["GET /v2/strategy-deployments"](market="CRYPTO")
-        self.assertEqual(len(listed["deployments"]), 2)
+        self.assertEqual(len(listed["deployments"]), 3)
         replacement = self.api["POST /v2/strategies/{strategy_id}/config"]("ema_vwap_strong_buy", StrategyConfigRequest(market="CRYPTO", name="paper-revised", configuration={"target_pct": 1.5}))
         self.assertEqual(self.deployments.get("CRYPTO", "ema_vwap_strong_buy")["configId"], replacement["configId"])
         self.assertEqual(self.deployments.get("CRYPTO", "ema_vwap_strong_buy")["universeId"], "crypto-watchlist")

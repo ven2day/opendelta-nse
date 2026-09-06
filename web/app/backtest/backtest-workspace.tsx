@@ -1,13 +1,13 @@
 "use client";
 
-import { ArrowDown, ArrowUp, ChevronsUpDown, Copy, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronsUpDown, Copy, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
 import { compactValues, pickValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
-import type { BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
+import type { BacktestApproval, BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, StrategyConfigResponse, StrategyDeploymentsResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
 import { ConfirmDialog, EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const RUN_POLL_MS = 2_000;
@@ -104,10 +104,12 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
   const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
   const loadRuns = useCallback(() => v2Get<BacktestRunsResponse>("backtests", { market, limit: 20 }), [market]);
+  const loadDeployments = useCallback(() => v2Get<StrategyDeploymentsResponse>("strategy-deployments", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
   const universes = useV2Resource(loadUniverses);
   const presets = useV2Resource(loadPresets);
   const runs = useV2Resource(loadRuns, RUNS_REFRESH_MS);
+  const deployments = useV2Resource(loadDeployments);
   const { refresh: refreshRuns } = runs;
 
   const [strategyChoice, setStrategyChoice] = useState<string | null>(null);
@@ -122,6 +124,8 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const [selectedRunChoice, setSelectedRunChoice] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [approving, setApproving] = useState<"SIGNALS" | "PAPER" | null>(null);
+  const [approvedSignalsRun, setApprovedSignalsRun] = useState<string | null>(null);
   const [tradeSymbolInput, setTradeSymbolInput] = useState("");
   const [tradeSymbol, setTradeSymbol] = useState("");
   const [tradeStatus, setTradeStatus] = useState("");
@@ -155,7 +159,11 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const runDetail = useV2Resource<BacktestRun | null>(loadRun, pollWhileActive);
   const run = runDetail.data ?? listedRun;
   const runActive = isActive(run?.status);
+  const approvalUniverse = run ? universes.data?.universes.find((item) => item.symbols.length === run.symbols.length && item.symbols.every((symbol) => run.symbols.includes(symbol))) ?? null : null;
+  const approvalSource = deployments.data?.deployments.find((item) => item.strategyId === run?.strategyId)?.signalSource ?? "OPENDELTA";
   const { refresh: refreshRun } = runDetail;
+  const loadApprovals = useCallback(() => selectedRunId ? v2Get<{ approvals: BacktestApproval[] }>(`backtests/${selectedRunId}/approvals`) : Promise.resolve({ approvals: [] }), [selectedRunId]);
+  const approvals = useV2Resource(loadApprovals);
 
   const tradesRunId = run && run.status !== "QUEUED" ? run.runId : null;
   const loadTrades = useCallback(() => (tradesRunId ? v2Get<BacktestTradesResponse>(`backtests/${tradesRunId}/trades`, { symbol: tradeSymbol || undefined, status: tradeStatus || undefined, sort: tradeSort, direction: tradeDirection, limit: TRADES_PAGE_SIZE, offset: tradeOffset }) : Promise.resolve(null)), [tradesRunId, tradeSymbol, tradeStatus, tradeSort, tradeDirection, tradeOffset]);
@@ -233,6 +241,18 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
     }
   };
 
+  const approve = async (mode: "SIGNALS" | "PAPER") => {
+    if (!run || !approvalUniverse) return;
+    setApproving(mode); setNotice(null);
+    try {
+      await v2Post(`backtests/${run.runId}/approve`, { mode, universeId: approvalUniverse.universeId, signalSource: approvalSource });
+      if (mode === "SIGNALS") setApprovedSignalsRun(run.runId);
+      setNotice({ kind: "success", text: mode === "SIGNALS" ? "This exact backtest, configuration and watchlist are approved for Signals." : "Approved for Paper. Simulated entries may now be created from this exact strategy version." });
+      approvals.refresh();
+    } catch (reason) { setNotice({ kind: "error", text: errorMessage(reason, `Could not approve for ${mode.toLowerCase()}`) }); }
+    finally { setApproving(null); }
+  };
+
   const metrics = run?.metrics ?? null;
   const executionTimeframe = typeof run?.executionSettings?.executionTimeframe === "string" ? run.executionSettings.executionTimeframe : null;
   const total = trades.data?.total ?? 0;
@@ -292,6 +312,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
             <dl><div><dt>Win rate</dt><dd>{metrics.winRate != null ? formatPercent(metrics.winRate, 1) : "—"}</dd></div><div><dt>Completed trades</dt><dd>{formatInteger(metrics.completedTrades)}</dd></div><div><dt>Max drawdown</dt><dd>{formatMoney(metrics.maximumDrawdown, market)}</dd></div><div><dt>Costs</dt><dd>{formatMoney((metrics.fees ?? 0) + (metrics.slippage ?? 0), market)}</dd></div></dl>
           </section>
           <details className="quant-secondary-disclosure"><summary><span>Execution metrics</span><small>Outcomes, excursions and coverage</small></summary><dl className="quant-facts"><div><dt>Signals / open</dt><dd>{formatInteger(metrics.totalSignals)} / {formatInteger(metrics.openTrades)}</dd></div><div><dt>Targets / stops / expiries</dt><dd>{formatInteger(metrics.targetHits)} / {formatInteger(metrics.stoppedTrades)} / {formatInteger(metrics.expiredTrades)}</dd></div><div><dt>Average MAE / MFE</dt><dd>{formatPercent(metrics.averageMaePct)} / {formatPercent(metrics.averageMfePct)}</dd></div><div><dt>Average / median holding</dt><dd>{formatMinutes(metrics.averageHoldingMinutes)} / {formatMinutes(metrics.medianHoldingMinutes)}</dd></div><div><dt>Symbols processed / failed</dt><dd>{formatInteger(metrics.symbolsProcessed)} / {formatInteger(metrics.symbolsFailed)}</dd></div><div><dt>Fees / slippage</dt><dd>{formatMoney(metrics.fees, market)} / {formatMoney(metrics.slippage, market)}</dd></div></dl></details>
+          {run.status === "COMPLETE" && <section className="quant-form-actions" aria-label="Backtest approval workflow"><button type="button" disabled={Boolean(approving) || !approvalUniverse} onClick={() => void approve("SIGNALS")}><CheckCircle2 size={14} />{approving === "SIGNALS" ? "Approving…" : approvals.data?.approvals.some((item) => item.mode === "SIGNALS") ? "Signals approved" : "Approve for Signals"}</button><button type="button" className="primary" disabled={Boolean(approving) || !approvalUniverse || !(approvedSignalsRun === run.runId || approvals.data?.approvals.some((item) => item.mode === "SIGNALS"))} onClick={() => void approve("PAPER")}><CheckCircle2 size={14} />{approving === "PAPER" ? "Approving…" : approvals.data?.approvals.some((item) => item.mode === "PAPER") ? "Paper approved" : "Approve for Paper"}</button><span>{approvalUniverse ? `Pinned to watchlist “${approvalUniverse.name}” and ${approvalSource === "TRADINGVIEW" ? "TradingView" : "OpenDelta"}. Paper unlocks after Signals approval.` : "Save a watchlist containing exactly this run’s symbols before approval."}</span></section>}
         </div> : <div className="quant-panel-body"><p className="quant-inline-note">{runActive ? "Metrics are published when the run completes." : "No metrics were recorded for this run."}</p></div>}
         {run.failedSymbols && run.failedSymbols.length > 0 && <div className="quant-panel-body"><details className="quant-details"><summary>{formatInteger(run.failedSymbols.length)} failed symbols</summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Symbol</th><th>Message</th></tr></thead><tbody>{run.failedSymbols.map((item) => <tr key={item.symbol}><td><strong>{item.symbol}</strong></td><td>{item.message}</td></tr>)}</tbody></table></div></details></div>}
       </>}

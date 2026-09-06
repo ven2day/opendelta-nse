@@ -40,10 +40,13 @@ from backend.data.repositories import (
     SavedUniverseRepository,
     ScreenerResultRepository,
     ScreenerRunRepository,
+    StrategyApprovalRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
+    TradingViewWebhookEventRepository,
     WatchlistProfileRepository,
 )
+from backend.integrations.tradingview import TradingViewIngestionService
 from backend.markets.base import CandleSource, market_spec
 from backend.observability import get_logger
 from backend.paper_trading.broker import PaperBroker, PaperRepositories
@@ -53,7 +56,6 @@ from backend.signals.configuration import LiveStrategyBinding, live_strategy_bin
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
-from backend.integrations.tradingview import TradingViewIngestionService
 
 LIVE_TIMEFRAME = "5m"
 
@@ -382,8 +384,14 @@ class PlatformRuntime:
     def strategy_configs(self) -> StrategyConfigRepository:
         return StrategyConfigRepository(self.require_database())
 
+    def strategy_approvals(self) -> StrategyApprovalRepository:
+        return StrategyApprovalRepository(self.require_database())
+
     def strategy_deployments(self) -> StrategyDeploymentRepository:
         return StrategyDeploymentRepository(self.require_database())
+
+    def tradingview_events(self) -> TradingViewWebhookEventRepository:
+        return TradingViewWebhookEventRepository(self.require_database())
 
     def universes(self) -> SavedUniverseRepository:
         return SavedUniverseRepository(self.require_database())
@@ -478,7 +486,12 @@ def _backtest_workers() -> int:
 def install_platform(
     app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[str], dict[str, Any]] | None = None
 ) -> None:
-    services = BacktestServices(registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner)
+    services = BacktestServices(
+        registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner,
+        configs=runtime.strategy_configs, deployments=runtime.strategy_deployments,
+        universes=runtime.universes, approvals=runtime.strategy_approvals,
+        deployment_changed=runtime.reconcile_signal_workers,
+    )
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(
@@ -514,6 +527,7 @@ def install_platform(
                 signals=runtime.signals,
                 broker=runtime.paper_broker,
                 clock=runtime.clock,
+                events=runtime.tradingview_events,
             )
         ).routes
     )

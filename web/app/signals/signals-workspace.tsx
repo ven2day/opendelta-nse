@@ -6,7 +6,7 @@ import { formatAge, formatDateTime, formatInteger, formatNumber, humanize, marke
 import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { v2Get } from "../platform/v2-client";
-import type { SignalsHealth, SignalsResponse } from "../platform/v2-types";
+import type { SignalsHealth, SignalsResponse, TradingViewActivityResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, PaperOnlyBadge, Panel, RequestErrorState, StatusBadge, Tag, WorkspaceHeader } from "../platform/workspace-ui";
 
 const SIGNAL_REFRESH_MS = 15_000;
@@ -22,8 +22,10 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
   const [symbol, setSymbol] = useState("");
   const loadHealth = useCallback(() => v2Get<SignalsHealth>("signals/health", { market }), [market]);
   const loadSignals = useCallback(() => v2Get<SignalsResponse>("signals", { market, status: status || undefined, symbol: symbol || undefined, strategy: strategy || undefined, timeframe: timeframe || undefined, limit: SIGNAL_LIMIT }), [market, status, symbol, strategy, timeframe]);
+  const loadTradingView = useCallback(() => v2Get<TradingViewActivityResponse>("integrations/tradingview/activity", { market, limit: 100 }), [market]);
   const health = useV2Resource(loadHealth, SIGNAL_REFRESH_MS);
   const signals = useV2Resource(loadSignals, SIGNAL_REFRESH_MS);
+  const tradingView = useV2Resource(loadTradingView, SIGNAL_REFRESH_MS);
 
   const workers = health.data?.workers?.[market] ?? [];
   const stored = health.data?.engines?.filter((engine) => engine.market === market) ?? [];
@@ -71,6 +73,17 @@ export function SignalsWorkspace({ market }: { market: PlatformMarket }) {
           <td>{signal.exitTimestamp ? <><span>{formatDateTime(signal.exitTimestamp, market)}</span><small>@ {formatNumber(signal.exitPrice)}</small></> : "—"}</td>
           <td><div className="quant-tag-list">{(signal.reasons ?? []).map((reason) => <Tag key={reason}>{humanize(reason)}</Tag>)}</div></td>
           <td><StatusBadge tone={tone(signal.status)}>{signal.strategyId}{signal.strategyVersion ? ` v${signal.strategyVersion}` : ""}</StatusBadge><small>{signal.source === "TRADINGVIEW" ? "TradingView" : "OpenDelta"}</small></td>
+        </tr>)}</tbody>
+      </table></div>}
+    </Panel>
+    <Panel icon={<Activity size={17} />} title="TradingView webhook activity" description="Every accepted or rejected alert, including the reason and validation time." aside={<StatusBadge tone={tradingView.data?.events.some((item) => !item.accepted) ? "warn" : "good"}>{tradingView.data?.events.length ?? 0} deliveries</StatusBadge>}>
+      {tradingView.loading ? <LoadingState label="Loading TradingView activity" /> : tradingView.error ? <RequestErrorState error={tradingView.error} retry={tradingView.reload} /> : !tradingView.data?.events.length ? <EmptyState title="No TradingView alerts received" description="Deliveries will appear here immediately after TradingView calls the webhook." /> : <div className="quant-table-scroll"><table className="quant-table">
+        <thead><tr><th>Received</th><th>Symbol</th><th>Strategy</th><th>Result</th><th>Reason</th><th className="numeric">Response</th></tr></thead>
+        <tbody>{tradingView.data.events.map((item) => <tr key={item.webhookEventId}>
+          <td>{formatDateTime(item.receivedAt, market)}</td><td><strong>{item.symbol ?? "—"}</strong><small>{item.timeframe ?? "—"}</small></td>
+          <td>{item.strategyId ?? "—"}<small>{item.mode ?? "—"}</small></td>
+          <td><StatusBadge tone={item.accepted ? "good" : "warn"}>{item.accepted ? item.duplicate ? "Duplicate" : "Accepted" : `Rejected ${item.statusCode}`}</StatusBadge></td>
+          <td>{item.reason ?? "—"}</td><td className="numeric">{formatNumber(item.durationMs, 1)} ms</td>
         </tr>)}</tbody>
       </table></div>}
     </Panel>

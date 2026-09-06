@@ -1,0 +1,51 @@
+//@version=6
+indicator("OpenDelta RSI Dip Ladder v1 · multi-symbol", overlay=false, dynamic_requests=true)
+
+webhookKey = input.string("REPLACE_WITH_OPENDELTA_WEBHOOK_KEY", "OpenDelta webhook key")
+market = input.string("CRYPTO", "OpenDelta market", options=["CRYPTO", "NSE"])
+symbolsText = input.text_area("OKX:BTCUSDT,OKX:ETHUSDT", "TradingView symbols (comma/newline, maximum 40)")
+rsiLength = input.int(14, "RSI length", minval=2)
+rsiLow = input.float(30, "Arm below RSI", minval=0, maxval=100)
+rsiRecovery = input.float(35, "Buy on RSI recovery", minval=0, maxval=100)
+setupExpiryBars = input.int(24, "Setup expiry bars", minval=1)
+targetPct = input.float(5, "Target %", minval=0.01)
+
+signal() =>
+    rsi = ta.rsi(close, rsiLength)
+    var bool armed = false
+    var int armedAt = na
+    if rsi <= rsiLow
+        armed := true
+        armedAt := bar_index
+    if armed and not na(armedAt) and bar_index - armedAt > setupExpiryBars
+        armed := false
+        armedAt := na
+    buy = barstate.isconfirmed and armed and ta.crossover(rsi, rsiRecovery)
+    if buy
+        armed := false
+        armedAt := na
+    [buy, rsi, close, time]
+
+odTimeframe = timeframe.period == "D" ? "1d" : timeframe.period == "240" ? "4h" : timeframe.period == "60" ? "1h" : timeframe.period + "m"
+cleaned = str.replace_all(symbolsText, "\n", ",")
+symbols = str.split(cleaned, ",")
+var lastAlertTimes = array.new_int(40, 0)
+count = math.min(array.size(symbols), 40)
+
+if barstate.islast and count > 0
+    for index = 0 to count - 1
+        symbol = str.trim(array.get(symbols, index))
+        if str.length(symbol) > 0
+            [buy, rsi, price, candleTime] = request.security(symbol, timeframe.period, signal())
+            if buy and candleTime != array.get(lastAlertTimes, index)
+                candleAt = str.format_time(candleTime, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+                sentAt = str.format_time(timenow, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+                eventId = "rsi_dip_ladder_v1:" + symbol + ":" + odTimeframe + ":" + str.tostring(candleTime)
+                targetPrice = price * (1 + targetPct / 100)
+                message = "{\"schemaVersion\":\"1\",\"eventId\":\"" + eventId + "\",\"webhookKey\":\"" + webhookKey + "\",\"market\":\"" + market + "\",\"symbol\":\"" + symbol + "\",\"timeframe\":\"" + odTimeframe + "\",\"strategyId\":\"rsi_dip_ladder_v1\",\"strategyVersion\":\"1.0.0\",\"action\":\"BUY\",\"candleTimestamp\":\"" + candleAt + "\",\"sentAt\":\"" + sentAt + "\",\"signalPrice\":" + str.tostring(price) + ",\"targetPrice\":" + str.tostring(targetPrice) + ",\"reasons\":[\"RSI_LOW_ARMED\",\"RSI_RECOVERED\"],\"indicators\":{\"rsi\":" + str.tostring(rsi) + "}}"
+                alert(message, alert.freq_all)
+                array.set(lastAlertTimes, index, candleTime)
+
+plot(ta.rsi(close, rsiLength), "Chart RSI", color=color.rgb(214, 168, 62))
+hline(rsiLow, "Arm", color=color.new(color.red, 30))
+hline(rsiRecovery, "Recovery", color=color.new(color.green, 30))

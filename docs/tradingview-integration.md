@@ -8,7 +8,7 @@ orders remain disabled.
 
 ## Production setup
 
-1. Apply migration `010_tradingview_signal_ingestion` with
+1. Apply migrations through `011_strategy_governance` with
    `python -m backend.data.migrate`.
 2. Generate a dedicated random value and set `TRADINGVIEW_WEBHOOK_KEY` in
    `/etc/opendelta-dhan.env`. This is a revocable webhook credential, never an
@@ -23,6 +23,24 @@ orders remain disabled.
    to TradingView and set the same webhook key in the indicator settings.
 6. Create a TradingView alert using **Any alert() function call** and webhook
    URL `https://delta.ventoday.com/api/tradingview/webhook`.
+
+For a shortlisted watchlist, use
+[`rsi_dip_ladder_multi_v1.pine`](../integrations/tradingview/rsi_dip_ladder_multi_v1.pine).
+Paste up to 40 TradingView symbols into its single text input and create one
+alert. TradingView's unique request-context limit still applies to the account
+and plan. The script emits an independent, idempotent event for each symbol.
+
+OpenDelta's **Signals** page shows every accepted or rejected webhook, its
+reason and validation time. **Strategies → Test alert pipeline** exercises the
+same deployment, configuration, timeframe and watchlist gates without writing
+a signal or creating a paper position. TradingView watchlists can also be
+pasted into the collapsed import control on **Watchlist**; exchange-qualified
+names are normalized only when they match the configured market catalogue.
+
+For OpenDelta-generated signals, a completed backtest can be promoted in two
+explicit steps: **Approve for Signals**, then **Approve for Paper**. The
+approval stores immutable evidence for the exact strategy version,
+configuration, execution settings, timeframe, symbol snapshot and watchlist.
 
 The selected TradingView chart timeframe must exactly match the approved
 OpenDelta deployment. A TradingView ticker is resolved only against that

@@ -65,6 +65,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "008_strategy_deployment_universe",
                 "009_watchlist_profile_versions",
                 "010_tradingview_signal_ingestion",
+                "011_strategy_governance",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -82,6 +83,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             "watchlist_profile_versions",
             "strategy_configs",
             "strategy_deployments",
+            "strategy_approvals",
+            "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
             "live_signals",

@@ -213,22 +213,38 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         if run["status"] != "COMPLETE":
             raise HTTPException(status_code=409, detail="Only a completed backtest can be approved")
         if run.get("strategySourceId"):
-            raise HTTPException(status_code=409, detail="Strategy V2 backtests cannot be approved for Signals or Paper until the live runner phase is enabled")
-        try:
-            strategy = services.registry.get(run["strategyId"])
-        except KeyError as error:
-            raise HTTPException(status_code=409, detail="This backtest strategy is no longer registered") from error
-        if run["strategyVersion"] != strategy.version:
-            raise HTTPException(
-                status_code=409,
-                detail="This backtest uses an older strategy version; run a new backtest before approval",
-            )
+            if services.sources is None:
+                raise HTTPException(status_code=503, detail="Strategy V2 source storage is not configured")
+            if request.signalSource != "OPENDELTA":
+                raise HTTPException(status_code=409, detail="Strategy V2 signals must use the isolated OpenDelta runner")
+            try:
+                source = _guard(services.sources).get(run["strategySourceId"])
+            except (KeyError, ValueError) as error:
+                raise HTTPException(status_code=409, detail="The pinned Strategy V2 source is unavailable") from error
+            if source.get("status", "VALIDATED") != "VALIDATED":
+                raise HTTPException(status_code=409, detail="The pinned Strategy V2 source is archived")
+            if run["strategyId"] in services.registry.ids():
+                raise HTTPException(status_code=409, detail="Strategy V2 cannot reuse a built-in strategy ID")
+            strategy = StrategyV2BacktestAdapter(source, StrategyRunnerClient("/not-used-during-validation"))
+            if (strategy.strategy_id, strategy.version) != (run["strategyId"], run["strategyVersion"]):
+                raise HTTPException(status_code=409, detail="The pinned Strategy V2 identity no longer matches this backtest")
+        else:
+            try:
+                strategy = services.registry.get(run["strategyId"])
+            except KeyError as error:
+                raise HTTPException(status_code=409, detail="This backtest strategy is no longer registered") from error
+            if run["strategyVersion"] != strategy.version:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This backtest uses an older strategy version; run a new backtest before approval",
+                )
         if universe["market"] != run["market"]:
             raise HTTPException(status_code=422, detail="The watchlist belongs to a different market")
         approved_symbols = _guard(services.universes).symbols(request.universeId, market=run["market"])  # type: ignore[union-attr]
         if set(approved_symbols) != set(run["symbols"]):
             raise HTTPException(status_code=409, detail="The watchlist must contain exactly the symbols used by this backtest")
-        if request.mode == "PAPER" and _guard(services.approvals).get(run_id, "SIGNALS") is None:  # type: ignore[union-attr]
+        signals_approval = _guard(services.approvals).get(run_id, "SIGNALS") if request.mode == "PAPER" else None  # type: ignore[union-attr]
+        if request.mode == "PAPER" and signals_approval is None:
             raise HTTPException(status_code=409, detail="Approve this backtest for Signals before approving Paper")
         if _guard(services.approvals).get(run_id, request.mode) is not None:  # type: ignore[union-attr]
             raise HTTPException(status_code=409, detail=f"This backtest is already approved for {request.mode.title()}")
@@ -250,15 +266,24 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             risk = ExecutionPolicy.from_mapping(execution).public()
         except ValueError as error:
             raise HTTPException(status_code=409, detail=f"This backtest cannot be promoted: {error}") from error
-        config = _guard(services.configs).save(  # type: ignore[union-attr]
-            market=run["market"], strategy_id=run["strategyId"], strategy_version=run["strategyVersion"],
-            name=f"Approved {run['strategyId']} {run_id[:8]}", configuration=configuration,
-            risk_settings=risk, activate=True,
-        )
+        if signals_approval is not None:
+            try:
+                config = _guard(services.configs).get(signals_approval["configId"])  # type: ignore[union-attr]
+            except (KeyError, ValueError) as error:
+                raise HTTPException(status_code=409, detail="The Signals-approved configuration is unavailable") from error
+            if config["configuration"] != configuration or config["riskSettings"] != risk:
+                raise HTTPException(status_code=409, detail="The Signals-approved configuration no longer matches this backtest")
+        else:
+            config = _guard(services.configs).save(  # type: ignore[union-attr]
+                market=run["market"], strategy_id=run["strategyId"], strategy_version=run["strategyVersion"],
+                name=f"Approved {run['strategyId']} {run_id[:8]}", configuration=configuration,
+                risk_settings=risk, activate=True,
+            )
         deployment = _guard(services.deployments).save(  # type: ignore[union-attr]
             market=run["market"], strategy_id=run["strategyId"], strategy_version=run["strategyVersion"],
             config_id=config["configId"], universe_id=request.universeId, timeframe=run["timeframe"],
             mode=request.mode, signal_source=request.signalSource,
+            strategy_source_id=run.get("strategySourceId"),
         )
         approval = _guard(services.approvals).save(  # type: ignore[union-attr]
             run=run, config_id=config["configId"], universe_id=request.universeId,

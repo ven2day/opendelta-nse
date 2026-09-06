@@ -160,7 +160,9 @@ class _Handler(socketserver.StreamRequestHandler):
             response = {"ok": False, "error": "Strategy runner request is too large"}
         else:
             try:
-                result = evaluate_isolated(json.loads(raw))
+                payload = json.loads(raw)
+                timeout_seconds = max(1, min(DEFAULT_TIMEOUT_SECONDS, int(payload.pop("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS))))
+                result = evaluate_isolated(payload, timeout_seconds=timeout_seconds)
                 response = {"ok": True, "result": result}
             except Exception as error:  # noqa: BLE001 - protocol boundary returns a bounded error
                 response = {"ok": False, "error": f"{type(error).__name__}: {error}"[:2_000]}
@@ -170,11 +172,17 @@ class _Handler(socketserver.StreamRequestHandler):
         self.wfile.write(encoded)
 
 
+class _ThreadingUnixStreamServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """Keep live evaluations responsive while independent backtests are running."""
+
+    daemon_threads = True
+
+
 def serve(socket_path: str) -> None:
     with contextlib.suppress(FileNotFoundError):
         os.unlink(socket_path)
     os.makedirs(os.path.dirname(socket_path), mode=0o700, exist_ok=True)
-    with socketserver.UnixStreamServer(socket_path, _Handler) as server:
+    with _ThreadingUnixStreamServer(socket_path, _Handler) as server:
         os.chmod(socket_path, 0o660)
         server.serve_forever()
 

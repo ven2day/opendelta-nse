@@ -20,6 +20,7 @@ from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
 from backend.api.indicator_studio_routes import create_indicator_studio_router
 from backend.api.paper_trading_routes import create_paper_trading_router
+from backend.api.research_routes import ResearchServices, create_research_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
 from backend.api.settings_routes import create_settings_router
 from backend.api.signal_routes import create_signal_router
@@ -40,6 +41,7 @@ from backend.data.repositories import (
     PaperOrderRepository,
     PaperPendingEntryRepository,
     PaperTradeRepository,
+    ResearchExperimentRepository,
     SavedUniverseRepository,
     ScreenerResultRepository,
     ScreenerRunRepository,
@@ -553,6 +555,9 @@ class PlatformRuntime:
     def indicator_sources(self) -> IndicatorSourceRepository:
         return IndicatorSourceRepository(self.require_database())
 
+    def research_experiments(self) -> ResearchExperimentRepository:
+        return ResearchExperimentRepository(self.require_database())
+
     def tradingview_events(self) -> TradingViewWebhookEventRepository:
         return TradingViewWebhookEventRepository(self.require_database())
 
@@ -664,7 +669,16 @@ def install_platform(
         candle_source=lambda market: runtime.candle_sources[market](),
         deployment_changed=runtime.reconcile_signal_workers,
     )
-    app.router.routes.extend(create_backtest_router(services).routes)
+    backtest_router = create_backtest_router(services)
+    app.router.routes.extend(backtest_router.routes)
+    submit_backtest = next(
+        route.endpoint for route in backtest_router.routes
+        if route.path == "/v2/backtests" and "POST" in route.methods
+    )
+    app.router.routes.extend(create_research_router(ResearchServices(
+        experiments=runtime.research_experiments,
+        submit_backtest=submit_backtest,
+    )).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(create_strategy_studio_router(runtime.strategy_sources).routes)
     app.router.routes.extend(create_indicator_studio_router(

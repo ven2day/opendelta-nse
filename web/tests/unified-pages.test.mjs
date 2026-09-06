@@ -380,6 +380,27 @@ test("completed V2 backtests expose the same ordered approval workflow", async (
   assert.match(types, /strategySourceId\?: string \| null/);
 });
 
+test("completed backtests expose the immutable strategy chart workspace", async () => {
+  const [backtest, chart, types] = await Promise.all([
+    readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/backtest/strategy-chart-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(backtest, /title="Strategy chart"/);
+  assert.match(backtest, /run\?\.status === "COMPLETE"/);
+  assert.match(chart, /candlestick strategy chart/);
+  assert.match(chart, /<rect x=\{x - model\.candleWidth/);
+  assert.match(chart, />BUY<\/text>/);
+  assert.match(chart, />ENTRY<\/text>/);
+  assert.match(chart, />SELL<\/text>/);
+  assert.match(chart, /onPointerMove/);
+  assert.match(chart, /trade\.targetPrice/);
+  assert.match(chart, /trade\.stopPrice/);
+  assert.match(chart, /indicator-studio\/sources/);
+  assert.match(types, /export type BacktestChartResponse/);
+  assert.doesNotMatch(chart, /placeOrder|marketOrder|Approve for Paper/);
+});
+
 test("signal filters stay collapsed and reason codes are humanized", async () => {
   const source = await readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className="quant-filter-menu">/);

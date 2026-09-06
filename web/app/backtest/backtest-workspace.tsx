@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, CheckCircle2, ChevronsUpDown, Copy, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CandlestickChart, CheckCircle2, ChevronsUpDown, Copy, FlaskConical, Gauge, LoaderCircle, Play, RefreshCw, SlidersHorizontal, Square, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { formatDateTime, formatInteger, formatMinutes, formatMoney, formatNumber, formatPercent, isoDate, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
@@ -9,6 +9,7 @@ import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Delete, v2Get, v2Post } from "../platform/v2-client";
 import type { BacktestApproval, BacktestRun, BacktestRunsResponse, BacktestTradesResponse, StrategiesResponse, Strategy, StrategyConfigResponse, StrategyDeploymentsResponse, StrategySourcesResponse, UniversePresetsResponse, UniversesResponse } from "../platform/v2-types";
 import { ConfirmDialog, EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { StrategyChartWorkspace } from "./strategy-chart-workspace";
 
 const RUN_POLL_MS = 2_000;
 const TRADES_POLL_MS = 6_000;
@@ -338,6 +339,8 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
         {run.failedSymbols && run.failedSymbols.length > 0 && <div className="quant-panel-body"><details className="quant-details"><summary>{formatInteger(run.failedSymbols.length)} failed symbols</summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Symbol</th><th>Message</th></tr></thead><tbody>{run.failedSymbols.map((item) => <tr key={item.symbol}><td><strong>{item.symbol}</strong></td><td>{item.message}</td></tr>)}</tbody></table></div></details></div>}
       </>}
     </Panel>
+
+    {run?.status === "COMPLETE" && <Panel icon={<CandlestickChart size={17} />} title="Strategy chart" description="Candles, BUY/SELL decisions, executed entries and exits, targets, stops and optional immutable Indicator V2 overlays."><StrategyChartWorkspace runId={run.runId} symbols={run.symbols} market={market} /></Panel>}
 
     {tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" aside={(tradeSymbolInput || tradeStatus) && <button type="button" className="quant-icon-action" onClick={() => { setTradeSymbolInput(""); setTradeStatus(""); setTradeOffset(0); }}><X size={13} />Clear filters</button>}>
       <div className="quant-table-scroll tall quant-trades-scroll"><table className="quant-table quant-trades-table">

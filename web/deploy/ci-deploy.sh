@@ -25,6 +25,15 @@ git fetch origin main
 git checkout main
 git reset --hard origin/main
 
+# The restricted SSH command starts this file before the repository is updated.
+# Re-exec the just-fetched version once so deploy-script changes take effect in
+# the same run instead of one deployment late.
+deploy_commit="$(git rev-parse HEAD)"
+if [[ "${OPENDELTA_DEPLOY_COMMIT:-}" != "${deploy_commit}" ]]; then
+  export OPENDELTA_DEPLOY_COMMIT="${deploy_commit}"
+  exec "${REPO_DIR}/web/deploy/ci-deploy.sh"
+fi
+
 release_id="$(date -u +%Y%m%dT%H%M%SZ)-$(git rev-parse --short HEAD)"
 log "deploying release ${release_id}"
 

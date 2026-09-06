@@ -118,7 +118,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
     try {
       const saved = await v2Post<StrategySource>("strategy-studio/sources", { sourceCode: currentSource });
       setSourceValidation(saved.validation);
-      setSourceNotice({ kind: "success", text: `Saved immutable ${saved.name} v${saved.strategyVersion}. It is not deployed or executed yet.` });
+      setSourceNotice({ kind: "success", text: `Saved immutable ${saved.name} v${saved.strategyVersion}. It is now available for isolated backtesting.` });
       strategySources.refresh();
     } catch (reason) {
       setSourceNotice({ kind: "error", text: errorMessage(reason, "The strategy source could not be saved") });
@@ -230,7 +230,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
     <details className={`quant-secondary-disclosure ${styles.studio}`}>
       <summary><span><Code2 size={15} />Strategy Studio V2</span><small>Python editor · validation and immutable versions</small></summary>
       <div className="quant-panel-body">
-        <div className={styles.studioIntro}><div><strong>Create a Strategy V2</strong><small>Edit Python here. Validation is static: saving never runs or deploys the code.</small></div><StatusBadge tone="warn">Runner not enabled</StatusBadge></div>
+        <div className={styles.studioIntro}><div><strong>Create a Strategy V2</strong><small>Edit Python here. Saving never deploys the code; execution is isolated and backtest-only.</small></div><StatusBadge tone="good">Isolated backtests</StatusBadge></div>
         {sourceTemplate.loading ? <LoadingState label="Loading Strategy V2 template" /> : sourceTemplate.error ? <Message kind="error">Strategy Studio is unavailable while the V2 service is offline. <button type="button" onClick={sourceTemplate.reload}>Retry</button></Message> : <>
           <textarea className={styles.codeEditor} aria-label="Strategy V2 Python source" spellCheck={false} value={currentSource} disabled={sourceBusy !== null} onChange={(event) => { setStrategySource(event.target.value); setSourceValidation(null); setSourceNotice(null); }} />
           <div className={styles.studioActions}><button type="button" disabled={sourceBusy !== null} onClick={() => { setStrategySource(sourceTemplate.data?.sourceCode ?? ""); setSourceValidation(null); setSourceNotice(null); }}>Reset template</button><button type="button" disabled={sourceBusy !== null || !currentSource.trim()} onClick={() => void validateStrategySource()}>{sourceBusy === "validate" ? "Validating…" : "Validate"}</button><button type="button" className="primary" disabled={sourceBusy !== null || !currentSource.trim() || sourceValidation?.valid === false} onClick={() => void saveStrategySource()}><Save size={15} />{sourceBusy === "save" ? "Saving…" : "Save new version"}</button></div>

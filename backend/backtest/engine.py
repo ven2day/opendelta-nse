@@ -136,6 +136,7 @@ class BacktestRequest:
     timeframe: str
     start_date: date
     end_date: date
+    strategy_source_id: str | None = None
     configuration: Mapping[str, Any] = field(default_factory=dict)
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
 

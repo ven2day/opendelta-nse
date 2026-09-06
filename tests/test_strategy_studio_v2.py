@@ -48,6 +48,24 @@ class StrategySourceValidationTests(unittest.TestCase):
         self.assertTrue(any("literal" in error for error in result.errors))
         self.assertTrue(any("Missing required" in error for error in result.errors))
 
+    def test_parameters_are_limited_to_supported_flat_defaults(self) -> None:
+        nested = starter_source().replace(
+            '"parameters": {"rsi_length": 14, "rsi_low": 30}',
+            '"parameters": {"nested": {"length": 14}}',
+        )
+        result = validate_source(nested)
+        self.assertFalse(result.valid)
+        self.assertTrue(any("whole-number array" in error for error in result.errors))
+
+    def test_whole_number_array_parameter_is_supported(self) -> None:
+        ladder = starter_source().replace(
+            '"parameters": {"rsi_length": 14, "rsi_low": 30}',
+            '"parameters": {"quantities": [1, 2, 5]}',
+        )
+        result = validate_source(ladder)
+        self.assertTrue(result.valid, result.errors)
+        self.assertEqual(result.manifest["parameters"]["quantities"], [1, 2, 5])
+
 
 class StrategyStudioRouteTests(unittest.TestCase):
     def setUp(self) -> None:

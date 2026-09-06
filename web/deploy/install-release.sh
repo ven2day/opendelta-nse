@@ -22,11 +22,18 @@ fi
 test -f "${release}/web/deploy/Dockerfile"
 test -f "${release}/web/deploy/collector.Dockerfile"
 test -f "${release}/web/deploy/backtest.Dockerfile"
+test -f "${release}/web/deploy/strategy-runner.Dockerfile"
 test -s "${release}/data/nse_symbols_rsi_volume.csv"
 
 docker build \
   --tag "opendelta-dashboard:${release_id}" \
   --file "${release}/web/deploy/Dockerfile" \
+  "${release}"
+
+docker build \
+  --tag "opendelta-strategy-runner:${release_id}" \
+  --tag "opendelta-strategy-runner:current" \
+  --file "${release}/web/deploy/strategy-runner.Dockerfile" \
   "${release}"
 
 docker build \

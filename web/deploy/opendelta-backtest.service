@@ -17,6 +17,7 @@ ExecStart=/usr/bin/docker run --rm --name opendelta-backtest \
   --env-file /etc/opendelta-dhan.env \
   --env BACKTEST_CACHE_DIR=/var/lib/opendelta/backtest \
   --env BACKTEST_WORKERS=5 \
+  --env BACKTEST_QUEUE_LIMIT=200 \
   --env LIVE_SIGNAL_ENGINE_ENABLED=true \
   --env CRYPTO_SIGNAL_ENGINE_ENABLED=true \
   --env CRYPTO_MARKET_DIR=/var/lib/opendelta/backtest/crypto-market \

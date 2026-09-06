@@ -199,7 +199,7 @@ opendelta-nse/
 | `NSE_LIVE_STRATEGIES`, `CRYPTO_LIVE_STRATEGIES` | JSON array of live `strategyId` + `timeframe` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
 | `NSE_LIVE_STRATEGY`, `NSE_LIVE_TIMEFRAME` | legacy single-binding variables, used only when the plural JSON variable is absent |
 | `DHAN_*` | Dhan credentials, read only by `backend/collector.py` |
-| `BACKTEST_WORKERS`, `BACKTEST_CACHE_DIR` | legacy backtest service tuning and candle cache |
+| `BACKTEST_WORKERS`, `BACKTEST_QUEUE_LIMIT`, `BACKTEST_CACHE_DIR` | bounded backtest worker/queue tuning (queue default `200`) and candle cache |
 | `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
 | `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 

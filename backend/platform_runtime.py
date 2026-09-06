@@ -607,7 +607,10 @@ class PlatformRuntime:
     def runner(self) -> BacktestJobRunner:
         with self._lock:
             if self._runner is None:
-                self._runner = BacktestJobRunner(self.runs(), self._engine, max_workers=_backtest_workers())
+                self._runner = BacktestJobRunner(
+                    self.runs(), self._engine,
+                    max_workers=_backtest_workers(), max_pending=_backtest_queue_limit(),
+                )
             return self._runner
 
     def _engine(self, request: BacktestRequest, cancel_event: threading.Event) -> BacktestEngine:
@@ -657,6 +660,19 @@ def _backtest_workers() -> int:
     return value
 
 
+def _backtest_queue_limit() -> int:
+    """Maximum queued plus running backtests across direct runs and experiments."""
+    raw = os.environ.get("BACKTEST_QUEUE_LIMIT", "200").strip()
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError("BACKTEST_QUEUE_LIMIT must be a whole number") from error
+    workers = _backtest_workers()
+    if value < workers or value > 10_000:
+        raise RuntimeError(f"BACKTEST_QUEUE_LIMIT must be between {workers} and 10000")
+    return value
+
+
 def install_platform(
     app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[str], dict[str, Any]] | None = None
 ) -> None:
@@ -671,13 +687,12 @@ def install_platform(
     )
     backtest_router = create_backtest_router(services)
     app.router.routes.extend(backtest_router.routes)
-    submit_backtest = next(
-        route.endpoint for route in backtest_router.routes
-        if route.path == "/v2/backtests" and "POST" in route.methods
-    )
     app.router.routes.extend(create_research_router(ResearchServices(
+        registry=STRATEGIES,
         experiments=runtime.research_experiments,
-        submit_backtest=submit_backtest,
+        runner=runtime.runner,
+        universes=runtime.universes,
+        sources=runtime.strategy_sources,
     )).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(create_strategy_studio_router(runtime.strategy_sources).routes)

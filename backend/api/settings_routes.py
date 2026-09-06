@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.backtest.engine import EXECUTION_SETTINGS_SCHEMA
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import SavedUniverseRepository, StrategyConfigRepository, StrategyDeploymentRepository
@@ -166,6 +167,7 @@ def create_settings_router(
             "markets": list(MARKETS),
             "riskDefaults": _execution_policy(None, market_key).public(),
             "riskSchema": RISK_SCHEMA,
+            "executionSchema": EXECUTION_SETTINGS_SCHEMA,
         }
 
     @router.get("/strategies/{strategy_id}/config")

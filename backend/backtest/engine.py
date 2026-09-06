@@ -14,9 +14,10 @@ from __future__ import annotations
 import math
 import threading
 import uuid
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,50 @@ from backend.core.models import MarketContext, normalize_candles
 from backend.markets.base import CandleSource, MarketSpec
 from backend.strategies.base import Strategy, decision_frame
 from backend.strategies.lot_policy import PriceBandLadder
+
+EXECUTION_SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
+    "targetPct": {
+        "type": "number", "default": None, "minimum": 0.00000001,
+        "label": "Target %",
+    },
+    "stopLossPct": {
+        "type": "number", "default": None, "minimum": 0.00000001, "maximum": 99.99999999,
+        "label": "Stop loss %",
+    },
+    "maximumHoldingBars": {
+        "type": "integer", "default": None, "minimum": 1,
+        "label": "Maximum holding bars",
+    },
+    "initialQuantity": {
+        "type": "number", "default": 100, "minimum": 0.00000001,
+        "label": "Initial quantity",
+    },
+    "allowAdditionalBuys": {
+        "type": "boolean", "default": True,
+        "label": "Allow additional buys",
+    },
+    "additionalQuantityPct": {
+        "type": "number", "default": 50.0, "minimum": 0.00000001, "maximum": 100.0,
+        "label": "Additional quantity %",
+    },
+    "additionalSizingMode": {
+        "type": "string", "default": "REDUCE_EVERY_NEW_LOT",
+        "enum": ["REDUCE_EVERY_NEW_LOT", "FIXED_PERCENTAGE_OF_FIRST_LOT"],
+        "label": "Additional sizing mode",
+    },
+    "minimumQuantity": {
+        "type": "number", "default": 1, "minimum": 0.00000001,
+        "label": "Minimum quantity",
+    },
+    "maximumEntriesPerCycle": {
+        "type": "integer", "default": 10, "minimum": 1, "maximum": 100,
+        "label": "Maximum entries per cycle",
+    },
+    "batchSize": {
+        "type": "integer", "default": 500, "minimum": 1,
+        "label": "Candle batch size",
+    },
+}
 
 CANCEL_CHECK_BARS = 500
 
@@ -52,7 +97,7 @@ class ExecutionSettings:
     batch_size: int = 500
     whole_units: bool = True
 
-    def validate(self) -> "ExecutionSettings":
+    def validate(self) -> ExecutionSettings:
         if self.target_pct is not None and self.target_pct <= 0:
             raise ValueError("target_pct must be greater than zero")
         if self.stop_loss_pct is not None and not 0 < self.stop_loss_pct < 100:
@@ -109,7 +154,7 @@ class ExecutionSettings:
         values: Mapping[str, Any] | None,
         *,
         whole_units: bool = True,
-    ) -> "ExecutionSettings":
+    ) -> ExecutionSettings:
         aliases = {
             "targetPct": "target_pct", "stopLossPct": "stop_loss_pct", "maximumHoldingBars": "maximum_holding_bars",
             "initialQuantity": "initial_quantity", "allowAdditionalBuys": "allow_additional_buys",
@@ -123,6 +168,31 @@ class ExecutionSettings:
                 raise ValueError("whole_units is determined by the selected market")
             if name not in cls.__dataclass_fields__:
                 raise ValueError(f"Unknown execution setting {key!r}")
+            public_name = key if key in EXECUTION_SETTINGS_SCHEMA else next(
+                (candidate for candidate, internal in aliases.items() if internal == name),
+                None,
+            )
+            if public_name is None:
+                raise ValueError(f"Unknown execution setting {key!r}")
+            definition = EXECUTION_SETTINGS_SCHEMA[public_name]
+            if value is None:
+                if definition.get("default") is not None:
+                    raise ValueError(f"{public_name} cannot be null")
+            elif definition["type"] == "boolean":
+                if not isinstance(value, bool):
+                    raise ValueError(f"{public_name} must be true or false")
+            elif definition["type"] == "integer":
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not float(value).is_integer():
+                    raise ValueError(f"{public_name} must be a whole number")
+                value = int(value)
+            elif definition["type"] == "number":
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    raise ValueError(f"{public_name} must be a finite number")
+                value = float(value)
+            elif definition["type"] == "string" and not isinstance(value, str):
+                raise ValueError(f"{public_name} must be a string")
+            if definition.get("enum") is not None and value not in definition["enum"]:
+                raise ValueError(f"{public_name} must be one of: " + ", ".join(map(str, definition["enum"])))
             kwargs[name] = value
         return cls(**kwargs).validate()
 
@@ -140,7 +210,7 @@ class BacktestRequest:
     configuration: Mapping[str, Any] = field(default_factory=dict)
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
 
-    def validate(self) -> "BacktestRequest":
+    def validate(self) -> BacktestRequest:
         if not self.symbols:
             raise ValueError("A backtest needs at least one symbol")
         if self.end_date < self.start_date:
@@ -186,7 +256,7 @@ class BacktestEngine:
         self.source = source
         self.writer = writer
         self.cancel_event = cancel_event or threading.Event()
-        self.progress = progress or (lambda values: None)
+        self.progress = progress or (lambda _values: None)
 
     # ---- run -------------------------------------------------------------------
 
@@ -208,7 +278,7 @@ class BacktestEngine:
                     metrics.symbols_processed += 1
                 except BacktestCancelled:
                     raise
-                except Exception as error:  # a bad symbol must not sink the run
+                except Exception as error:  # noqa: BLE001 - a bad symbol must not sink the run
                     failed.append({"symbol": symbol, "message": str(error)})
                     metrics.symbols_failed += 1
             self.writer.progress(run_id, symbols_completed=len(request.symbols), current_symbol=None, failed_symbols=failed)
@@ -358,7 +428,7 @@ class BacktestEngine:
                 entries += 1
         last_close = float(closes[-1]) if bars else 0.0
         open_fifo = [inventory.preview_allocations([lot.quantity])[0] for lot in open_lots] if self.market.market == "NSE" else [None] * len(open_lots)
-        for lot, fifo in zip(open_lots, open_fifo):
+        for lot, fifo in zip(open_lots, open_fifo, strict=True):
             row = self._trade_row(request, symbol, lot, bar_minutes, None, last_close=last_close, last_bar=bars - 1, fifo=fifo)
             metrics.add_trade(row)
             batch.append(row)
@@ -411,7 +481,7 @@ class BacktestEngine:
             projected.at[final_stamp, "StopPrice"] = float(row["StopPrice"])
         return projected
 
-    def _enter(self, request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, closes, signal_timestamps, signal_prices, signal_targets, cycle_first_entry_price, current_open_capital, expiry_bar_multiplier=1) -> _Lot | None:
+    def _enter(self, _request, execution, config, _symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, _closes, signal_timestamps, signal_prices, signal_targets, cycle_first_entry_price, current_open_capital, expiry_bar_multiplier=1) -> _Lot | None:
         reference_price = float(opens[bar])
         ladder = PriceBandLadder.from_config(config)
         indicative_fill_price = self.market.fees.buy(reference_price, 1).price
@@ -424,9 +494,8 @@ class BacktestEngine:
             else execution.lot_quantity(entry_number)
         )
         fill = self.market.fees.buy(reference_price, quantity)
-        if ladder is not None:
-            if not ladder.within_capital(current_open_capital, fill.price, quantity):
-                return None
+        if ladder is not None and not ladder.within_capital(current_open_capital, fill.price, quantity):
+            return None
         entry_price = round(fill.price, 4)
         if execution.target_pct is not None:
             target = entry_price * (1 + execution.target_pct / 100)

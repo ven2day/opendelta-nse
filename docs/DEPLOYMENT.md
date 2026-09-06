@@ -42,8 +42,10 @@ curl -fsS http://127.0.0.1:3200/health
 
 The unit runs `opendelta-backtest:current` read-only with dropped
 capabilities, a PID limit and a memory limit (`--memory 4g`,
-`BACKTEST_WORKERS=5` today). The image copies the legacy modules, `opendelta/`
-and `backend/`.
+`BACKTEST_WORKERS=5` today). `BACKTEST_QUEUE_LIMIT` bounds running plus queued
+backtests (default `200`); keep it at least as large as `BACKTEST_WORKERS`.
+Parameter experiments reserve all child queue slots before any experiment rows
+are created. The image copies the legacy modules, `opendelta/` and `backend/`.
 
 ## Database and migrations
 
@@ -101,6 +103,11 @@ Suggested order: apply migrations → restart the service → verify
 → enable the Crypto worker (24/7, public data) → enable the NSE worker →
 retire the legacy live-signal engine (`LIVE_SIGNAL_ENGINE_ENABLED`) and the
 `/legacy/*` pages.
+
+For Phase 7 specifically, build the application images without promoting
+traffic, apply `017_parameter_experiments`, restart and verify the backtest API,
+then promote the dashboard. Roll back the application images without deleting
+the additive migration; completed research child runs remain immutable.
 
 For the NSE daily swing worker, production must have all of the following:
 

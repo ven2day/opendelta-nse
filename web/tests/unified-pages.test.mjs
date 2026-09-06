@@ -183,7 +183,9 @@ test("production verification follows the Strategies navigation label", async ()
   const verification = await readFile(script, "utf8");
   assert.match(verification, /'Paper Trading' Strategies/);
   assert.doesNotMatch(verification, /'Paper Trading' Settings/);
-  assert.notEqual((await stat(script)).mode & 0o111, 0, "deployment verification must remain executable");
+  if (process.platform !== "win32") {
+    assert.notEqual((await stat(script)).mode & 0o111, 0, "deployment verification must remain executable");
+  }
 });
 
 test("the backtest run ticket uses defaults with one collapsed JSON override", async () => {
@@ -405,9 +407,17 @@ test("completed backtests expose the immutable strategy chart workspace", async 
 test("Research Lab creates immutable grouped backtest variants without deployment actions", async () => {
   const source = await readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /New controlled experiment/);
-  assert.match(source, /research\/experiments/);
-  assert.match(source, /Run \$\{variants\.length\} variants/);
-  assert.doesNotMatch(source, /backtests\/\$\{.*\}\/approve|strategy-deployments|paper-trading/);
+  assert.match(source, /research\/experiments\/preview/);
+  assert.match(source, /research\/experiments\/from-preview/);
+  assert.match(source, /Manual variants/);
+  assert.match(source, /Grid sweep/);
+  assert.match(source, /Add parameter/);
+  assert.match(source, /Duplicate .* parameter/);
+  assert.match(source, /Preview stale/);
+  assert.match(source, /disabled=\{!previewFresh \|\| submitting\}/);
+  assert.match(source, /Generated combinations|Deterministic name/);
+  assert.match(source, /Full immutable JSON/);
+  assert.doesNotMatch(source, /backtests\/\$\{.*\}\/approve|strategy-deployments|paper-trading|Approve for|Deploy/);
 });
 
 test("Research Lab compares completed variants and opens their immutable charts", async () => {
@@ -418,7 +428,11 @@ test("Research Lab compares completed variants and opens their immutable charts"
   ]);
   for (const metric of ["Net P&amp;L", "Drawdown", "Win rate", "Costs", "Exposure", "Failed symbols"]) assert.match(research, new RegExp(metric));
   assert.match(research, /Variant equity curves/);
-  assert.match(research, /runId: variant\.run\.runId/);
+  assert.match(research, /Return \/ drawdown score/);
+  assert.match(research, /MAX_VISIBLE_CURVES = 8/);
+  assert.match(research, /Equity curve selection/);
+  assert.match(research, /new URLSearchParams\(\{ market, runId: row\.variant\.run\.runId \}\)/);
+  assert.match(research, /Rejected trades: unavailable/);
   assert.match(backtestPage, /initialRunId=\{parameters\.runId\}/);
   assert.match(backtest, /useState<string \| null>\(initialRunId \?\? null\)/);
 });

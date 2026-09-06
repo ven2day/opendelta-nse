@@ -134,35 +134,98 @@ class ResearchExperimentRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
 
-    def create(self, *, name: str, runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-        if not runs:
+    def create_generated(
+        self,
+        *,
+        name: str,
+        generation_mode: str,
+        sweep_definitions: Sequence[Mapping[str, Any]],
+        preview_hash: str,
+        idempotency_key: str,
+        market: str,
+        strategy_id: str,
+        strategy_version: str,
+        strategy_source_id: uuid.UUID | str | None,
+        timeframe: str,
+        symbols: Sequence[str],
+        start_date: date,
+        end_date: date,
+        universe_id: uuid.UUID | str | None,
+        universe_name: str | None,
+        variants: Sequence[Mapping[str, Any]],
+    ) -> tuple[dict[str, Any], bool]:
+        if not variants:
             raise ValueError("An experiment requires at least one variant")
+        if not idempotency_key.strip():
+            raise ValueError("An experiment requires an idempotency key")
         experiment_id = uuid.uuid4()
-        first = runs[0]["run"]
+        created = False
         with self.database.transaction() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO research_experiments (
                     experiment_id, name, market, strategy_id, strategy_version, strategy_source_id,
-                    timeframe, symbols, start_date, end_date
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    timeframe, symbols, start_date, end_date, generation_mode, sweep_definitions,
+                    preview_hash, variant_count, symbol_count, estimated_symbol_runs,
+                    idempotency_key, universe_id, universe_name
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT DO NOTHING
+                RETURNING experiment_id
                 """,
-                (experiment_id, name, first["market"], first["strategyId"], first["strategyVersion"],
-                 uuid.UUID(first["strategySourceId"]) if first.get("strategySourceId") else None,
-                 first["timeframe"], jsonb(first["symbols"]), first["startDate"], first["endDate"]),
+                (
+                    experiment_id, name, market, strategy_id, strategy_version,
+                    uuid.UUID(str(strategy_source_id)) if strategy_source_id else None,
+                    timeframe, jsonb(list(symbols)), start_date, end_date, generation_mode,
+                    jsonb([dict(item) for item in sweep_definitions]), preview_hash,
+                    len(variants), len(symbols), len(variants) * len(symbols), idempotency_key.strip(),
+                    uuid.UUID(str(universe_id)) if universe_id else None, universe_name,
+                ),
             )
-            for item in runs:
-                run = item["run"]
+            inserted = cursor.fetchone()
+            if inserted is None:
+                cursor.execute(
+                    "SELECT experiment_id FROM research_experiments WHERE idempotency_key = %s",
+                    (idempotency_key.strip(),),
+                )
+                existing = cursor.fetchone()
+                if existing is None:
+                    raise RuntimeError("Idempotent experiment lookup failed")
+                experiment_id = existing["experiment_id"]
+            else:
+                created = True
+            for position, item in enumerate(variants, start=1) if created else ():
+                run_id = uuid.uuid4()
+                cursor.execute(
+                    """
+                    INSERT INTO backtest_runs (
+                        run_id, market, strategy_id, strategy_version, strategy_source_id,
+                        configuration_snapshot, execution_settings, timeframe, symbols,
+                        start_date, end_date, status, symbols_total
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s)
+                    """,
+                    (
+                        run_id, market, strategy_id, strategy_version,
+                        uuid.UUID(str(strategy_source_id)) if strategy_source_id else None,
+                        jsonb(dict(item["configuration"])), jsonb(dict(item["execution"])), timeframe,
+                        jsonb(list(symbols)), start_date, end_date, len(symbols),
+                    ),
+                )
                 cursor.execute(
                     """
                     INSERT INTO research_variants (
-                        variant_id, experiment_id, name, configuration_snapshot, execution_settings, run_id
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                        variant_id, experiment_id, position, name,
+                        configuration_snapshot, execution_settings, run_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (uuid.uuid4(), experiment_id, item["name"], jsonb(run["configurationSnapshot"]),
-                     jsonb(run["executionSettings"]), uuid.UUID(run["runId"])),
+                    (
+                        uuid.uuid4(), experiment_id, position, item["name"],
+                        jsonb(dict(item["configuration"])), jsonb(dict(item["execution"])), run_id,
+                    ),
                 )
-        return self.get(experiment_id)
+        return self.get(experiment_id), created
 
     def get(self, experiment_id: uuid.UUID | str) -> dict[str, Any]:
         row = self.database.fetch_one(
@@ -172,15 +235,23 @@ class ResearchExperimentRepository:
             raise KeyError(f"Research experiment {experiment_id} was not found")
         variants = self.database.fetch_all(
             """
-            SELECT v.variant_id, v.name AS variant_name, v.configuration_snapshot AS variant_configuration,
+            SELECT v.variant_id, v.position AS variant_position, v.name AS variant_name,
+                   v.configuration_snapshot AS variant_configuration,
                    v.execution_settings AS variant_execution, r.*
             FROM research_variants v
             JOIN backtest_runs r ON r.run_id = v.run_id
-            WHERE v.experiment_id = %s ORDER BY v.created_at, v.variant_id
+            WHERE v.experiment_id = %s ORDER BY v.position
             """,
             (uuid.UUID(str(experiment_id)),),
         )
         return self._public(row, variants)
+
+    def get_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one(
+            "SELECT experiment_id FROM research_experiments WHERE idempotency_key = %s",
+            (idempotency_key.strip(),),
+        )
+        return self.get(row["experiment_id"]) if row is not None else None
 
     def list(self, market: str | None = None, *, limit: int = 50) -> list[dict[str, Any]]:
         if market:
@@ -198,19 +269,47 @@ class ResearchExperimentRepository:
         for variant in variants:
             run = _public_run(variant)
             public_variants.append({
-                "variantId": str(variant["variant_id"]), "name": variant["variant_name"],
+                "variantId": str(variant["variant_id"]), "position": int(variant["variant_position"]),
+                "name": variant["variant_name"],
                 "configuration": variant["variant_configuration"], "execution": variant["variant_execution"],
                 "run": run,
             })
-        statuses = {item["run"]["status"] for item in public_variants}
-        status = "COMPLETE" if statuses == {"COMPLETE"} else "FAILED" if statuses and statuses <= {"FAILED", "CANCELLED", "INTERRUPTED"} else "RUNNING" if statuses & {"RUNNING", "QUEUED"} else "PARTIAL"
+        counts = dict.fromkeys(("QUEUED", "RUNNING", "COMPLETE", "FAILED", "CANCELLED", "INTERRUPTED"), 0)
+        for item in public_variants:
+            child_status = item["run"]["status"]
+            counts[child_status] = counts.get(child_status, 0) + 1
+        statuses = {status for status, count in counts.items() if count}
+        if statuses == {"COMPLETE"}:
+            status = "COMPLETE"
+        elif statuses == {"CANCELLED"}:
+            status = "CANCELLED"
+        elif "RUNNING" in statuses:
+            status = "RUNNING"
+        elif "QUEUED" in statuses:
+            status = "QUEUED"
+        elif statuses and statuses <= {"FAILED", "INTERRUPTED"}:
+            status = "FAILED"
+        else:
+            status = "PARTIAL"
+        symbols_completed = sum(int(item["run"].get("symbolsCompleted") or 0) for item in public_variants)
         return {
             "experimentId": str(row["experiment_id"]), "name": row["name"], "market": row["market"],
+            "mode": row["generation_mode"],
             "strategyId": row["strategy_id"], "strategyVersion": row["strategy_version"],
             "strategySourceId": str(row["strategy_source_id"]) if row.get("strategy_source_id") else None,
             "timeframe": row["timeframe"], "symbols": row["symbols"],
+            "universeId": str(row["universe_id"]) if row.get("universe_id") else None,
+            "universeName": row.get("universe_name"),
             "startDate": row["start_date"].isoformat(), "endDate": row["end_date"].isoformat(),
-            "status": status, "variants": public_variants,
+            "sweepDefinitions": row["sweep_definitions"], "previewHash": row["preview_hash"],
+            "variantCount": int(row["variant_count"]), "symbolCount": int(row["symbol_count"]),
+            "estimatedSymbolRuns": int(row["estimated_symbol_runs"]),
+            "status": status, "variantStatusCounts": counts,
+            "progress": {
+                "variantsTotal": len(public_variants), "symbolsTotal": int(row["estimated_symbol_runs"]),
+                "symbolsCompleted": symbols_completed,
+            },
+            "variants": public_variants,
             "createdAt": row["created_at"].isoformat(),
         }
 

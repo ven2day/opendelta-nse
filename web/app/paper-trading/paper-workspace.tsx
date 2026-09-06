@@ -2,26 +2,29 @@
 
 import { ArrowRightLeft, ListChecks, RefreshCw, Trash2, Wallet } from "lucide-react";
 import { useCallback, useState } from "react";
-import { formatDateTime, formatInteger, formatMoney, formatNumber, formatPercent, marketCurrency, marketLabel, tone } from "../platform/format";
+import { formatDateTime, formatInteger, formatMoney, formatNumber, formatPercent, marketCurrency, marketLabel, shortId, tone } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
-import type { PaperAccount, PaperLot, PaperOrder, PaperTrade } from "../platform/v2-types";
+import type { BacktestRun, PaperAccount, PaperLot, PaperOrder, PaperTrade, StrategyDeployment } from "../platform/v2-types";
 import { ConfirmDialog, EmptyState, LoadingState, Message, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 
 const PAPER_REFRESH_MS = 15_000;
 type Notice = { kind: "success" | "error"; text: string } | null;
-type PaperSnapshot = { account: PaperAccount; positions: PaperLot[]; orders: PaperOrder[]; trades: PaperTrade[] };
+type PaperSnapshot = { account: PaperAccount; positions: PaperLot[]; lots: PaperLot[]; orders: PaperOrder[]; trades: PaperTrade[]; deployments: StrategyDeployment[]; runs: BacktestRun[] };
 
 export function PaperWorkspace({ market }: { market: PlatformMarket }) {
   const load = useCallback(async (): Promise<PaperSnapshot> => {
-    const [account, positions, orders, trades] = await Promise.all([
+    const [account, positions, lots, orders, trades, deployments, runs] = await Promise.all([
       v2Get<PaperAccount>(`paper/accounts/${market}`),
       v2Get<{ positions: PaperLot[] }>("paper/positions", { market }),
+      v2Get<{ lots: PaperLot[] }>("paper/lots", { market }),
       v2Get<{ orders: PaperOrder[] }>("paper/orders", { market }),
       v2Get<{ trades: PaperTrade[] }>("paper/trades", { market }),
+      v2Get<{ deployments: StrategyDeployment[] }>("strategy-deployments", { market }),
+      v2Get<{ runs: BacktestRun[] }>("backtests", { market, limit: 100 }),
     ]);
-    return { account, positions: positions.positions ?? [], orders: orders.orders ?? [], trades: trades.trades ?? [] };
+    return { account, positions: positions.positions ?? [], lots: lots.lots ?? [], orders: orders.orders ?? [], trades: trades.trades ?? [], deployments: deployments.deployments ?? [], runs: runs.runs ?? [] };
   }, [market]);
   const snapshot = useV2Resource(load, PAPER_REFRESH_MS);
   const { refresh } = snapshot;
@@ -35,6 +38,19 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
 
   const account = snapshot.data?.account ?? null;
   const currency = account?.currency ?? marketCurrency(market);
+  const performance = snapshot.data ? Array.from(new Set([
+    ...snapshot.data.deployments.map((item) => item.strategyId),
+    ...snapshot.data.lots.map((item) => item.strategyId).filter((item): item is string => Boolean(item)),
+  ])).map((strategyId) => {
+    const lots = snapshot.data!.lots.filter((item) => item.strategyId === strategyId);
+    const orders = snapshot.data!.orders.filter((item) => item.strategyId === strategyId);
+    const deployment = snapshot.data!.deployments.find((item) => item.strategyId === strategyId);
+    const backtest = snapshot.data!.runs.find((item) => item.strategyId === strategyId && item.status === "COMPLETE");
+    const closed = lots.filter((item) => item.status !== "OPEN");
+    return { strategyId, deployment, backtest, open: lots.filter((item) => item.status === "OPEN").length,
+      realized: closed.reduce((sum, item) => sum + (item.realizedPnl ?? 0), 0), unrealized: lots.reduce((sum, item) => sum + (item.unrealizedPnl ?? 0), 0),
+      wins: closed.filter((item) => (item.realizedPnl ?? 0) > 0).length, closed: closed.length, rejected: orders.filter((item) => item.status === "REJECTED").length };
+  }) : [];
 
   const closeLot = async (lot: PaperLot) => {
     setPendingCloseLot(null);
@@ -95,6 +111,13 @@ export function PaperWorkspace({ market }: { market: PlatformMarket }) {
         </dl>
       </section>
       {notice && <Message kind={notice.kind}>{notice.text}</Message>}
+
+      <Panel icon={<ListChecks size={17} />} title="Strategy performance" description="Comparable backtest and paper outcomes for each configured strategy.">
+        {!performance.length ? <EmptyState title="No strategy performance yet" description="Run a backtest or configure a strategy to establish a comparison row." /> : <div className="quant-table-scroll"><table className="quant-table">
+          <thead><tr><th>Strategy</th><th>Deployment</th><th className="numeric">Backtest P&amp;L</th><th className="numeric">Win rate</th><th className="numeric">Drawdown</th><th className="numeric">Paper P&amp;L</th><th className="numeric">Paper win rate</th><th className="numeric">Open</th><th className="numeric">Rejected</th></tr></thead>
+          <tbody>{performance.map((item) => <tr key={item.strategyId}><td><strong>{item.strategyId}</strong><small>{item.deployment?.strategyVersion ? `v${item.deployment.strategyVersion}` : "—"}</small></td><td>{item.deployment ? <><StatusBadge tone={item.deployment.mode === "PAPER" ? "good" : "neutral"}>{item.deployment.mode}</StatusBadge><small>{item.deployment.timeframe} · {item.deployment.signalSource === "TRADINGVIEW" ? "TradingView" : "OpenDelta"} · watchlist {item.deployment.universeId ? shortId(item.deployment.universeId) : "active"}</small></> : "—"}</td><td className="numeric"><PnlValue value={item.backtest?.metrics?.realizedPnl} market={market} currency={currency} /></td><td className="numeric">{item.backtest?.metrics?.winRate != null ? formatPercent(item.backtest.metrics.winRate, 1) : "—"}</td><td className="numeric">{formatMoney(item.backtest?.metrics?.maximumDrawdown, market, currency)}</td><td className="numeric"><PnlValue value={item.realized + item.unrealized} market={market} currency={currency} /></td><td className="numeric">{item.closed ? formatPercent(item.wins / item.closed * 100, 1) : "—"}</td><td className="numeric">{formatInteger(item.open)}</td><td className="numeric">{formatInteger(item.rejected)}</td></tr>)}</tbody>
+        </table></div>}
+      </Panel>
 
       <Panel icon={<Wallet size={17} />} title="Open positions" description="Manual closes use the latest completed-candle mark and apply the configured paper fee and slippage model." aside={<StatusBadge tone="good">{formatInteger(snapshot.data.positions.length)} open</StatusBadge>}>
         {!snapshot.data.positions.length ? <EmptyState title="No open paper positions" description="Lots open automatically when the signal engine records a strong buy." /> : <div className="quant-table-scroll"><table className="quant-table">

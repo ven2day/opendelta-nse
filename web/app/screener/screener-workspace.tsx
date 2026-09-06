@@ -89,6 +89,10 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const [savingUniverse, setSavingUniverse] = useState(false);
   const [universeNotice, setUniverseNotice] = useState<Notice>(null);
   const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [importName, setImportName] = useState("");
+  const [importSymbols, setImportSymbols] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState<Notice>(null);
 
   const defaultFilters = filters.data?.defaults ?? {};
   const profileVersions = (profiles.data?.profiles ?? []).flatMap((profile) => profile.versions);
@@ -100,6 +104,19 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
   const effectiveSymbolSource = symbolSource === "market" || symbolSource === "custom" || selectedPreset ? symbolSource : "market";
 
   const selectedRunId = selectedRunChoice ?? runs.data?.runs[0]?.runId ?? null;
+
+  const importTradingView = async (event: FormEvent) => {
+    event.preventDefault();
+    setImporting(true);
+    setImportNotice(null);
+    try {
+      const result = await v2Post<{ universe: Universe; accepted: string[]; rejected: string[] }>("screener/universes/import-tradingview", { market, name: importName.trim(), symbols: importSymbols, activate: true });
+      setImportNotice({ kind: result.rejected.length ? "error" : "success", text: `Imported ${result.accepted.length} symbols into “${result.universe.name}”${result.rejected.length ? `; ${result.rejected.length} could not be matched: ${result.rejected.slice(0, 5).join(", ")}` : "."}` });
+      setImportName(""); setImportSymbols(""); refreshUniverses();
+    } catch (reason) {
+      setImportNotice({ kind: "error", text: errorMessage(reason, "TradingView watchlist could not be imported") });
+    } finally { setImporting(false); }
+  };
   const loadResults = useCallback(async () => {
     if (!selectedRunId) return null;
     const [passed, rejected] = await Promise.all([
@@ -389,6 +406,17 @@ export function ScreenerWorkspace({ market }: { market: PlatformMarket }) {
       </table></div> : <EmptyState title="Nothing excluded" description="Every screened symbol met the eligibility rules." />)}
     </Panel>
     </div>
+
+    <details className="quant-secondary-disclosure">
+      <summary><span><Layers size={15} />Import TradingView watchlist</span><small>Exchange symbols are normalized to OpenDelta</small></summary>
+      <form onSubmit={(event) => void importTradingView(event)}>
+        <div className="quant-panel-body"><div className="quant-form-grid">
+          <label><span>Watchlist name</span><input required value={importName} placeholder="TradingView shortlist" onChange={(event) => setImportName(event.target.value)} /></label>
+          <label className="symbols"><span>TradingView symbols</span><textarea required value={importSymbols} placeholder={market === "CRYPTO" ? "OKX:BTCUSDT, OKX:ETHUSDT" : "NSE:RELIANCE, NSE:TCS"} onChange={(event) => setImportSymbols(event.target.value)} /><small>Paste comma, space or newline separated symbols.</small></label>
+        </div>{importNotice && <Message kind={importNotice.kind}>{importNotice.text}</Message>}</div>
+        <div className="quant-form-actions"><button className="primary" type="submit" disabled={importing || !importName.trim() || !importSymbols.trim()}>{importing ? "Importing…" : "Import and activate"}</button><span>No screen is run; symbols must exist in the configured market catalogue.</span></div>
+      </form>
+    </details>
 
     <Panel icon={<Layers size={17} />} title="Saved watchlists" description="The active watchlist supplies symbols to backtests and selected live strategies." aside={activeUniverse && <StatusBadge tone="good">Active: {activeUniverse.name}</StatusBadge>}>
       {universes.loading ? <LoadingState label="Loading watchlists" /> : universes.error ? <RequestErrorState error={universes.error} retry={universes.reload} /> : !universes.data?.universes.length ? <EmptyState title="No saved watchlists" description="Save candidate results above to create the first watchlist." /> : <div className="quant-table-scroll"><table className="quant-table">

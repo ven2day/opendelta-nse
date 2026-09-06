@@ -11,6 +11,7 @@ from __future__ import annotations
 import hmac
 import os
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -22,6 +23,7 @@ from backend.data.repositories import (
     SavedUniverseRepository,
     StrategyConfigRepository,
     StrategyDeploymentRepository,
+    TradingViewWebhookEventRepository,
 )
 from backend.markets.base import market_spec
 from backend.paper_trading.broker import PaperBroker
@@ -88,6 +90,7 @@ class TradingViewIngestionService:
         signals: Callable[[], LiveSignalRepository],
         broker: Callable[[str], PaperBroker],
         clock: Callable[[], datetime],
+        events: Callable[[], TradingViewWebhookEventRepository] | None = None,
     ) -> None:
         self.registry = registry
         self.deployments = deployments
@@ -96,6 +99,7 @@ class TradingViewIngestionService:
         self.signals = signals
         self.broker = broker
         self.clock = clock
+        self.events = events
 
     @staticmethod
     def configured() -> bool:
@@ -219,6 +223,61 @@ class TradingViewIngestionService:
         if deployment["mode"] == "PAPER":
             self.broker(alert.market).on_signal(stored)
         return {"accepted": True, "duplicate": False, "mode": deployment["mode"], "signal": stored}
+
+    def ingest_tracked(self, alert: TradingViewAlert) -> dict[str, Any]:
+        """Ingest and retain accepted and rejected deliveries without storing credentials."""
+        started = time.perf_counter()
+        try:
+            result = self.ingest(alert)
+        except TradingViewRejected as error:
+            self._record(alert, accepted=False, status_code=error.status_code, reason=error.detail,
+                         duration_ms=(time.perf_counter() - started) * 1000)
+            raise
+        self._record(alert, accepted=True, status_code=202, reason=None,
+                     duration_ms=(time.perf_counter() - started) * 1000, result=result)
+        return result
+
+    def activity(self, market: str, limit: int = 100) -> list[dict[str, Any]]:
+        return self.events().list(market, limit=limit) if self.events else []
+
+    def test(self, market: str, strategy_id: str, symbol: str | None = None) -> dict[str, Any]:
+        """Exercise readiness and symbol validation without inserting a signal or paper order."""
+        status = self.status(market, strategy_id)
+        deployment = status.get("deployment") or {}
+        try:
+            strategy = self.registry.get(strategy_id)
+        except KeyError:
+            strategy = None
+        active = self.configs().active(market, strategy_id) if strategy else None
+        configured_symbols = self.universes().symbols(deployment["universeId"], market=market) if deployment.get("universeId") else []
+        candidate = symbol or (configured_symbols[0] if configured_symbols else None)
+        checks = {
+            "webhookKey": status["configured"],
+            "strategy": bool(strategy and market in strategy.supported_markets),
+            "version": bool(strategy and deployment.get("strategyVersion") == strategy.version),
+            "timeframe": bool(strategy and deployment.get("timeframe") in strategy.supported_timeframes),
+            "tradingViewSource": deployment.get("signalSource") == TRADINGVIEW_SOURCE,
+            "enabledMode": deployment.get("mode") in {"SIGNALS", "PAPER"},
+            "activeConfiguration": bool(active and deployment.get("configId") == active.get("configId")),
+            "watchlist": bool(configured_symbols),
+            "symbol": bool(candidate),
+        }
+        resolved = resolve_watchlist_symbol(candidate, configured_symbols) if candidate else None
+        if candidate:
+            checks["symbol"] = resolved is not None
+        ready = all(checks.values())
+        return {"safe": True, "ready": ready, "checks": checks, "resolvedSymbol": resolved,
+                "message": "Validation passed; no signal or paper order was created." if ready else "Validation failed; fix the failed checks before sending alerts."}
+
+    def _record(self, alert: TradingViewAlert, *, accepted: bool, status_code: int, reason: str | None,
+                duration_ms: float, result: Mapping[str, Any] | None = None) -> None:
+        if not self.events:
+            return
+        signal = (result or {}).get("signal") or {}
+        self.events().record(alert=alert.model_dump(exclude={"webhookKey"}), accepted=accepted,
+                             duplicate=bool((result or {}).get("duplicate")), mode=(result or {}).get("mode"),
+                             signal_id=signal.get("signalId"), status_code=status_code, reason=reason,
+                             duration_ms=round(duration_ms, 3))
 
     @staticmethod
     def _authenticate(supplied: str) -> None:

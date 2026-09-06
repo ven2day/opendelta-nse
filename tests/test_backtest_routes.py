@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
-from backend.api.backtest_routes import BacktestCreateRequest, BacktestServices, create_backtest_router
+from backend.api.backtest_routes import BacktestApprovalRequest, BacktestCreateRequest, BacktestServices, create_backtest_router
 from backend.api.settings_routes import create_settings_router
 from backend.backtest.engine import BacktestRequest
 from backend.data.database import DatabaseUnavailable
@@ -71,6 +71,33 @@ class FakeRunner:
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         return self.runs.request_cancel(run_id)
+
+
+class ApprovalFakes:
+    def __init__(self, universe_id: str, symbols: list[str]) -> None:
+        self.universe_id, self.symbols_value, self.rows = universe_id, symbols, []
+        self.deployments = []
+
+    def get(self, *args):
+        if len(args) == 2:
+            return next((item for item in self.rows if item["runId"] == args[0] and item["mode"] == args[1]), None)
+        return {"universeId": self.universe_id, "market": "NSE", "symbols": self.symbols_value}
+
+    def symbols(self, *_args, **_kwargs):
+        return self.symbols_value
+
+    def save(self, **values):
+        if "run" in values:
+            row = {"runId": values["run"]["runId"], "mode": values["mode"], "approvalId": str(uuid.uuid4())}
+            self.rows.append(row)
+            return row
+        if "configuration" in values:
+            return {"configId": str(uuid.uuid4()), **values}
+        self.deployments.append(values)
+        return values
+
+    def list_run(self, run_id):
+        return [item for item in self.rows if item["runId"] == run_id]
 
 
 def _camel(name: str) -> str:
@@ -209,13 +236,33 @@ class BacktestRouteTests(unittest.TestCase):
             api["POST /v2/backtests"](BacktestCreateRequest(market="NSE", strategyId="ema_vwap_strong_buy", symbols=["TCS"], startDate=date(2026, 8, 1), endDate=date(2026, 8, 2)))
         self.assertEqual(created.exception.status_code, 503)
 
+    def test_completed_run_requires_signals_approval_before_paper(self) -> None:
+        run = self._create(symbols=["RELIANCE", "TCS"])
+        self.runs.records[run["runId"]]["status"] = "COMPLETE"
+        universe_id = str(uuid.uuid4())
+        fakes = ApprovalFakes(universe_id, run["symbols"])
+        changed = []
+        api = endpoints(create_backtest_router(BacktestServices(
+            registry=STRATEGIES, runs=lambda: self.runs, trades=lambda: self.trades, runner=lambda: self.runner,
+            configs=lambda: fakes, deployments=lambda: fakes, universes=lambda: fakes, approvals=lambda: fakes,
+            deployment_changed=changed.append,
+        )))
+        with self.assertRaises(HTTPException) as blocked:
+            api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="PAPER", universeId=universe_id))
+        self.assertEqual(blocked.exception.status_code, 409)
+        approved = api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id))
+        self.assertEqual(approved["approval"]["mode"], "SIGNALS")
+        paper = api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="PAPER", universeId=universe_id))
+        self.assertEqual(paper["approval"]["mode"], "PAPER")
+        self.assertEqual(changed, ["NSE", "NSE"])
+
 
 class SettingsRouteTests(unittest.TestCase):
     def test_strategy_catalogue_drives_dropdowns_and_dynamic_settings(self) -> None:
         api = endpoints(create_settings_router(STRATEGIES))
         payload = api["GET /v2/strategies"](market="crypto")
         self.assertEqual(payload["markets"], ["NSE", "CRYPTO"])
-        self.assertEqual([item["strategyId"] for item in payload["strategies"]], ["ema_vwap_strong_buy", "rsi_dip_ladder_v1"])
+        self.assertEqual([item["strategyId"] for item in payload["strategies"]], ["ema_vwap_strong_buy", "momentum_scalper_v1", "rsi_dip_ladder_v1"])
         schema = payload["strategies"][0]["configSchema"]
         self.assertEqual(schema["ema_fast"], {"type": "integer", "default": 9, "minimum": 1, "maximum": 499, "label": "Fast EMA length"})
         self.assertEqual(payload["strategies"][0]["defaults"]["target_pct"], 1.0)

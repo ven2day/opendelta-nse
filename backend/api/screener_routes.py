@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.core.models import MARKETS
 from backend.data.database import DatabaseUnavailable
-from backend.data.repositories import SavedUniverseRepository, ScreenerResultRepository, ScreenerRunRepository, WatchlistProfileRepository
+from backend.data.repositories import (
+    SavedUniverseRepository,
+    ScreenerResultRepository,
+    ScreenerRunRepository,
+    WatchlistProfileRepository,
+)
 from backend.data.universe_presets import get_universe_preset, list_universe_presets
 from backend.screener.engine import ScreenerEngine, apply_manual_selection
 from backend.screener.filters import ScreenerFilters
@@ -47,6 +54,13 @@ class SaveUniverseRequest(BaseModel):
     maximumSymbols: int | None = Field(default=None, ge=1)
     manualIncludes: list[str] = Field(default_factory=list)
     manualExcludes: list[str] = Field(default_factory=list)
+    activate: bool = True
+
+
+class TradingViewImportRequest(BaseModel):
+    market: str = Field(pattern="^(NSE|CRYPTO)$")
+    name: str = Field(min_length=1, max_length=120)
+    symbols: str = Field(min_length=1, max_length=20_000)
     activate: bool = True
 
 
@@ -263,6 +277,26 @@ def create_screener_router(services: ScreenerServices) -> APIRouter:
             manual_includes=[item.strip().upper() for item in request.manualIncludes if item.strip()],
             manual_excludes=[item.strip().upper() for item in request.manualExcludes if item.strip()], activate=request.activate,
         )
+
+    @router.post("/universes/import-tradingview", status_code=201)
+    def import_tradingview(request: TradingViewImportRequest) -> dict[str, Any]:
+        market = _market(request.market)
+        catalogue = _guard(lambda: services.catalogue_for(market))
+        by_compact = {re.sub(r"[^A-Z0-9]", "", item.upper()): item for item in catalogue}
+        requested = list(dict.fromkeys(
+            item.strip().upper().split(":", 1)[-1].removesuffix(".P")
+            for item in re.split(r"[\s,;]+", request.symbols) if item.strip()
+        ))
+        accepted: list[str] = []
+        rejected: list[str] = []
+        for value in requested:
+            match = by_compact.get(re.sub(r"[^A-Z0-9]", "", value))
+            (accepted if match else rejected).append(match or value)
+        accepted = list(dict.fromkeys(accepted))
+        if not accepted:
+            raise HTTPException(status_code=422, detail="None of the TradingView symbols match configured market instruments")
+        universe = _guard(services.universes).save(market=market, name=request.name.strip(), symbols=accepted, activate=request.activate)
+        return {"universe": universe, "accepted": accepted, "rejected": rejected}
 
     @router.get("/universes")
     def list_universes(market: str | None = Query(default=None), limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:

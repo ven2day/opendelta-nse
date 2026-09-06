@@ -66,6 +66,18 @@ class Broker:
         self.received.append(signal)
 
 
+class Activity:
+    def __init__(self):
+        self.rows = []
+
+    def record(self, **values):
+        self.rows.append(values)
+        return values
+
+    def list(self, market, *, limit=100):
+        return [item for item in self.rows if item["alert"]["market"] == market][:limit]
+
+
 def alert(**overrides):
     values = {
         "eventId": "rsi:BTCUSDT:1725624000",
@@ -86,7 +98,7 @@ def alert(**overrides):
     return TradingViewAlert(**values)
 
 
-def service(*, source="TRADINGVIEW", mode="PAPER", symbols=None):
+def service(*, source="TRADINGVIEW", mode="PAPER", symbols=None, events=None):
     strategy = STRATEGIES.get("rsi_dip_ladder_v1")
     deployment = {
         "market": "CRYPTO",
@@ -108,6 +120,7 @@ def service(*, source="TRADINGVIEW", mode="PAPER", symbols=None):
         signals=lambda: signal_rows,
         broker=lambda _market: broker,
         clock=lambda: NOW,
+        events=(lambda: events) if events else None,
     )
     return result, signal_rows, broker
 
@@ -165,3 +178,22 @@ def test_stale_and_badly_authenticated_alerts_fail_closed():
         ingestion.ingest(alert(webhookKey="wrong-webhook-key-12345"))
     with pytest.raises(TradingViewRejected, match="delivery window"):
         ingestion.ingest(alert(sentAt=NOW - timedelta(hours=1)))
+
+
+@patch.dict("os.environ", {"TRADINGVIEW_WEBHOOK_KEY": "test-webhook-key-12345"})
+def test_safe_test_and_activity_expose_results_without_storing_the_key():
+    events = Activity()
+    ingestion, signals, broker = service(mode="SIGNALS", events=events)
+    checked = ingestion.test("CRYPTO", "rsi_dip_ladder_v1", "OKX:BTCUSDT")
+    assert checked["safe"] is True
+    assert checked["ready"] is True
+    assert all(checked["checks"].values())
+    assert checked["resolvedSymbol"] == "BTC-USDT"
+    assert signals.inserted == []
+    assert broker.received == []
+
+    ingestion.ingest_tracked(alert())
+    with pytest.raises(TradingViewRejected):
+        ingestion.ingest_tracked(alert(webhookKey="wrong-webhook-key-12345", eventId="bad-event-12345"))
+    assert [item["accepted"] for item in events.rows] == [True, False]
+    assert all("webhookKey" not in item["alert"] for item in events.rows)

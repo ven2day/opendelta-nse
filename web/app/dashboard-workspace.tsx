@@ -1,12 +1,12 @@
 "use client";
 
-import { Activity, Database, Gauge, RefreshCw, ScanSearch, Wallet } from "lucide-react";
+import { Activity, AlertTriangle, Database, Gauge, RefreshCw, ScanSearch, Wallet } from "lucide-react";
 import { useCallback, type ReactNode } from "react";
 import { formatAge, formatDateTime, formatInteger, formatMoney, formatNumber, humanize, marketLabel, shortId, tone } from "./platform/format";
 import type { PlatformMarket } from "./platform/platform-client";
 import { useV2Resource } from "./platform/use-v2";
 import { v2Get } from "./platform/v2-client";
-import type { DashboardPayload, Section } from "./platform/v2-types";
+import type { DashboardPayload, PaperOrder, Section, TradingViewActivityResponse } from "./platform/v2-types";
 import { EmptyState, LoadingState, PaperOnlyBadge, Panel, PnlValue, RequestErrorState, SectionError, StatusBadge, WorkspaceHeader } from "./platform/workspace-ui";
 
 const DASHBOARD_REFRESH_MS = 30_000;
@@ -27,6 +27,14 @@ function readable(value: unknown): string {
 export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const load = useCallback(() => v2Get<DashboardPayload>("dashboard", { market }), [market]);
   const { data, error, loading, reload, refresh } = useV2Resource(load, DASHBOARD_REFRESH_MS);
+  const loadOperations = useCallback(async () => {
+    const [tradingView, orders] = await Promise.all([
+      v2Get<TradingViewActivityResponse>("integrations/tradingview/activity", { market, limit: 20 }),
+      v2Get<{ orders: PaperOrder[] }>("paper/orders", { market, limit: 50 }),
+    ]);
+    return { tradingView: tradingView.events, orders: orders.orders };
+  }, [market]);
+  const operations = useV2Resource(loadOperations, DASHBOARD_REFRESH_MS);
   const query = marketQuery(market);
   const account = data?.paper.available ? data.paper.data?.account ?? null : null;
   const signalWorkers = data?.signalEngine.data?.workers ?? [];
@@ -34,6 +42,12 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
   const worker = signalWorkers[0] ?? storedWorkers[0] ?? null;
   const freshness = data?.marketData.data?.dataFreshness ?? null;
   const universe = data?.screener.data?.activeUniverse ?? null;
+  const operationalAlerts = [
+    ...(freshness?.ageSeconds != null && freshness.ageSeconds > (market === "CRYPTO" ? 180 : 900) ? [`Market data is stale (${formatAge(freshness.ageSeconds)}).`] : []),
+    ...signalWorkers.filter((item) => item.status && !["READY", "RUNNING"].includes(item.status)).map((item) => `${humanize(item.strategyId ?? "Strategy")} worker is ${humanize(item.status ?? "stopped")}.`),
+    ...(operations.data?.tradingView.find((item) => !item.accepted) ? [`Latest TradingView rejection: ${operations.data.tradingView.find((item) => !item.accepted)?.reason ?? "validation failed"}.`] : []),
+    ...(operations.data?.orders.find((item) => item.status === "REJECTED") ? [`Latest paper rejection: ${operations.data.orders.find((item) => item.status === "REJECTED")?.reason ?? "execution rejected"}.`] : []),
+  ];
 
   return <main className="quant-workspace quant-dashboard-workspace">
     <WorkspaceHeader eyebrow={marketLabel(market) + " overview"} title="Dashboard" actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button></div>} />
@@ -46,6 +60,7 @@ export function DashboardWorkspace({ market }: { market: PlatformMarket }) {
       </section>
 
       {!worker && <section className="quant-dashboard-next-step" aria-label="Strategy setup required"><div><strong>No strategy automation is running</strong><span>Save a strategy configuration, then choose Signals or Paper. Until then the dashboard has no signals or simulated trades to display.</span></div><a className="quant-action-link" href={"/settings" + query}>Configure strategy</a></section>}
+      {operationalAlerts.length > 0 && <section className="quant-dashboard-next-step" aria-label="Operational notifications"><AlertTriangle size={18} /><div><strong>{operationalAlerts.length} operational notification{operationalAlerts.length === 1 ? "" : "s"}</strong><span>{operationalAlerts.join(" ")}</span></div><a className="quant-action-link" href={"/signals" + query}>Inspect activity</a></section>}
 
       <Panel className="quant-primary-panel" icon={<Wallet size={18} />} title="Paper portfolio" description="Current simulated account performance." aside={<a className="quant-action-link" href={"/paper-trading" + query}>View account</a>}>
         <SectionBody section={data.paper}>{(section) => <div className="quant-portfolio-hero">

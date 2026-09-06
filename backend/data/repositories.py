@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from datetime import UTC, date, datetime
+from typing import Any
 
 from backend.data.database import Database, jsonb
 
@@ -13,7 +14,7 @@ TERMINAL_RUN_STATUSES = ("COMPLETE", "FAILED", "CANCELLED", "INTERRUPTED")
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _public_run(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -123,6 +124,90 @@ class BacktestRunRepository:
             "UPDATE backtest_runs SET status = 'INTERRUPTED', error = COALESCE(error, 'Interrupted by a service restart'), completed_at = %s, updated_at = %s WHERE status IN ('QUEUED', 'RUNNING')",
             (_now(), _now()),
         )
+
+
+class StrategyApprovalRepository:
+    """Immutable evidence linking a completed backtest to an enabled deployment."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def save(self, *, run: Mapping[str, Any], config_id: str, universe_id: str, mode: str, signal_source: str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            """
+            INSERT INTO strategy_approvals (
+                approval_id, run_id, market, strategy_id, strategy_version, config_id,
+                universe_id, timeframe, mode, signal_source, configuration_snapshot,
+                execution_settings, symbols
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT ON CONSTRAINT strategy_approvals_run_mode DO NOTHING
+            RETURNING *
+            """,
+            (uuid.uuid4(), uuid.UUID(run["runId"]), run["market"], run["strategyId"], run["strategyVersion"],
+             uuid.UUID(config_id), uuid.UUID(universe_id), run["timeframe"], mode, signal_source,
+             jsonb(dict(run["configurationSnapshot"])), jsonb(dict(run["executionSettings"])), jsonb(list(run["symbols"]))),
+        )
+        if row is None:
+            existing = self.get(run["runId"], mode)
+            assert existing is not None
+            return existing
+        return self._public(row)
+
+    def get(self, run_id: str, mode: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one("SELECT * FROM strategy_approvals WHERE run_id = %s AND mode = %s", (uuid.UUID(run_id), mode))
+        return self._public(row) if row else None
+
+    def list(self, market: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM strategy_approvals WHERE market = %s ORDER BY approved_at DESC LIMIT %s", (market, limit))
+        return [self._public(row) for row in rows]
+
+    def list_run(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM strategy_approvals WHERE run_id = %s ORDER BY approved_at", (uuid.UUID(run_id),))
+        return [self._public(row) for row in rows]
+
+    @staticmethod
+    def _public(row: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "approvalId": str(row["approval_id"]), "runId": str(row["run_id"]), "market": row["market"],
+            "strategyId": row["strategy_id"], "strategyVersion": row["strategy_version"],
+            "configId": str(row["config_id"]), "universeId": str(row["universe_id"]),
+            "timeframe": row["timeframe"], "mode": row["mode"], "signalSource": row["signal_source"],
+            "approvedAt": _iso(row["approved_at"]),
+        }
+
+
+class TradingViewWebhookEventRepository:
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def record(self, *, alert: Mapping[str, Any], accepted: bool, duplicate: bool, mode: str | None,
+               signal_id: str | None, status_code: int, reason: str | None, duration_ms: float) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            """INSERT INTO tradingview_webhook_events (
+                webhook_event_id, external_event_id, market, strategy_id, strategy_version, symbol,
+                timeframe, action, accepted, duplicate, mode, signal_id, status_code, reason, duration_ms
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+            (uuid.uuid4(), alert.get("eventId"), alert.get("market"), alert.get("strategyId"), alert.get("strategyVersion"),
+             alert.get("symbol"), alert.get("timeframe"), alert.get("action"), accepted, duplicate, mode,
+             uuid.UUID(signal_id) if signal_id else None, status_code, reason, duration_ms),
+        )
+        assert row is not None
+        return self._public(row)
+
+    def list(self, market: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.database.fetch_all("SELECT * FROM tradingview_webhook_events WHERE market = %s ORDER BY received_at DESC LIMIT %s", (market, limit))
+        return [self._public(row) for row in rows]
+
+    @staticmethod
+    def _public(row: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "webhookEventId": str(row["webhook_event_id"]), "eventId": row["external_event_id"],
+            "market": row["market"], "strategyId": row["strategy_id"], "strategyVersion": row["strategy_version"],
+            "symbol": row["symbol"], "timeframe": row["timeframe"], "action": row["action"],
+            "accepted": bool(row["accepted"]), "duplicate": bool(row["duplicate"]), "mode": row["mode"],
+            "signalId": str(row["signal_id"]) if row["signal_id"] else None, "statusCode": int(row["status_code"]),
+            "reason": row["reason"], "durationMs": row["duration_ms"], "receivedAt": _iso(row["received_at"]),
+        }
 
 
 TRADE_COLUMNS = (

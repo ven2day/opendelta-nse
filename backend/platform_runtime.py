@@ -665,7 +665,11 @@ def install_platform(
     app.router.routes.extend(create_backtest_router(services).routes)
     app.router.routes.extend(create_settings_router(STRATEGIES, configs=runtime.strategy_configs, deployments=runtime.strategy_deployments, universes=runtime.universes, deployment_status=runtime.deployment_status, deployment_changed=runtime.reconcile_signal_workers).routes)
     app.router.routes.extend(create_strategy_studio_router(runtime.strategy_sources).routes)
-    app.router.routes.extend(create_indicator_studio_router(runtime.indicator_sources).routes)
+    app.router.routes.extend(create_indicator_studio_router(
+        runtime.indicator_sources,
+        candle_source=lambda market: runtime.candle_sources[market](),
+        clock=runtime.clock,
+    ).routes)
     app.router.routes.extend(
         create_dashboard_router(
             overview=overview or (lambda _market: {}),

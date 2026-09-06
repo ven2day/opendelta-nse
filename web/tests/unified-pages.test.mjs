@@ -6,11 +6,12 @@ process.env.APP_USERNAME = "test-admin";
 process.env.APP_PASSWORD = "test-password-123";
 process.env.AUTH_SECRET = "test-secret-that-is-at-least-32-characters-long";
 
-const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Signals", "Paper Trading", "Strategies"];
+const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Indicators", "Signals", "Paper Trading", "Strategies"];
 const ROUTES = [
   { path: "/", title: "Dashboard" },
   { path: "/screener", title: "Watchlist" },
   { path: "/backtest", title: "Backtest" },
+  { path: "/indicators", title: "Indicators" },
   { path: "/signals", title: "Signals" },
   { path: "/paper-trading", title: "Paper Trading" },
   { path: "/settings", title: "Strategies" },
@@ -346,6 +347,24 @@ test("Strategy Studio V2 is collapsed and promotion remains backtest-gated", asy
   assert.match(source, /Backtest-gated/);
   assert.match(schema, /Array\.isArray\(value\).*integer_array/);
   assert.doesNotMatch(source, /styles\.studio\}`\} open/);
+});
+
+test("Indicator Studio V2 is separate, immutable and preview-only", async () => {
+  const [source, types] = await Promise.all([
+    readFile(new URL("../app/indicators/indicator-studio-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /title="Indicator Studio V2"/);
+  assert.match(source, /aria-label="Indicator V2 Python source"/);
+  assert.match(source, /indicator-studio\/validate/);
+  assert.match(source, /Save new version/);
+  assert.match(source, /Edit as new/);
+  assert.match(source, /\/archive/);
+  assert.match(source, /Stored-candle preview/);
+  assert.match(source, /Preview cannot create signals or trades/);
+  assert.doesNotMatch(source, /Approve for Signals|Approve for Paper|placeOrder|marketOrder/);
+  assert.match(types, /export type IndicatorSourceManifest/);
+  assert.match(types, /"LINE" \| "HISTOGRAM" \| "BAND" \| "POINTS"/);
 });
 
 test("completed V2 backtests expose the same ordered approval workflow", async () => {

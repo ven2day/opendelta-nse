@@ -4,6 +4,7 @@
 import {
   Activity,
   Gauge,
+  LineChart,
   LayoutDashboard,
   LogOut,
   Moon,
@@ -36,6 +37,7 @@ export const navigation: NavigationItem[] = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard, match: (path) => path === "/" },
   { href: "/screener", label: "Watchlist", icon: ScanSearch, match: (path) => path.startsWith("/screener") },
   { href: "/backtest", label: "Backtest", icon: Gauge, match: (path) => path.startsWith("/backtest") },
+  { href: "/indicators", label: "Indicators", icon: LineChart, match: (path) => path.startsWith("/indicators") },
   { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
   { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },
   { href: "/settings", label: "Strategies", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },

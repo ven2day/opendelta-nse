@@ -44,7 +44,7 @@ is executed only by the resource-limited Strategy V2 runner.
 | GET | `/v2/indicator-studio/sources?status=` | List source metadata; optional status is `VALIDATED` or `ARCHIVED`. |
 | GET | `/v2/indicator-studio/sources/{sourceId}` | Retrieve one version including its Python source. |
 | POST | `/v2/indicator-studio/sources/{sourceId}/archive` | Archive a version. Archived source remains auditable but cannot be previewed. |
-| POST | `/v2/indicator-studio/sources/{sourceId}/preview` | Evaluate supplied completed candle columns in the isolated runner and return one row per candle. |
+| POST | `/v2/indicator-studio/sources/{sourceId}/preview` | Body `{market,symbol,timeframe,params,candles?}`. With no candle columns, load recent stored completed candles; evaluate them in the isolated runner and return values plus the candle rows. |
 
 `INDICATOR` declares `id`, `name`, semantic `version`, parameter defaults,
 `requiredHistory`, and one or more outputs. Each output selects a chart

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import IndicatorSourceRepository
 from backend.indicators.source_v2 import starter_source, validate_source
+from backend.markets.base import CandleSource
 from backend.strategies.adapter_v2 import StrategyRunnerClient
 
 
@@ -34,12 +36,14 @@ class IndicatorPreviewRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=80)
     timeframe: str = Field(pattern="^(1m|3m|5m|15m|30m|1h|4h|1d)$")
     params: dict[str, Any] = Field(default_factory=dict)
-    candles: CandleColumns
+    candles: CandleColumns | None = None
 
 
 def create_indicator_studio_router(
     sources: Callable[[], IndicatorSourceRepository] | None = None,
     runner: Callable[[], StrategyRunnerClient] | None = None,
+    candle_source: Callable[[str], CandleSource] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v2/indicator-studio", tags=["indicator-studio"])
 
@@ -103,17 +107,37 @@ def create_indicator_studio_router(
 
     @router.post("/sources/{source_id}/preview")
     def preview(source_id: str, request: IndicatorPreviewRequest) -> dict[str, object]:
-        lengths = {len(getattr(request.candles, name)) for name in CandleColumns.model_fields}
-        if len(lengths) != 1 or not lengths or next(iter(lengths)) == 0:
-            raise HTTPException(status_code=422, detail="Candle columns must be non-empty and have equal lengths")
         try:
             source = repository().get(source_id)
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         if source["status"] != "VALIDATED":
             raise HTTPException(status_code=409, detail="Archived indicators cannot be previewed")
+        candles = request.candles
+        if candles is None:
+            if candle_source is None:
+                raise HTTPException(status_code=503, detail="Stored candle preview is not configured")
+            now = (clock or (lambda: datetime.now(UTC)))()
+            try:
+                frame = candle_source(request.market).candles(
+                    request.symbol, request.timeframe, now - timedelta(days=45), now,
+                    warmup_bars=int(source["manifest"].get("requiredHistory", 1)),
+                ).tail(500)
+            except Exception as error:  # noqa: BLE001 - provider errors become a safe API response
+                raise HTTPException(status_code=422, detail=f"Stored candles could not be loaded: {error}") from error
+            if frame.empty:
+                raise HTTPException(status_code=422, detail="No stored completed candles were found for this preview")
+            candles = CandleColumns(
+                timestamp=[stamp.isoformat() for stamp in frame.index],
+                open=frame["Open"].astype(float).tolist(), high=frame["High"].astype(float).tolist(),
+                low=frame["Low"].astype(float).tolist(), close=frame["Close"].astype(float).tolist(),
+                volume=frame["Volume"].astype(float).tolist(),
+            )
+        lengths = {len(getattr(candles, name)) for name in CandleColumns.model_fields}
+        if len(lengths) != 1 or not lengths or next(iter(lengths)) == 0:
+            raise HTTPException(status_code=422, detail="Candle columns must be non-empty and have equal lengths")
         try:
-            return execution_client().evaluate(
+            result = execution_client().evaluate(
                 {
                     "payloadType": "indicator",
                     "sourceCode": source["sourceCode"],
@@ -121,9 +145,10 @@ def create_indicator_studio_router(
                     "symbol": request.symbol,
                     "timeframe": request.timeframe,
                     "params": request.params,
-                    "candles": request.candles.model_dump(),
+                    "candles": candles.model_dump(),
                 }
             )
+            return {**result, "candles": candles.model_dump()}
         except (OSError, RuntimeError, TimeoutError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

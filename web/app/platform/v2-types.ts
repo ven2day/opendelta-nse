@@ -303,6 +303,14 @@ export type BacktestChartResponse = {
   indicator: null | { sourceId: string; name: string; version: string; outputs: IndicatorOutput[]; rows: Array<Record<string, number | null>> };
 };
 
+export type ResearchVariant = { variantId: string; name: string; configuration: ConfigValues; execution: ConfigValues; run: BacktestRun };
+export type ResearchExperiment = {
+  experimentId: string; name: string; market: PlatformMarket; strategyId: string; strategyVersion: string;
+  strategySourceId?: string | null; timeframe: string; symbols: string[]; startDate: string; endDate: string;
+  status: string; variants: ResearchVariant[]; createdAt: string;
+};
+export type ResearchExperimentsResponse = { experiments: ResearchExperiment[] };
+
 export type EngineStatus = {
   market?: PlatformMarket | string | null;
   status?: string | null;

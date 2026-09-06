@@ -11,6 +11,7 @@ from backend.data.database import Database
 from backend.data.repositories import (
     BacktestRunRepository,
     BacktestTradeRepository,
+    IndicatorSourceRepository,
     LiveSignalRepository,
     SavedUniverseRepository,
     StrategyConfigRepository,
@@ -70,6 +71,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "012_strategy_sources",
                 "013_strategy_v2_backtests",
                 "014_strategy_v2_live",
+                "015_indicator_sources",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -89,6 +91,7 @@ class PlatformDatabaseTests(unittest.TestCase):
             "strategy_deployments",
             "strategy_approvals",
             "strategy_sources",
+            "indicator_sources",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -114,6 +117,20 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
         self.assertEqual(len(repository.list("CRYPTO")), 1)
         self.assertEqual(repository.list("NSE"), [])
+
+    def test_indicator_sources_are_immutable_and_archivable(self) -> None:
+        repository = IndicatorSourceRepository(self.database)
+        manifest = {
+            "indicatorId": "relative_volume", "name": "Relative Volume", "version": "1.0.0",
+            "description": "Test indicator", "parameters": {"length": 20}, "requiredHistory": 20,
+            "outputs": [{"name": "rvol", "label": "RVOL", "display": "LINE", "pane": "PANEL"}],
+        }
+        saved = repository.create(source_code="source", code_hash="b" * 64, manifest=manifest, validation={"valid": True})
+        self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
+        self.assertEqual(repository.list(status="VALIDATED")[0]["indicatorId"], "relative_volume")
+        archived = repository.archive(saved["sourceId"])
+        self.assertEqual(archived["status"], "ARCHIVED")
+        self.assertEqual(repository.list(status="VALIDATED"), [])
 
     def test_different_strategy_ids_do_not_collide_at_same_candle(self) -> None:
         signals = LiveSignalRepository(self.database)

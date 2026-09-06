@@ -175,6 +175,50 @@ export type StrategySource = {
 export type StrategySourcesResponse = { sources: StrategySource[] };
 export type StrategySourceTemplate = { sourceCode: string };
 
+export type IndicatorOutput = {
+  name: string;
+  label: string;
+  display: "LINE" | "HISTOGRAM" | "BAND" | "POINTS";
+  pane: "OVERLAY" | "PANEL";
+};
+export type IndicatorSourceManifest = {
+  indicatorId: string;
+  name: string;
+  version: string;
+  description: string;
+  parameters: ConfigValues;
+  requiredHistory: number;
+  outputs: IndicatorOutput[];
+};
+export type IndicatorSourceValidation = {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  manifest: IndicatorSourceManifest | null;
+  codeHash: string;
+};
+export type IndicatorSource = {
+  sourceId: string;
+  indicatorId: string;
+  indicatorVersion: string;
+  name: string;
+  description?: string;
+  codeHash: string;
+  manifest: IndicatorSourceManifest;
+  validation: IndicatorSourceValidation;
+  status: "VALIDATED" | "ARCHIVED";
+  createdAt?: string | null;
+  archivedAt?: string | null;
+  sourceCode?: string;
+};
+export type IndicatorSourcesResponse = { sources: IndicatorSource[] };
+export type IndicatorSourceTemplate = { sourceCode: string };
+export type IndicatorPreview = {
+  outputs: IndicatorOutput[];
+  rows: Array<Record<string, number | null>>;
+  candles: { timestamp: string[]; open: number[]; high: number[]; low: number[]; close: number[]; volume: number[] };
+};
+
 export type BacktestMetrics = {
   totalSignals?: number | null;
   completedTrades?: number | null;

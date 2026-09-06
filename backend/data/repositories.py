@@ -686,6 +686,81 @@ def _public_strategy_source(row: Mapping[str, Any], *, include_source: bool) -> 
     return result
 
 
+class IndicatorSourceRepository:
+    """Immutable validated Indicator V2 source snapshots."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def create(self, *, source_code: str, code_hash: str, manifest: Mapping[str, Any], validation: Mapping[str, Any]) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            """
+            INSERT INTO indicator_sources (
+                source_id, indicator_id, indicator_version, name, description,
+                source_code, code_hash, manifest, validation
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                uuid.uuid4(), manifest["indicatorId"], manifest["version"], manifest["name"],
+                manifest.get("description", ""), source_code, code_hash,
+                jsonb(dict(manifest)), jsonb(dict(validation)),
+            ),
+        )
+        assert row is not None
+        return _public_indicator_source(row, include_source=True)
+
+    def list(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        if status is None:
+            rows = self.database.fetch_all("SELECT * FROM indicator_sources ORDER BY created_at DESC")
+        else:
+            if status not in {"VALIDATED", "ARCHIVED"}:
+                raise ValueError("Unsupported indicator source status")
+            rows = self.database.fetch_all(
+                "SELECT * FROM indicator_sources WHERE status = %s ORDER BY created_at DESC", (status,)
+            )
+        return [_public_indicator_source(row, include_source=False) for row in rows]
+
+    def get(self, source_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one("SELECT * FROM indicator_sources WHERE source_id = %s", (uuid.UUID(str(source_id)),))
+        if row is None:
+            raise KeyError(f"Indicator source {source_id} was not found")
+        return _public_indicator_source(row, include_source=True)
+
+    def archive(self, source_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            """
+            UPDATE indicator_sources
+            SET status = 'ARCHIVED', archived_at = COALESCE(archived_at, %s)
+            WHERE source_id = %s
+            RETURNING *
+            """,
+            (_now(), uuid.UUID(str(source_id))),
+        )
+        if row is None:
+            raise KeyError(f"Indicator source {source_id} was not found")
+        return _public_indicator_source(row, include_source=True)
+
+
+def _public_indicator_source(row: Mapping[str, Any], *, include_source: bool) -> dict[str, Any]:
+    result = {
+        "sourceId": str(row["source_id"]),
+        "indicatorId": row["indicator_id"],
+        "indicatorVersion": row["indicator_version"],
+        "name": row["name"],
+        "description": row["description"],
+        "codeHash": row["code_hash"],
+        "manifest": row["manifest"],
+        "validation": row["validation"],
+        "status": row["status"],
+        "createdAt": _iso(row["created_at"]),
+        "archivedAt": _iso(row["archived_at"]) if row.get("archived_at") else None,
+    }
+    if include_source:
+        result["sourceCode"] = row["source_code"]
+    return result
+
+
 class StrategyDeploymentRepository:
     """Desired signal/paper mode for one strategy in one market."""
 

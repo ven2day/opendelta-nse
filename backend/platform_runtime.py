@@ -22,6 +22,7 @@ from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
 from backend.api.settings_routes import create_settings_router
 from backend.api.signal_routes import create_signal_router
+from backend.api.tradingview_routes import create_tradingview_router
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
@@ -52,6 +53,7 @@ from backend.signals.configuration import LiveStrategyBinding, live_strategy_bin
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
+from backend.integrations.tradingview import TradingViewIngestionService
 
 LIVE_TIMEFRAME = "5m"
 
@@ -78,7 +80,7 @@ class PlatformRuntime:
         self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
-        self._worker_signatures: dict[str, tuple[str, str | None, str | None]] = {}
+        self._worker_signatures: dict[str, tuple[str, str | None, str | None, str]] = {}
         self._brokers: dict[str, PaperBroker] = {}
         self._lock = threading.Lock()
         self.migrated_versions: list[str] = []
@@ -156,7 +158,7 @@ class PlatformRuntime:
         for binding in self.live_bindings(key):
             active = self.strategy_configs().active(key, binding.strategy_id) if self.database is not None else None
             strategy = STRATEGIES.get(binding.strategy_id)
-            rows.append({"deploymentId": None, "market": key, "strategyId": binding.strategy_id, "strategyVersion": strategy.version, "configId": (active or {}).get("configId"), "universeId": None, "timeframe": binding.timeframe, "mode": mode, "source": "ENVIRONMENT", "createdAt": None, "updatedAt": None})
+            rows.append({"deploymentId": None, "market": key, "strategyId": binding.strategy_id, "strategyVersion": strategy.version, "configId": (active or {}).get("configId"), "universeId": None, "timeframe": binding.timeframe, "mode": mode, "signalSource": "OPENDELTA", "source": "ENVIRONMENT", "createdAt": None, "updatedAt": None})
         return rows
 
     def deployment_status(self, market: str, strategy_id: str) -> dict[str, Any]:
@@ -166,7 +168,7 @@ class PlatformRuntime:
                 return row
         strategy = STRATEGIES.get(strategy_id)
         timeframes = list(strategy.supported_timeframes)
-        return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
+        return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "signalSource": "OPENDELTA", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
     def reconcile_signal_workers(self, market: str) -> None:
         """Apply saved strategy modes immediately without restarting the service."""
@@ -177,7 +179,7 @@ class PlatformRuntime:
         with self._lock:
             existing = {name: worker for name, worker in self._workers.items() if name.startswith(prefix)}
             signatures = dict(self._worker_signatures)
-        stale = [name for name in existing if name not in desired or signatures.get(name) != (desired[name]["mode"], desired[name].get("configId"), desired[name].get("universeId"))]
+        stale = [name for name in existing if name not in desired or signatures.get(name) != (desired[name]["mode"], desired[name].get("configId"), desired[name].get("universeId"), desired[name].get("signalSource", "OPENDELTA"))]
         if set(existing) != set(desired):
             stale = list(existing)
         for name in stale:
@@ -193,7 +195,7 @@ class PlatformRuntime:
                     broker_tracking_owner = broker_tracking_owner or row["timeframe"] == "1d"
                     continue
             binding = LiveStrategyBinding(row["strategyId"], row["timeframe"])
-            worker = self.build_signal_worker(key, binding=binding, generation_enabled=row["mode"] != "OFF", universe_id=row.get("universeId"))
+            worker = self.build_signal_worker(key, binding=binding, generation_enabled=row["mode"] != "OFF" and row.get("signalSource", "OPENDELTA") == "OPENDELTA", universe_id=row.get("universeId"))
             if broker is not None:
                 if row["mode"] == "PAPER":
                     worker.engine.publish = broker.on_signal
@@ -216,7 +218,7 @@ class PlatformRuntime:
                 worker.configure_market_tracking(symbols=tracked_symbols, listener=forward_market_candle)
             with self._lock:
                 self._workers[name] = worker
-                self._worker_signatures[name] = (row["mode"], row.get("configId"), row.get("universeId"))
+                self._worker_signatures[name] = (row["mode"], row.get("configId"), row.get("universeId"), row.get("signalSource", "OPENDELTA"))
             worker.start()
             logger.info("reconciled_live_signal_worker", market=key, strategy=binding.strategy_id, timeframe=binding.timeframe, mode=row["mode"])
 
@@ -266,12 +268,19 @@ class PlatformRuntime:
                 values["priceModel"] = "NEXT_OPEN"
             return ExecutionPolicy.from_mapping(values, whole_units=(key == "NSE"), price_model="NEXT_OPEN")
 
+        def entry_allowed(signal: Mapping[str, Any]) -> bool:
+            deployment = self.deployment_status(key, str(signal.get("strategyId") or primary.strategy_id))
+            return (
+                deployment["mode"] == "PAPER"
+                and deployment.get("signalSource", "OPENDELTA") == signal.get("source", "OPENDELTA")
+            )
+
         broker = PaperBroker(
             market=spec,
             repositories=self.paper_repositories(),
             policy=policy,
             policy_resolver=resolve_policy,
-            entry_allowed=lambda signal: self.deployment_status(key, str(signal.get("strategyId") or primary.strategy_id))["mode"] == "PAPER",
+            entry_allowed=entry_allowed,
             timeframe=primary.timeframe,
             clock=self.clock,
         )
@@ -493,6 +502,19 @@ def install_platform(
     app.router.routes.extend(
         create_signal_router(
             signals=runtime.signals, engine_status=runtime.engine_status, worker_statuses=runtime.worker_statuses
+        ).routes
+    )
+    app.router.routes.extend(
+        create_tradingview_router(
+            TradingViewIngestionService(
+                registry=STRATEGIES,
+                deployments=runtime.strategy_deployments,
+                configs=runtime.strategy_configs,
+                universes=runtime.universes,
+                signals=runtime.signals,
+                broker=runtime.paper_broker,
+                clock=runtime.clock,
+            )
         ).routes
     )
     app.router.routes.extend(create_paper_trading_router(runtime.paper_broker).routes)

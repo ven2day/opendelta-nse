@@ -1,0 +1,40 @@
+//@version=6
+indicator("OpenDelta RSI Dip Ladder v1 alerts", overlay=false)
+
+webhookKey = input.string("REPLACE_WITH_OPENDELTA_WEBHOOK_KEY", "OpenDelta webhook key")
+market = input.string("CRYPTO", "OpenDelta market", options=["CRYPTO", "NSE"])
+rsiLength = input.int(14, "RSI length", minval=2)
+rsiLow = input.float(30, "Arm below RSI", minval=0, maxval=100)
+rsiRecovery = input.float(35, "Buy on RSI recovery", minval=0, maxval=100)
+setupExpiryBars = input.int(24, "Setup expiry bars", minval=1)
+targetPct = input.float(5, "Target %", minval=0.01)
+
+rsi = ta.rsi(close, rsiLength)
+var bool armed = false
+var int armedAt = na
+
+if rsi <= rsiLow
+    armed := true
+    armedAt := bar_index
+
+if armed and not na(armedAt) and bar_index - armedAt > setupExpiryBars
+    armed := false
+    armedAt := na
+
+buy = barstate.isconfirmed and armed and ta.crossover(rsi, rsiRecovery)
+odTimeframe = timeframe.period == "D" ? "1d" : timeframe.period == "240" ? "4h" : timeframe.period == "60" ? "1h" : timeframe.period + "m"
+
+if buy
+    candleAt = str.format_time(time, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+    sentAt = str.format_time(timenow, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+    eventId = "rsi_dip_ladder_v1:" + syminfo.tickerid + ":" + odTimeframe + ":" + str.tostring(time)
+    targetPrice = close * (1 + targetPct / 100)
+    message = "{\"schemaVersion\":\"1\",\"eventId\":\"" + eventId + "\",\"webhookKey\":\"" + webhookKey + "\",\"market\":\"" + market + "\",\"exchange\":\"" + syminfo.prefix + "\",\"symbol\":\"" + syminfo.tickerid + "\",\"timeframe\":\"" + odTimeframe + "\",\"strategyId\":\"rsi_dip_ladder_v1\",\"strategyVersion\":\"1.0.0\",\"action\":\"BUY\",\"candleTimestamp\":\"" + candleAt + "\",\"sentAt\":\"" + sentAt + "\",\"signalPrice\":" + str.tostring(close) + ",\"targetPrice\":" + str.tostring(targetPrice) + ",\"reasons\":[\"RSI_LOW_ARMED\",\"RSI_RECOVERED\"],\"indicators\":{\"rsi\":" + str.tostring(rsi) + "}}"
+    alert(message, alert.freq_once_per_bar_close)
+    armed := false
+    armedAt := na
+
+plot(rsi, "RSI", color=color.rgb(214, 168, 62))
+hline(rsiLow, "Arm", color=color.new(color.red, 30))
+hline(rsiRecovery, "Recovery", color=color.new(color.green, 30))
+plotshape(buy, title="OpenDelta BUY", style=shape.triangleup, location=location.bottom, color=color.green, size=size.tiny, text="BUY")

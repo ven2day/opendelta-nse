@@ -286,6 +286,9 @@ def _public_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "reasons": row["reasons"],
         "indicators": row["indicators"],
         "configurationSnapshot": row["configuration_snapshot"],
+        "source": row.get("source") or "OPENDELTA",
+        "externalEventId": row.get("external_event_id"),
+        "receivedAt": _iso(row.get("received_at")),
         "lastPrice": row["last_price"],
         "exitTimestamp": _iso(row["exit_timestamp"]),
         "exitPrice": row["exit_price"],
@@ -317,6 +320,9 @@ class LiveSignalRepository:
         reasons: Sequence[str],
         indicators: Mapping[str, Any],
         configuration_snapshot: Mapping[str, Any],
+        source: str = "OPENDELTA",
+        external_event_id: str | None = None,
+        received_at: datetime | None = None,
     ) -> dict[str, Any] | None:
         """Insert and return the stored signal, or ``None`` if an identical signal already exists."""
         signal_id = uuid.uuid4()
@@ -325,17 +331,26 @@ class LiveSignalRepository:
                 """
                 INSERT INTO live_signals (
                     signal_id, market, strategy_id, strategy_version, symbol, timeframe, candle_timestamp, signal_type, status,
-                    signal_price, target_price, stop_price, expires_at, reasons, indicators, configuration_snapshot, last_price
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'STRONG_BUY', %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT ON CONSTRAINT live_signals_unique_candle DO NOTHING
+                    signal_price, target_price, stop_price, expires_at, reasons, indicators, configuration_snapshot, last_price,
+                    source, external_event_id, received_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'STRONG_BUY', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
                 RETURNING *
                 """,
                 (
                     signal_id, market, strategy_id, strategy_version, symbol, timeframe, candle_timestamp, signal_type,
                     signal_price, target_price, stop_price, expires_at, jsonb(list(reasons)), jsonb(dict(indicators)), jsonb(dict(configuration_snapshot)), signal_price,
+                    source, external_event_id, received_at,
                 ),
             )
             row = cursor.fetchone()
+        return _public_signal(row) if row else None
+
+    def get_external_event(self, source: str, external_event_id: str) -> dict[str, Any] | None:
+        row = self.database.fetch_one(
+            "SELECT * FROM live_signals WHERE source = %s AND external_event_id = %s",
+            (source, external_event_id),
+        )
         return _public_signal(row) if row else None
 
     def get(self, signal_id: uuid.UUID | str) -> dict[str, Any]:
@@ -535,22 +550,22 @@ class StrategyDeploymentRepository:
             rows = self.database.fetch_all("SELECT * FROM strategy_deployments ORDER BY market, strategy_id")
         return [_public_deployment(row) for row in rows]
 
-    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, universe_id: str | None, timeframe: str, mode: str) -> dict[str, Any]:
+    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, universe_id: str | None, timeframe: str, mode: str, signal_source: str = "OPENDELTA") -> dict[str, Any]:
         row = self.database.fetch_one(
             """
-            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode, signal_source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT ON CONSTRAINT strategy_deployments_market_strategy DO UPDATE SET
                 strategy_version = EXCLUDED.strategy_version, config_id = EXCLUDED.config_id,
                 universe_id = EXCLUDED.universe_id, timeframe = EXCLUDED.timeframe,
-                mode = EXCLUDED.mode, updated_at = now()
+                mode = EXCLUDED.mode, signal_source = EXCLUDED.signal_source, updated_at = now()
             RETURNING *
             """,
             (
                 uuid.uuid4(), market, strategy_id, strategy_version,
                 uuid.UUID(config_id) if config_id else None,
                 uuid.UUID(universe_id) if universe_id else None,
-                timeframe, mode,
+                timeframe, mode, signal_source,
             ),
         )
         assert row is not None
@@ -567,6 +582,7 @@ def _public_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
         "universeId": str(row["universe_id"]) if row.get("universe_id") else None,
         "timeframe": row["timeframe"],
         "mode": row["mode"],
+        "signalSource": row.get("signal_source") or "OPENDELTA",
         "source": "DATABASE",
         "createdAt": _iso(row["created_at"]),
         "updatedAt": _iso(row["updated_at"]),

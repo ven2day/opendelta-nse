@@ -87,6 +87,8 @@ until these are set on `opendelta-backtest.service`:
 | --- | --- |
 | `MARKET_DATA_DATABASE_URL` | already set by the TimescaleDB bootstrap |
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup instead of explicitly |
+| `TRADINGVIEW_WEBHOOK_KEY` | random, revocable key placed only in TradingView alert JSON |
+| `TRADINGVIEW_MAX_ALERT_AGE_SECONDS` | delivery freshness window; default `900` seconds |
 | `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured NSE v2 live-signal worker |
 | `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured Crypto v2 live-signal worker |
 | `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default `true` with the worker) |

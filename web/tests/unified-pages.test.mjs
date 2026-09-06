@@ -125,6 +125,24 @@ test("the v2 proxy refuses anonymous and malformed requests before touching the 
   assert.equal(unconfiguredInstrument.status, 503);
 });
 
+test("TradingView has one narrow public JSON ingress", async () => {
+  const worker = await loadWorker();
+  const wrongType = await fetchFromWorker(worker, "/api/tradingview/webhook", {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: "not-json",
+  });
+  assert.equal(wrongType.status, 415);
+
+  const unconfigured = await fetchFromWorker(worker, "/api/tradingview/webhook", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ schemaVersion: "1" }),
+  });
+  assert.equal(unconfigured.status, 503);
+  assert.match((await unconfigured.json()).detail, /not configured/);
+});
+
 test("the unified navigation and proxy are wired exactly once", async () => {
   const [chrome, proxy, client] = await Promise.all([
     readFile(new URL("../app/platform/platform-chrome.tsx", import.meta.url), "utf8"),

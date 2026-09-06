@@ -102,7 +102,7 @@ function progressPct(run: BacktestRun | null): number {
   return Math.min(100, Math.round(((run.symbolsCompleted ?? 0) / run.symbolsTotal) * 100));
 }
 
-export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
+export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMarket; initialRunId?: string }) {
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
   const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
@@ -126,7 +126,7 @@ export function BacktestWorkspace({ market }: { market: PlatformMarket }) {
   const [configurationJsonEdits, setConfigurationJsonEdits] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
-  const [selectedRunChoice, setSelectedRunChoice] = useState<string | null>(null);
+  const [selectedRunChoice, setSelectedRunChoice] = useState<string | null>(initialRunId ?? null);
   const [cancelling, setCancelling] = useState(false);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [approving, setApproving] = useState<"SIGNALS" | "PAPER" | null>(null);

@@ -107,7 +107,8 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         if request.endDate < request.startDate:
             raise HTTPException(status_code=422, detail="endDate must not be before startDate")
         if request.market == "CRYPTO":
-            requested_seconds = (request.endDate - request.startDate).days * 86_400
+            # Both dates are inclusive: the runner expands endDate to the end of that UTC day.
+            requested_seconds = ((request.endDate - request.startDate).days + 1) * 86_400
             requested_bars = requested_seconds // TIMEFRAME_SECONDS[request.timeframe]
             if requested_bars > MAX_INTERACTIVE_CANDLE_BARS:
                 raise HTTPException(

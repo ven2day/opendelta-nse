@@ -95,27 +95,30 @@ class FakeStrategySources:
 
 
 class ApprovalFakes:
-    def __init__(self, universe_id: str, symbols: list[str]) -> None:
-        self.universe_id, self.symbols_value, self.rows = universe_id, symbols, []
+    def __init__(self, universe_id: str, symbols: list[str], market: str = "NSE") -> None:
+        self.universe_id, self.symbols_value, self.market, self.rows = universe_id, symbols, market, []
         self.deployments = []
         self.configurations = []
 
     def get(self, *args):
         if len(args) == 2:
             return next((item for item in self.rows if item["runId"] == args[0] and item["mode"] == args[1]), None)
-        return {"universeId": self.universe_id, "market": "NSE", "symbols": self.symbols_value}
+        if args[0] != self.universe_id:
+            return next(item for item in self.configurations if item["configId"] == args[0])
+        return {"universeId": self.universe_id, "market": self.market, "symbols": self.symbols_value}
 
     def symbols(self, *_args, **_kwargs):
         return self.symbols_value
 
     def save(self, **values):
         if "run" in values:
-            row = {"runId": values["run"]["runId"], "mode": values["mode"], "approvalId": str(uuid.uuid4())}
+            row = {"runId": values["run"]["runId"], "mode": values["mode"], "approvalId": str(uuid.uuid4()), "configId": values["config_id"]}
             self.rows.append(row)
             return row
         if "configuration" in values:
-            self.configurations.append(values)
-            return {"configId": str(uuid.uuid4()), **values}
+            row = {"configId": str(uuid.uuid4()), "riskSettings": values.pop("risk_settings"), **values}
+            self.configurations.append(row)
+            return row
         self.deployments.append(values)
         return values
 
@@ -172,7 +175,7 @@ class BacktestRouteTests(unittest.TestCase):
         )
         self.assertEqual(record["executionSettings"]["executionTimeframe"], "5m")
 
-    def test_v2_source_is_pinned_and_queued_for_backtest_only(self) -> None:
+    def test_v2_source_is_pinned_backtested_then_approved_for_signals_and_paper(self) -> None:
         sources = FakeStrategySources()
         api = endpoints(create_backtest_router(BacktestServices(
             registry=STRATEGIES, runs=lambda: self.runs, trades=lambda: self.trades,
@@ -189,16 +192,26 @@ class BacktestRouteTests(unittest.TestCase):
 
         self.runs.records[record["runId"]]["status"] = "COMPLETE"
         universe_id = str(uuid.uuid4())
-        fakes = ApprovalFakes(universe_id, record["symbols"])
+        fakes = ApprovalFakes(universe_id, record["symbols"], market="CRYPTO")
         guarded = endpoints(create_backtest_router(BacktestServices(
             registry=STRATEGIES, runs=lambda: self.runs, trades=lambda: self.trades, runner=lambda: self.runner,
             configs=lambda: fakes, deployments=lambda: fakes, universes=lambda: fakes, approvals=lambda: fakes,
             sources=lambda: sources,
         )))
-        with self.assertRaises(HTTPException) as blocked:
-            guarded["POST /v2/backtests/{run_id}/approve"](record["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id))
-        self.assertEqual(blocked.exception.status_code, 409)
-        self.assertIn("live runner phase", blocked.exception.detail)
+        with self.assertRaises(HTTPException) as external:
+            guarded["POST /v2/backtests/{run_id}/approve"](record["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id, signalSource="TRADINGVIEW"))
+        self.assertEqual(external.exception.status_code, 409)
+
+        signals = guarded["POST /v2/backtests/{run_id}/approve"](
+            record["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id)
+        )
+        paper = guarded["POST /v2/backtests/{run_id}/approve"](
+            record["runId"], BacktestApprovalRequest(mode="PAPER", universeId=universe_id)
+        )
+        self.assertEqual(signals["deployment"]["strategy_source_id"], sources.row["sourceId"])
+        self.assertEqual(paper["approval"]["mode"], "PAPER")
+        self.assertEqual(paper["configuration"]["configId"], signals["configuration"]["configId"])
+        self.assertEqual(len(fakes.configurations), 1)
 
     def test_crypto_run_accepts_fractional_lot_quantities(self) -> None:
         record = self._create(
@@ -337,7 +350,7 @@ class BacktestRouteTests(unittest.TestCase):
         self.assertEqual(blocked.exception.status_code, 409)
         approved = api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id))
         self.assertEqual(approved["approval"]["mode"], "SIGNALS")
-        risk = approved["configuration"]["risk_settings"]
+        risk = approved["configuration"]["riskSettings"]
         self.assertNotIn("targetPct", risk)
         self.assertNotIn("batchSize", risk)
         self.assertEqual(risk["stopLossPct"], 1.0)
@@ -348,7 +361,7 @@ class BacktestRouteTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as repeated:
             api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="PAPER", universeId=universe_id, signalSource="TRADINGVIEW"))
         self.assertEqual(repeated.exception.status_code, 409)
-        self.assertEqual(len(fakes.configurations), 2)
+        self.assertEqual(len(fakes.configurations), 1)
         self.assertEqual(len(fakes.deployments), 2)
 
     def test_approval_rejects_a_stale_strategy_version_before_mutation(self) -> None:

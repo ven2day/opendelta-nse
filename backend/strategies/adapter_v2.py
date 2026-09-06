@@ -1,4 +1,4 @@
-"""Backtest-only adapter for an immutable Strategy V2 source snapshot."""
+"""Isolated adapter for an immutable Strategy V2 source snapshot."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 import pandas as pd
 
-from backend.core.models import MarketContext, normalize_candles
+from backend.core.models import MarketContext, SignalDecision, normalize_candles
 from backend.strategies.base import resolve_config
 
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
@@ -24,12 +24,14 @@ def _schema(parameters: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 class StrategyRunnerClient:
-    def __init__(self, socket_path: str, *, timeout_seconds: float = 100.0) -> None:
+    def __init__(self, socket_path: str, *, timeout_seconds: float = 100.0, execution_timeout_seconds: int = 90) -> None:
         self.socket_path = socket_path
         self.timeout_seconds = timeout_seconds
+        self.execution_timeout_seconds = execution_timeout_seconds
 
     def evaluate(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        request = json.dumps(dict(payload), separators=(",", ":"), allow_nan=False).encode() + b"\n"
+        request_payload = {**dict(payload), "timeoutSeconds": self.execution_timeout_seconds}
+        request = json.dumps(request_payload, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(self.timeout_seconds)
             connection.connect(self.socket_path)
@@ -51,7 +53,7 @@ class StrategyRunnerClient:
 
 
 class StrategyV2BacktestAdapter:
-    """Looks like a normal strategy to BacktestEngine, but delegates one symbol at a time."""
+    """Shared V2 strategy contract; all submitted source executes in the isolated runner."""
 
     def __init__(self, source: Mapping[str, Any], client: StrategyRunnerClient) -> None:
         manifest = dict(source["manifest"])
@@ -77,8 +79,10 @@ class StrategyV2BacktestAdapter:
         self.validate_config(config)
         return self._required_history
 
-    def decision_frame(self, candles: pd.DataFrame, context: MarketContext, config: Mapping[str, Any]) -> pd.DataFrame:
+    def _evaluate_rows(self, candles: pd.DataFrame, context: MarketContext, config: Mapping[str, Any]) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
         data = normalize_candles(candles, context.timezone)
+        if data.empty:
+            raise ValueError("Strategy V2 requires at least one completed candle")
         payload = {
             "sourceCode": self.source_code,
             "market": context.market,
@@ -95,6 +99,29 @@ class StrategyV2BacktestAdapter:
         rows = self.client.evaluate(payload).get("rows", [])
         if len(rows) != len(data):
             raise RuntimeError("Strategy V2 runner returned the wrong number of decisions")
+        return data, rows
+
+    def evaluate(self, candles: pd.DataFrame, context: MarketContext, config: Mapping[str, Any]) -> SignalDecision:
+        data, rows = self._evaluate_rows(candles, context, config)
+        row = rows[-1]
+        return SignalDecision(
+            decision=row["decision"],
+            strategy_id=self.strategy_id,
+            strategy_version=self.version,
+            market=context.market,
+            symbol=context.symbol,
+            timeframe=context.timeframe,
+            candle_timestamp=data.index[-1].to_pydatetime(),
+            signal_price=row.get("signalPrice"),
+            target_price=row.get("targetPrice"),
+            stop_price=row.get("stopPrice"),
+            reasons=tuple(row.get("reasons") or ()),
+            indicators=dict(row.get("indicators") or {}),
+            configuration_snapshot=self.resolve(config),
+        )
+
+    def decision_frame(self, candles: pd.DataFrame, context: MarketContext, config: Mapping[str, Any]) -> pd.DataFrame:
+        data, rows = self._evaluate_rows(candles, context, config)
         frame = data.copy()
         frame["Decision"] = [row["decision"] for row in rows]
         frame["SignalPrice"] = [row["signalPrice"] for row in rows]

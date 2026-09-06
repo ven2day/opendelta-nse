@@ -85,7 +85,7 @@ class PlatformRuntime:
         self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
-        self._worker_signatures: dict[str, tuple[str, str | None, str | None, str]] = {}
+        self._worker_signatures: dict[str, tuple[str, str | None, str | None, str, str | None, str]] = {}
         self._brokers: dict[str, PaperBroker] = {}
         self._lock = threading.Lock()
         self.migrated_versions: list[str] = []
@@ -175,6 +175,41 @@ class PlatformRuntime:
         timeframes = list(strategy.supported_timeframes)
         return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "signalSource": "OPENDELTA", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
+    def strategy_for_deployment(self, deployment: Mapping[str, Any]):
+        """Resolve exactly the built-in version or immutable V2 source named by a deployment."""
+        source_id = deployment.get("strategySourceId")
+        if not source_id:
+            strategy = STRATEGIES.get(str(deployment["strategyId"]))
+        else:
+            source = self.strategy_sources().get(str(source_id))
+            if source.get("status", "VALIDATED") != "VALIDATED":
+                raise ValueError("Deployment Strategy V2 source is archived")
+            socket_path = os.environ.get("STRATEGY_V2_RUNNER_SOCKET", "/run/opendelta-strategy/runner.sock")
+            strategy = StrategyV2BacktestAdapter(
+                source,
+                StrategyRunnerClient(socket_path, timeout_seconds=20, execution_timeout_seconds=15),
+            )
+        if (strategy.strategy_id, strategy.version) != (
+            deployment["strategyId"], deployment["strategyVersion"]
+        ):
+            raise ValueError("Deployment strategy identity does not match its pinned implementation")
+        market = deployment.get("market")
+        timeframe = deployment.get("timeframe")
+        if market and market not in strategy.supported_markets:
+            raise ValueError(f"{strategy.strategy_id} does not support {market}")
+        if timeframe and timeframe not in strategy.supported_timeframes:
+            raise ValueError(f"{strategy.strategy_id} does not support the {timeframe} timeframe")
+        return strategy
+
+    def configuration_for_deployment(self, deployment: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Resolve the pinned configuration; active state is only a legacy fallback."""
+        config_id = deployment.get("configId")
+        if config_id:
+            return self.strategy_configs().get(str(config_id))
+        return self.strategy_configs().active(
+            str(deployment["market"]), str(deployment["strategyId"])
+        )
+
     def reconcile_signal_workers(self, market: str) -> None:
         """Apply saved strategy modes immediately without restarting the service."""
         key = market.strip().upper()
@@ -184,7 +219,7 @@ class PlatformRuntime:
         with self._lock:
             existing = {name: worker for name, worker in self._workers.items() if name.startswith(prefix)}
             signatures = dict(self._worker_signatures)
-        stale = [name for name in existing if name not in desired or signatures.get(name) != (desired[name]["mode"], desired[name].get("configId"), desired[name].get("universeId"), desired[name].get("signalSource", "OPENDELTA"))]
+        stale = [name for name in existing if name not in desired or signatures.get(name) != (desired[name]["mode"], desired[name].get("configId"), desired[name].get("universeId"), desired[name].get("signalSource", "OPENDELTA"), desired[name].get("strategySourceId"), desired[name]["strategyVersion"])]
         if set(existing) != set(desired):
             stale = list(existing)
         for name in stale:
@@ -207,6 +242,9 @@ class PlatformRuntime:
                 universe_id=row.get("universeId"),
                 automation_mode=row["mode"],
                 signal_source=row.get("signalSource", "OPENDELTA"),
+                strategy_source_id=row.get("strategySourceId"),
+                strategy_version=row["strategyVersion"],
+                config_id=row.get("configId"),
             )
             if broker is not None:
                 if row["mode"] == "PAPER":
@@ -230,7 +268,7 @@ class PlatformRuntime:
                 worker.configure_market_tracking(symbols=tracked_symbols, listener=forward_market_candle)
             with self._lock:
                 self._workers[name] = worker
-                self._worker_signatures[name] = (row["mode"], row.get("configId"), row.get("universeId"), row.get("signalSource", "OPENDELTA"))
+                self._worker_signatures[name] = (row["mode"], row.get("configId"), row.get("universeId"), row.get("signalSource", "OPENDELTA"), row.get("strategySourceId"), row["strategyVersion"])
             worker.start()
             logger.info("reconciled_live_signal_worker", market=key, strategy=binding.strategy_id, timeframe=binding.timeframe, mode=row["mode"])
 
@@ -254,10 +292,15 @@ class PlatformRuntime:
             return broker
         spec = market_spec(key)
         selected = self.configured_deployments(key)
-        primary = LiveStrategyBinding(selected[0]["strategyId"], selected[0]["timeframe"]) if selected else self.live_bindings(key)[0]
-        strategy = STRATEGIES.get(primary.strategy_id)
-        active = self.strategy_configs().active(spec.market, strategy.strategy_id)
-        risk_settings = dict((active or {}).get("riskSettings") or {})
+        if selected:
+            primary_row = selected[0]
+            primary = LiveStrategyBinding(primary_row["strategyId"], primary_row["timeframe"])
+            strategy = self.strategy_for_deployment(primary_row)
+        else:
+            primary = self.live_bindings(key)[0]
+            strategy = STRATEGIES.get(primary.strategy_id)
+        configured = self.configuration_for_deployment(primary_row) if selected else self.strategy_configs().active(spec.market, strategy.strategy_id)
+        risk_settings = dict((configured or {}).get("riskSettings") or {})
         if primary.timeframe == "1d" and risk_settings.get("priceModel") == "SIGNAL_CLOSE":
             logger.warning(
                 "overriding_signals_close_to_next_open",
@@ -273,7 +316,8 @@ class PlatformRuntime:
 
         def resolve_policy(signal: Mapping[str, Any]) -> ExecutionPolicy:
             strategy_id = str(signal.get("strategyId") or primary.strategy_id)
-            configured = self.strategy_configs().active(spec.market, strategy_id)
+            deployment = self.deployment_status(key, strategy_id)
+            configured = self.configuration_for_deployment(deployment)
             values = dict((configured or {}).get("riskSettings") or {})
             signal_timeframe = str(signal.get("timeframe") or primary.timeframe)
             if signal_timeframe == "1d" and values.get("priceModel") == "SIGNAL_CLOSE":
@@ -330,6 +374,9 @@ class PlatformRuntime:
         universe_id: str | None = None,
         automation_mode: str = "SIGNALS",
         signal_source: str = "OPENDELTA",
+        strategy_source_id: str | None = None,
+        strategy_version: str | None = None,
+        config_id: str | None = None,
     ) -> MarketSignalWorker:
         spec = market_spec(market)
         selected = binding or (
@@ -337,12 +384,22 @@ class PlatformRuntime:
             if strategy_id is not None
             else self.live_bindings(spec.market)[0]
         )
-        strategy = STRATEGIES.get(selected.strategy_id)
+        strategy = self.strategy_for_deployment({
+            "strategyId": selected.strategy_id,
+            "strategyVersion": strategy_version or STRATEGIES.get(selected.strategy_id).version,
+            "strategySourceId": strategy_source_id,
+            "market": spec.market,
+            "timeframe": selected.timeframe,
+        })
         if selected.timeframe not in strategy.supported_timeframes:
             raise ValueError(f"{strategy.strategy_id} does not support the {selected.timeframe} timeframe")
-        active = self.strategy_configs().active(spec.market, strategy.strategy_id)
-        configuration = active["configuration"] if active else {}
-        risk = RiskSettings.from_mapping(active["riskSettings"] if active else None)
+        configured = self.configuration_for_deployment({
+            "market": spec.market,
+            "strategyId": strategy.strategy_id,
+            "configId": config_id,
+        })
+        configuration = configured["configuration"] if configured else {}
+        risk = RiskSettings.from_mapping(configured["riskSettings"] if configured else None)
         engine = SignalEngine(
             market=spec,
             strategy=strategy,

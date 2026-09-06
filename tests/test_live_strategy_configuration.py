@@ -8,9 +8,72 @@ from unittest.mock import patch
 
 from backend.platform_runtime import PlatformRuntime
 from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
+from backend.strategies.adapter_v2 import StrategyV2BacktestAdapter
+from backend.strategies.source_v2 import starter_source, validate_source
 
 
 class LiveStrategyConfigurationTests(unittest.TestCase):
+    def test_runtime_resolves_a_pinned_v2_source_for_live_evaluation(self) -> None:
+        runtime = PlatformRuntime(database=None, candle_sources={})
+        validation = validate_source(starter_source())
+        source = {
+            "sourceId": "00000000-0000-0000-0000-000000000001",
+            "sourceCode": starter_source(),
+            "strategyId": validation.manifest["strategyId"],
+            "strategyVersion": validation.manifest["version"],
+            "manifest": validation.manifest,
+        }
+        repository = SimpleNamespace(get=lambda _source_id: source)
+        deployment = {
+            "strategyId": source["strategyId"], "strategyVersion": source["strategyVersion"],
+            "strategySourceId": source["sourceId"], "timeframe": "5m",
+        }
+        with patch.object(runtime, "strategy_sources", return_value=repository):
+            strategy = runtime.strategy_for_deployment(deployment)
+        self.assertIsInstance(strategy, StrategyV2BacktestAdapter)
+        self.assertEqual(strategy.source_id, source["sourceId"])
+
+    def test_runtime_reconciliation_preserves_the_pinned_v2_identity(self) -> None:
+        runtime = PlatformRuntime(database=None, candle_sources={})
+        deployment = {
+            "strategyId": "my_strategy_v2", "strategyVersion": "2.3.0",
+            "strategySourceId": "00000000-0000-0000-0000-000000000002",
+            "market": "CRYPTO", "timeframe": "15m", "mode": "SIGNALS",
+            "signalSource": "OPENDELTA", "configId": "config", "universeId": "watchlist",
+        }
+        received = {}
+
+        def fake_worker(_market: str, **kwargs):
+            received.update(kwargs)
+            return SimpleNamespace(
+                engine=SimpleNamespace(tracked_symbols=lambda: [], track_market_candle=lambda *_args: None),
+                add_candle_listener=lambda *_args: None,
+                configure_market_tracking=lambda **_kwargs: None,
+                start=lambda: None, stop=lambda: None,
+            )
+
+        with patch.object(runtime, "configured_deployments", return_value=[deployment]), patch.object(
+            runtime, "build_signal_worker", side_effect=fake_worker
+        ):
+            runtime.reconcile_signal_workers("CRYPTO")
+
+        self.assertEqual(received["strategy_source_id"], deployment["strategySourceId"])
+        self.assertEqual(received["strategy_version"], "2.3.0")
+
+    def test_runtime_uses_the_deployment_config_not_the_later_active_config(self) -> None:
+        runtime = PlatformRuntime(database=None, candle_sources={})
+        repository = SimpleNamespace(
+            get=lambda config_id: {"configId": config_id, "configuration": {"threshold": 7}},
+            active=lambda *_args: {"configId": "wrong", "configuration": {"threshold": 99}},
+        )
+        deployment = {"market": "CRYPTO", "strategyId": "my_strategy_v2", "configId": "approved-config"}
+
+        with patch.object(runtime, "strategy_configs", return_value=repository):
+            configured = runtime.configuration_for_deployment(deployment)
+
+        self.assertEqual(configured["configId"], "approved-config")
+        self.assertEqual(configured["configuration"], {"threshold": 7})
+
     def test_nse_defaults_to_the_daily_rsi_swing_strategy(self) -> None:
         self.assertEqual(
             live_strategy_bindings("nse", {}),
@@ -62,17 +125,15 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
             "os.environ",
             {"NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1m"}]'},
             clear=False,
-        ):
-            with self.assertRaisesRegex(ValueError, "does not support"):
-                runtime.live_bindings("NSE")
+        ), self.assertRaisesRegex(ValueError, "does not support"):
+            runtime.live_bindings("NSE")
 
         with patch.dict(
             "os.environ",
             {"NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"4h"}]'},
             clear=False,
-        ):
-            with self.assertRaisesRegex(ValueError, "backtest-only"):
-                runtime.live_bindings("NSE")
+        ), self.assertRaisesRegex(ValueError, "backtest-only"):
+            runtime.live_bindings("NSE")
 
     def test_runtime_starts_every_configured_binding_independently(self) -> None:
         runtime = PlatformRuntime(database=None, candle_sources={})

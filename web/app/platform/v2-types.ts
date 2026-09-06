@@ -117,6 +117,7 @@ export type StrategyDeploymentMode = "OFF" | "SIGNALS" | "PAPER";
 export type StrategySignalSource = "OPENDELTA" | "TRADINGVIEW";
 export type StrategyDeployment = {
   deploymentId?: string | null;
+  strategySourceId?: string | null;
   market: PlatformMarket;
   strategyId: string;
   strategyVersion: string;
@@ -139,7 +140,7 @@ export type TradingViewEvent = {
 };
 export type TradingViewActivityResponse = { events: TradingViewEvent[] };
 export type TradingViewTestResult = { safe: true; ready: boolean; checks: Record<string, boolean>; resolvedSymbol?: string | null; message: string };
-export type BacktestApproval = { approvalId: string; runId: string; mode: "SIGNALS" | "PAPER"; configId: string; universeId: string; signalSource: StrategySignalSource; approvedAt: string };
+export type BacktestApproval = { approvalId: string; runId: string; mode: "SIGNALS" | "PAPER"; configId: string; universeId: string; strategySourceId?: string | null; signalSource: StrategySignalSource; approvedAt: string };
 
 export type StrategySourceManifest = {
   strategyId: string;

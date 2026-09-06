@@ -140,14 +140,15 @@ class StrategyApprovalRepository:
             INSERT INTO strategy_approvals (
                 approval_id, run_id, market, strategy_id, strategy_version, config_id,
                 universe_id, timeframe, mode, signal_source, configuration_snapshot,
-                execution_settings, symbols
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                execution_settings, symbols, strategy_source_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT ON CONSTRAINT strategy_approvals_run_mode DO NOTHING
             RETURNING *
             """,
             (uuid.uuid4(), uuid.UUID(run["runId"]), run["market"], run["strategyId"], run["strategyVersion"],
              uuid.UUID(config_id), uuid.UUID(universe_id), run["timeframe"], mode, signal_source,
-             jsonb(dict(run["configurationSnapshot"])), jsonb(dict(run["executionSettings"])), jsonb(list(run["symbols"]))),
+             jsonb(dict(run["configurationSnapshot"])), jsonb(dict(run["executionSettings"])), jsonb(list(run["symbols"])),
+             uuid.UUID(run["strategySourceId"]) if run.get("strategySourceId") else None),
         )
         if row is None:
             existing = self.get(run["runId"], mode)
@@ -174,6 +175,7 @@ class StrategyApprovalRepository:
             "strategyId": row["strategy_id"], "strategyVersion": row["strategy_version"],
             "configId": str(row["config_id"]), "universeId": str(row["universe_id"]),
             "timeframe": row["timeframe"], "mode": row["mode"], "signalSource": row["signal_source"],
+            "strategySourceId": str(row["strategy_source_id"]) if row.get("strategy_source_id") else None,
             "approvedAt": _iso(row["approved_at"]),
         }
 
@@ -578,6 +580,15 @@ class StrategyConfigRepository:
         row = self.database.fetch_one("SELECT * FROM strategy_configs WHERE market = %s AND strategy_id = %s AND active", (market, strategy_id))
         return _public_config(row) if row else None
 
+    def get(self, config_id: uuid.UUID | str) -> dict[str, Any]:
+        row = self.database.fetch_one(
+            "SELECT * FROM strategy_configs WHERE config_id = %s",
+            (uuid.UUID(str(config_id)),),
+        )
+        if row is None:
+            raise KeyError(f"Strategy configuration {config_id} was not found")
+        return _public_config(row)
+
     def save(self, *, market: str, strategy_id: str, strategy_version: str, name: str, configuration: Mapping[str, Any], risk_settings: Mapping[str, Any], activate: bool) -> dict[str, Any]:
         config_id = uuid.uuid4()
         with self.database.transaction() as connection, connection.cursor() as cursor:
@@ -692,15 +703,16 @@ class StrategyDeploymentRepository:
             rows = self.database.fetch_all("SELECT * FROM strategy_deployments ORDER BY market, strategy_id")
         return [_public_deployment(row) for row in rows]
 
-    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, universe_id: str | None, timeframe: str, mode: str, signal_source: str = "OPENDELTA") -> dict[str, Any]:
+    def save(self, *, market: str, strategy_id: str, strategy_version: str, config_id: str | None, universe_id: str | None, timeframe: str, mode: str, signal_source: str = "OPENDELTA", strategy_source_id: str | None = None) -> dict[str, Any]:
         row = self.database.fetch_one(
             """
-            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode, signal_source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO strategy_deployments (deployment_id, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode, signal_source, strategy_source_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT ON CONSTRAINT strategy_deployments_market_strategy DO UPDATE SET
                 strategy_version = EXCLUDED.strategy_version, config_id = EXCLUDED.config_id,
                 universe_id = EXCLUDED.universe_id, timeframe = EXCLUDED.timeframe,
-                mode = EXCLUDED.mode, signal_source = EXCLUDED.signal_source, updated_at = now()
+                mode = EXCLUDED.mode, signal_source = EXCLUDED.signal_source,
+                strategy_source_id = EXCLUDED.strategy_source_id, updated_at = now()
             RETURNING *
             """,
             (
@@ -708,6 +720,7 @@ class StrategyDeploymentRepository:
                 uuid.UUID(config_id) if config_id else None,
                 uuid.UUID(universe_id) if universe_id else None,
                 timeframe, mode, signal_source,
+                uuid.UUID(strategy_source_id) if strategy_source_id else None,
             ),
         )
         assert row is not None
@@ -725,6 +738,7 @@ def _public_deployment(row: Mapping[str, Any]) -> dict[str, Any]:
         "timeframe": row["timeframe"],
         "mode": row["mode"],
         "signalSource": row.get("signal_source") or "OPENDELTA",
+        "strategySourceId": str(row["strategy_source_id"]) if row.get("strategy_source_id") else None,
         "source": "DATABASE",
         "createdAt": _iso(row["created_at"]),
         "updatedAt": _iso(row["updated_at"]),

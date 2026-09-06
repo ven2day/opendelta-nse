@@ -69,6 +69,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "011_strategy_governance",
                 "012_strategy_sources",
                 "013_strategy_v2_backtests",
+                "014_strategy_v2_live",
             ],
         )
         self.assertEqual(self.database.migrate(), [])

@@ -334,7 +334,7 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.match(proxy, /\{ provider: "OKX", providerSymbol: symbol \}/);
 });
 
-test("Strategy Studio V2 is collapsed and versions Python for isolated backtests", async () => {
+test("Strategy Studio V2 is collapsed and promotion remains backtest-gated", async () => {
   const source = await readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8");
   const schema = await readFile(new URL("../app/platform/schema-form.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className=\{`quant-secondary-disclosure \$\{styles\.studio\}`\}>/);
@@ -342,9 +342,23 @@ test("Strategy Studio V2 is collapsed and versions Python for isolated backtests
   assert.match(source, /aria-label="Strategy V2 Python source"/);
   assert.match(source, /strategy-studio\/validate/);
   assert.match(source, /strategy-studio\/sources/);
-  assert.match(source, /available for isolated backtesting/);
+  assert.match(source, /Backtest it, then approve that exact run for Signals or Paper/);
+  assert.match(source, /Backtest-gated/);
   assert.match(schema, /Array\.isArray\(value\).*integer_array/);
   assert.doesNotMatch(source, /styles\.studio\}`\} open/);
+});
+
+test("completed V2 backtests expose the same ordered approval workflow", async () => {
+  const [source, types] = await Promise.all([
+    readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /run\?\.strategySourceId \? "OPENDELTA"/);
+  assert.match(source, /Approve for Signals/);
+  assert.match(source, /Approve for Paper/);
+  assert.match(source, /immutable V2 source/);
+  assert.doesNotMatch(source, /Promotion to Signals and Paper remains locked/);
+  assert.match(types, /strategySourceId\?: string \| null/);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

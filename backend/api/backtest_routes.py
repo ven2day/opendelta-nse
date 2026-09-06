@@ -22,6 +22,7 @@ from backend.data.repositories import (
     StrategyDeploymentRepository,
 )
 from backend.data.universe_presets import get_universe_preset
+from backend.paper_trading.execution import ExecutionPolicy
 from backend.strategies.registry import StrategyRegistry
 
 MAX_SYMBOLS = 2_000
@@ -179,6 +180,15 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=404, detail="Backtest run or watchlist was not found") from error
         if run["status"] != "COMPLETE":
             raise HTTPException(status_code=409, detail="Only a completed backtest can be approved")
+        try:
+            strategy = services.registry.get(run["strategyId"])
+        except KeyError as error:
+            raise HTTPException(status_code=409, detail="This backtest strategy is no longer registered") from error
+        if run["strategyVersion"] != strategy.version:
+            raise HTTPException(
+                status_code=409,
+                detail="This backtest uses an older strategy version; run a new backtest before approval",
+            )
         if universe["market"] != run["market"]:
             raise HTTPException(status_code=422, detail="The watchlist belongs to a different market")
         approved_symbols = _guard(services.universes).symbols(request.universeId, market=run["market"])  # type: ignore[union-attr]
@@ -186,10 +196,29 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=409, detail="The watchlist must contain exactly the symbols used by this backtest")
         if request.mode == "PAPER" and _guard(services.approvals).get(run_id, "SIGNALS") is None:  # type: ignore[union-attr]
             raise HTTPException(status_code=409, detail="Approve this backtest for Signals before approving Paper")
-        risk = {key: value for key, value in dict(run["executionSettings"]).items() if key != "executionTimeframe"}
+        if _guard(services.approvals).get(run_id, request.mode) is not None:  # type: ignore[union-attr]
+            raise HTTPException(status_code=409, detail=f"This backtest is already approved for {request.mode.title()}")
+
+        configuration = dict(run["configurationSnapshot"])
+        execution = dict(run["executionSettings"])
+        execution.pop("executionTimeframe", None)
+        execution.pop("batchSize", None)  # Backtest persistence tuning, not a paper-execution rule.
+        target_override = execution.pop("targetPct", None)
+        if target_override is not None:
+            if "target_pct" not in strategy.config_schema:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This backtest target override cannot be represented by the live strategy configuration",
+                )
+            configuration["target_pct"] = target_override
+        try:
+            strategy.validate_config(configuration)
+            risk = ExecutionPolicy.from_mapping(execution).public()
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=f"This backtest cannot be promoted: {error}") from error
         config = _guard(services.configs).save(  # type: ignore[union-attr]
             market=run["market"], strategy_id=run["strategyId"], strategy_version=run["strategyVersion"],
-            name=f"Approved {run['strategyId']} {run_id[:8]}", configuration=run["configurationSnapshot"],
+            name=f"Approved {run['strategyId']} {run_id[:8]}", configuration=configuration,
             risk_settings=risk, activate=True,
         )
         deployment = _guard(services.deployments).save(  # type: ignore[union-attr]

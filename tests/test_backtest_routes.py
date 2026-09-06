@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import unittest
 import uuid
+from collections.abc import Callable
 from datetime import date
-from typing import Any, Callable
+from typing import Any
 
-from fastapi import HTTPException
-
-from backend.api.backtest_routes import BacktestApprovalRequest, BacktestCreateRequest, BacktestServices, create_backtest_router
+from backend.api.backtest_routes import (
+    BacktestApprovalRequest,
+    BacktestCreateRequest,
+    BacktestServices,
+    create_backtest_router,
+)
 from backend.api.settings_routes import create_settings_router
 from backend.backtest.engine import BacktestRequest
 from backend.data.database import DatabaseUnavailable
 from backend.data.repositories import BacktestTradeRepository
 from backend.strategies import STRATEGIES
+from fastapi import HTTPException
 
 
 class FakeRuns:
@@ -77,6 +82,7 @@ class ApprovalFakes:
     def __init__(self, universe_id: str, symbols: list[str]) -> None:
         self.universe_id, self.symbols_value, self.rows = universe_id, symbols, []
         self.deployments = []
+        self.configurations = []
 
     def get(self, *args):
         if len(args) == 2:
@@ -92,6 +98,7 @@ class ApprovalFakes:
             self.rows.append(row)
             return row
         if "configuration" in values:
+            self.configurations.append(values)
             return {"configId": str(uuid.uuid4()), **values}
         self.deployments.append(values)
         return values
@@ -252,9 +259,35 @@ class BacktestRouteTests(unittest.TestCase):
         self.assertEqual(blocked.exception.status_code, 409)
         approved = api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id))
         self.assertEqual(approved["approval"]["mode"], "SIGNALS")
+        risk = approved["configuration"]["risk_settings"]
+        self.assertNotIn("targetPct", risk)
+        self.assertNotIn("batchSize", risk)
+        self.assertEqual(risk["stopLossPct"], 1.0)
         paper = api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="PAPER", universeId=universe_id))
         self.assertEqual(paper["approval"]["mode"], "PAPER")
         self.assertEqual(changed, ["NSE", "NSE"])
+
+        with self.assertRaises(HTTPException) as repeated:
+            api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="PAPER", universeId=universe_id, signalSource="TRADINGVIEW"))
+        self.assertEqual(repeated.exception.status_code, 409)
+        self.assertEqual(len(fakes.configurations), 2)
+        self.assertEqual(len(fakes.deployments), 2)
+
+    def test_approval_rejects_a_stale_strategy_version_before_mutation(self) -> None:
+        run = self._create(symbols=["RELIANCE"])
+        self.runs.records[run["runId"]].update(status="COMPLETE", strategyVersion="0.0.0")
+        universe_id = str(uuid.uuid4())
+        fakes = ApprovalFakes(universe_id, run["symbols"])
+        api = endpoints(create_backtest_router(BacktestServices(
+            registry=STRATEGIES, runs=lambda: self.runs, trades=lambda: self.trades, runner=lambda: self.runner,
+            configs=lambda: fakes, deployments=lambda: fakes, universes=lambda: fakes, approvals=lambda: fakes,
+        )))
+
+        with self.assertRaises(HTTPException) as stale:
+            api["POST /v2/backtests/{run_id}/approve"](run["runId"], BacktestApprovalRequest(mode="SIGNALS", universeId=universe_id))
+        self.assertEqual(stale.exception.status_code, 409)
+        self.assertEqual(fakes.configurations, [])
+        self.assertEqual(fakes.deployments, [])
 
 
 class SettingsRouteTests(unittest.TestCase):

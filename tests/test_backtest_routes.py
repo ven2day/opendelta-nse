@@ -171,6 +171,20 @@ class BacktestRouteTests(unittest.TestCase):
         self.assertEqual(submitted.execution.minimum_quantity, 1e-8)
         self.assertEqual(submitted.execution.lot_quantity(0), 0.01)
 
+    def test_crypto_run_rejects_a_range_above_the_interactive_candle_limit(self) -> None:
+        with self.assertRaises(HTTPException) as caught:
+            self._create(
+                market="CRYPTO",
+                strategyId="rsi_dip_ladder_v1",
+                symbols=["BTC-USD"],
+                startDate=date(2026, 6, 8),
+                endDate=date(2026, 9, 6),
+                configuration={},
+            )
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertIn("20,000 bars", caught.exception.detail)
+        self.assertEqual(self.runner.submitted, [])
+
     def test_create_resolves_built_in_universe_to_an_immutable_symbol_snapshot(self) -> None:
         record = self._create(symbols=[], universePresetId="nifty_top_20")
         self.assertEqual(len(record["symbols"]), 20)

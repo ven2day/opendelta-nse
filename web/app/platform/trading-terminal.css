@@ -1008,6 +1008,20 @@
 .research-result-detail dd { color: var(--od-text); font-size: 13px; }
 
 /* Research controls follow the same terminal language. */
+.research-experiment-grid { grid-template-columns: 1.5fr 1.5fr .7fr 1fr 1fr; }
+.research-variant-list, .research-experiment-list { display: grid; gap: 12px; }
+.research-variant, .research-experiment-card { border: 1px solid var(--od-border); border-radius: 8px; background: var(--od-surface-raised); overflow: hidden; }
+.research-variant header, .research-experiment-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--od-border); }
+.research-variant header input { max-width: 320px; font-weight: 650; }
+.research-variant header > div { display: flex; gap: 6px; }
+.research-variant textarea { width: 100%; min-height: 150px; padding: 12px; border: 0; border-radius: 0; font-family: var(--font-mono), monospace; resize: vertical; }
+.research-experiment-card header > div { display: grid; gap: 4px; }
+.research-experiment-card header small, .research-run-grid small { color: var(--od-muted); }
+.research-run-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1px; background: var(--od-border); }
+.research-run-grid > div { display: grid; grid-template-columns: 1fr auto; gap: 5px 10px; padding: 10px 12px; background: var(--od-surface); }
+.research-run-grid small { grid-column: 1 / -1; }
+@media (max-width: 1100px) { .research-experiment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .research-experiment-grid { grid-template-columns: 1fr; } .research-variant header { align-items: stretch; flex-direction: column; } }
 .quant-family-filter button {
   border-color: var(--od-border);
   color: var(--od-muted);

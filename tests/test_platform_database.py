@@ -72,6 +72,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "013_strategy_v2_backtests",
                 "014_strategy_v2_live",
                 "015_indicator_sources",
+                "016_research_experiments",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -92,6 +93,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             "strategy_approvals",
             "strategy_sources",
             "indicator_sources",
+            "research_experiments",
+            "research_variants",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",

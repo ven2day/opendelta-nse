@@ -57,8 +57,8 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-topnav")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
-      await expect(page.locator(".platform-topnav a")).toHaveCount(7);
-      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Indicators", "Signals", "Paper Trading", "Strategies"]);
+      await expect(page.locator(".platform-topnav a")).toHaveCount(8);
+      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Strategies"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
@@ -263,9 +263,9 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
     linkWidths: Array.from(nav.querySelectorAll("a"), (link) => link.getBoundingClientRect().width),
     flexGrow: getComputedStyle(nav).flexGrow,
   }));
-  expect(compactNavigation.width).toBeLessThanOrEqual(310);
+  expect(compactNavigation.width).toBeLessThanOrEqual(350);
   expect(compactNavigation.flexGrow).toBe("0");
-  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40]);
+  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40, 40]);
   const settingsLink = page.getByRole("link", { name: "Strategies", exact: true });
   const collapsedWidth = await settingsLink.evaluate((link) => link.getBoundingClientRect().width);
   await settingsLink.hover();

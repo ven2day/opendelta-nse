@@ -144,12 +144,21 @@ class MarketSignalWorker:
         self._set_state(status="STOPPED", connection="DISCONNECTED", message="Worker stopped")
 
     def run(self) -> None:
-        with ExitStack() as stack:
-            leases = [stack.enter_context(factory()) for factory in self.lease_factories]
-            if any(not getattr(lease, "acquired", True) for lease in leases):
-                self._set_state(status="STANDBY", connection="DISCONNECTED", message="Worker lease is owned elsewhere")
-                return
-            self._run_owned()
+        while not self._stop.is_set():
+            with ExitStack() as stack:
+                leases = [stack.enter_context(factory()) for factory in self.lease_factories]
+                if all(getattr(lease, "acquired", True) for lease in leases):
+                    self._run_owned()
+                    return
+                self._set_state(
+                    status="STANDBY",
+                    connection="DISCONNECTED",
+                    message="Worker lease is owned elsewhere; retrying",
+                )
+            # Blue/green deployments briefly overlap. The replacement worker
+            # must retry after the previous container releases or loses its
+            # lease instead of remaining permanently stopped.
+            self._stop.wait(min(self.closed_poll_seconds, 30.0))
 
     def _run_owned(self) -> None:
         try:

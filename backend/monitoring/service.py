@@ -56,7 +56,11 @@ class MonitoringService:
         unhealthy = repository_status["status"] == "UNAVAILABLE" or any(
             item["severity"] == "CRITICAL" for item in active_alerts
         )
-        degraded = unhealthy or bool(active_alerts)
+        market_data_unavailable = any(
+            item.get("dataFreshness", {}).get("status") in {"STALE", "UNAVAILABLE"}
+            for item in (nse, crypto)
+        )
+        degraded = unhealthy or bool(active_alerts) or market_data_unavailable
         return {
             "overall": "UNHEALTHY" if unhealthy else "DEGRADED" if degraded else "HEALTHY",
             "generatedAt": self.clock().isoformat(),

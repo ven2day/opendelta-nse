@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.collector import IST, DEFAULT_SYMBOLS_FILE, load_symbols
+from backend.collector import DEFAULT_SYMBOLS_FILE, IST, load_symbols
 from backend.observability import get_logger
 from backend.runtime import (
     get_crypto_market_service,
@@ -48,6 +48,19 @@ def _legacy_engine_status_view() -> dict[str, Any]:
     runtime = get_platform_runtime()
     if runtime.database is None:
         return {}
+    workers = runtime.worker_statuses("NSE")
+    if workers:
+        worker = max(
+            workers,
+            key=lambda item: str(item.get("lastCompletedCandle") or ""),
+        )
+        return {
+            "engineStatus": worker.get("status") or "UNAVAILABLE",
+            "connectionStatus": worker.get("connectionStatus"),
+            "dataAgeSeconds": worker.get("dataAgeSeconds"),
+            "lastCompletedCandle": worker.get("lastCompletedCandle"),
+            "marketSession": "OPEN" if _nse_session_is_open() else "CLOSED",
+        }
     row = next(
         (item for item in runtime.engine_status().list() if item["market"] == "NSE"),
         None,
@@ -64,7 +77,23 @@ def _legacy_engine_status_view() -> dict[str, Any]:
 
 
 def _crypto_engine_status_view() -> dict[str, Any]:
-    """Shape the continuously running crypto scanner like platform engine health."""
+    """Prefer the durable signal worker; fall back to the public scanner."""
+    runtime = get_platform_runtime()
+    workers = runtime.worker_statuses("CRYPTO")
+    if workers:
+        worker = max(
+            workers,
+            key=lambda item: str(item.get("lastCompletedCandle") or ""),
+        )
+        return {
+            "engineStatus": str(worker.get("status") or "UNAVAILABLE").upper(),
+            "connectionStatus": worker.get("connectionStatus"),
+            "dataAgeSeconds": worker.get("dataAgeSeconds"),
+            "lastCompletedCandle": worker.get("lastCompletedCandle"),
+            "marketSession": "OPEN_24_7",
+            "configuredInstruments": len(worker.get("symbols") or []),
+            "pollingSeconds": int(worker.get("pollingSeconds") or 60),
+        }
     status = get_crypto_market_service().status()
     last_scan = status.get("lastScan")
     age: float | None = None

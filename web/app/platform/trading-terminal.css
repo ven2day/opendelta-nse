@@ -1043,6 +1043,16 @@
 .research-comparison-inspection pre { max-height: 320px; overflow: auto; }
 .research-walk-comparison .research-comparison-controls { margin-bottom: 10px; }
 .research-walk-comparison .research-comparison-table { min-width: 1500px; }
+.ai-copilot-panel { display: grid; gap: 10px; }
+.ai-copilot-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--od-muted); }
+.ai-copilot-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
+.ai-copilot-instruction { grid-column: 1 / -1; }
+.ai-copilot-instruction textarea { min-height: 76px; resize: vertical; }
+.ai-trade-context > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; padding: 10px; }
+.ai-trade-context label { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--od-muted); }
+.ai-copilot-response { display: grid; gap: 7px; border: 1px solid var(--od-accent); border-radius: 7px; padding: 11px; background: var(--od-accent-soft); }
+.ai-copilot-response > small { color: var(--od-muted); }
+.ai-copilot-response pre { max-height: 420px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .research-parameter-scroll { max-width: 100%; }
 .research-parameter-table { min-width: 1180px; table-layout: fixed; }
 .research-parameter-table th:nth-child(1) { width: 105px; }
@@ -1106,6 +1116,7 @@
 }
 @media (max-width: 640px) {
   .research-experiment-grid, .research-comparison-controls { grid-template-columns: 1fr; }
+  .ai-copilot-grid, .ai-trade-context > div { grid-template-columns: 1fr; }
   .research-variant header, .research-experiment-card > header { align-items: stretch; flex-direction: column; }
   .research-mode-control { width: 100%; }
   .research-mode-control button { flex: 1; }

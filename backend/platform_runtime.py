@@ -16,6 +16,8 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from backend.ai.repository import AICopilotRepository
+from backend.api.ai_copilot_routes import CopilotServices, configured_ai_provider, create_ai_copilot_router
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
 from backend.api.indicator_studio_routes import create_indicator_studio_router
@@ -568,6 +570,9 @@ class PlatformRuntime:
     def walk_forward_validations(self) -> WalkForwardValidationRepository:
         return WalkForwardValidationRepository(self.require_database())
 
+    def ai_copilot_audit(self) -> AICopilotRepository:
+        return AICopilotRepository(self.require_database())
+
     def walk_forward_runner(self) -> WalkForwardJobRunner:
         backtests = self.runner()
         with self._lock:
@@ -734,6 +739,16 @@ def install_platform(
         candle_source=lambda market: runtime.candle_sources[market](),
         clock=runtime.clock,
     ).routes)
+    app.router.routes.extend(create_ai_copilot_router(CopilotServices(
+        audit=runtime.ai_copilot_audit,
+        strategy_sources=runtime.strategy_sources,
+        indicator_sources=runtime.indicator_sources,
+        runs=runtime.runs,
+        trades=runtime.trades,
+        experiments=runtime.research_experiments,
+        walk_forward=runtime.walk_forward_validations,
+        provider=configured_ai_provider,
+    )).routes)
     app.router.routes.extend(
         create_dashboard_router(
             overview=overview or (lambda _market: {}),

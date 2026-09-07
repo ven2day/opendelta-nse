@@ -162,6 +162,20 @@ remains deployment-managed through the existing collector.
 | `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded validation coordinators and durable-run polling cadence |
 | `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | backend-only envelope-encryption key and version; connection mutation fails closed if absent |
 | `EXCHANGE_CREDENTIAL_PREVIOUS_KEYS` | temporary previous-version keyring for controlled re-encryption |
+| `LIVE_TRADING_ENABLED` | global order/cancel mutation gate; default `false` |
+| `LIVE_TRADING_DEPLOYMENT_ALLOWED` | independent deployment-level authority gate; default `false` |
+| `DEPLOYMENT_ENVIRONMENT`, `LIVE_TRADING_ALLOWED_ENVIRONMENTS` | exact environment identity and allowlist; empty means blocked |
+| `LIVE_CONNECTION_MAX_AGE_SECONDS` | freshness limit for private permission tests (default `900`) |
+
+## Live execution boundary
+
+`backend/live` is a separate, fail-closed boundary around the Dhan, OKX and
+VALR order APIs. It does not replace the paper broker or signal engine. The
+service resolves an exact persisted signal and Paper approval, evaluates
+deployment and risk gates, commits an idempotent intent, and only then obtains a
+credential-backed adapter. Provider uncertainty enters reconciliation instead
+of being treated as a failed order. Emergency stops and the explicit state
+machine are persisted by migration `021_live_execution_foundation`.
 
 Example with the daily swing strategy plus a future scalping strategy:
 

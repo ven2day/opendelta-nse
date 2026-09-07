@@ -87,6 +87,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "018_walk_forward_validations",
                 "019_ai_research_copilot",
                 "020_secure_exchange_connections",
+                "021_live_execution_foundation",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -116,6 +117,14 @@ class PlatformDatabaseTests(unittest.TestCase):
             "ai_research_drafts",
             "exchange_connections",
             "exchange_connection_events",
+            "live_risk_policies",
+            "live_deployments",
+            "emergency_stops",
+            "emergency_stop_events",
+            "live_order_intents",
+            "live_order_state_events",
+            "live_order_fills",
+            "live_reconciliation_findings",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -185,19 +194,81 @@ class PlatformDatabaseTests(unittest.TestCase):
         }
         self.assertNotIn("api_key", connection_columns)
         self.assertNotIn("api_secret", connection_columns)
-        self.assertTrue({
-            "credentials_ciphertext", "credentials_nonce", "encrypted_data_key",
-            "data_key_nonce", "master_key_version",
-        } <= connection_columns)
+        self.assertTrue(
+            {
+                "credentials_ciphertext",
+                "credentials_nonce",
+                "encrypted_data_key",
+                "data_key_nonce",
+                "master_key_version",
+            }
+            <= connection_columns
+        )
+        live_intent_columns = {
+            row["column_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'live_order_intents'
+                """
+            )
+        }
+        self.assertTrue(
+            {
+                "idempotency_key",
+                "signal_id",
+                "client_order_id",
+                "provider_order_id",
+                "requested_order",
+                "configuration_snapshot",
+                "execution_settings",
+                "state",
+                "reconciliation_status",
+                "blocked_reasons",
+            }
+            <= live_intent_columns
+        )
+        live_constraints = {
+            row["constraint_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT constraint_name FROM information_schema.table_constraints
+                WHERE table_schema = 'public' AND table_name = 'live_order_intents'
+                """
+            )
+        }
+        self.assertIn("live_order_intents_deployment_signal", live_constraints)
+        self.assertIn("live_order_intents_idempotency_key_key", live_constraints)
+
+    def test_live_risk_policy_constraints_reject_unsafe_limits(self) -> None:
+        with self.assertRaises(CheckViolation):
+            self.database.execute(
+                """
+                INSERT INTO live_risk_policies (
+                    risk_policy_id, name, max_order_value, max_position_value, max_total_exposure,
+                    max_open_positions, max_daily_trades, max_daily_loss, max_price_deviation_pct,
+                    max_signal_age_seconds, max_candle_age_seconds, symbol_allowlist, market_allowlist,
+                    strategy_allowlist, timeframe_allowlist, created_by
+                ) VALUES (%s, 'Unsafe', 0, 1, 1, 1, 1, 1, 1, 60, 60, '[\"TCS\"]', '[\"NSE\"]',
+                    '[\"strategy\"]', '[\"5m\"]', 'test')
+                """,
+                (uuid.uuid4(),),
+            )
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)
         manifest = {
-            "strategyId": "quality_breakout_v2", "name": "Quality Breakout", "version": "1.0.0",
-            "description": "Test source", "supportedMarkets": ["CRYPTO"],
-            "supportedTimeframes": ["5m"], "parameters": {},
+            "strategyId": "quality_breakout_v2",
+            "name": "Quality Breakout",
+            "version": "1.0.0",
+            "description": "Test source",
+            "supportedMarkets": ["CRYPTO"],
+            "supportedTimeframes": ["5m"],
+            "parameters": {},
         }
-        saved = repository.create(source_code="source", code_hash="a" * 64, manifest=manifest, validation={"valid": True})
+        saved = repository.create(
+            source_code="source", code_hash="a" * 64, manifest=manifest, validation={"valid": True}
+        )
         self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
         self.assertEqual(len(repository.list("CRYPTO")), 1)
         self.assertEqual(repository.list("NSE"), [])
@@ -205,11 +276,17 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_indicator_sources_are_immutable_and_archivable(self) -> None:
         repository = IndicatorSourceRepository(self.database)
         manifest = {
-            "indicatorId": "relative_volume", "name": "Relative Volume", "version": "1.0.0",
-            "description": "Test indicator", "parameters": {"length": 20}, "requiredHistory": 20,
+            "indicatorId": "relative_volume",
+            "name": "Relative Volume",
+            "version": "1.0.0",
+            "description": "Test indicator",
+            "parameters": {"length": 20},
+            "requiredHistory": 20,
             "outputs": [{"name": "rvol", "label": "RVOL", "display": "LINE", "pane": "PANEL"}],
         }
-        saved = repository.create(source_code="source", code_hash="b" * 64, manifest=manifest, validation={"valid": True})
+        saved = repository.create(
+            source_code="source", code_hash="b" * 64, manifest=manifest, validation={"valid": True}
+        )
         self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
         self.assertEqual(repository.list(status="VALIDATED")[0]["indicatorId"], "relative_volume")
         archived = repository.archive(saved["sourceId"])
@@ -242,15 +319,46 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertIsNone(duplicate)
 
     def test_strategy_deployment_pins_the_active_configuration(self) -> None:
-        active = StrategyConfigRepository(self.database).save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", name="deployment-test", configuration={"target_pct": 1.0}, risk_settings={"priceModel": "NEXT_OPEN"}, activate=True)
-        universe = SavedUniverseRepository(self.database).save(market="CRYPTO", name="majors", symbols=["BTC-USDT"], manual_includes=["ETH-USDT"], activate=True)
+        active = StrategyConfigRepository(self.database).save(
+            market="CRYPTO",
+            strategy_id="ema_vwap_strong_buy",
+            strategy_version="1.0.0",
+            name="deployment-test",
+            configuration={"target_pct": 1.0},
+            risk_settings={"priceModel": "NEXT_OPEN"},
+            activate=True,
+        )
+        universe = SavedUniverseRepository(self.database).save(
+            market="CRYPTO", name="majors", symbols=["BTC-USDT"], manual_includes=["ETH-USDT"], activate=True
+        )
         deployments = StrategyDeploymentRepository(self.database)
-        paper = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], universe_id=universe["universeId"], timeframe="5m", mode="PAPER", signal_source="TRADINGVIEW")
+        paper = deployments.save(
+            market="CRYPTO",
+            strategy_id="ema_vwap_strong_buy",
+            strategy_version="1.0.0",
+            config_id=active["configId"],
+            universe_id=universe["universeId"],
+            timeframe="5m",
+            mode="PAPER",
+            signal_source="TRADINGVIEW",
+        )
         self.assertEqual((paper["mode"], paper["configId"]), ("PAPER", active["configId"]))
         self.assertEqual(paper["signalSource"], "TRADINGVIEW")
         self.assertEqual(paper["universeId"], universe["universeId"])
-        self.assertEqual(SavedUniverseRepository(self.database).symbols(universe["universeId"], market="CRYPTO"), ["BTC-USDT", "ETH-USDT"])
-        stopped = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], universe_id=universe["universeId"], timeframe="5m", mode="OFF", signal_source="TRADINGVIEW")
+        self.assertEqual(
+            SavedUniverseRepository(self.database).symbols(universe["universeId"], market="CRYPTO"),
+            ["BTC-USDT", "ETH-USDT"],
+        )
+        stopped = deployments.save(
+            market="CRYPTO",
+            strategy_id="ema_vwap_strong_buy",
+            strategy_version="1.0.0",
+            config_id=active["configId"],
+            universe_id=universe["universeId"],
+            timeframe="5m",
+            mode="OFF",
+            signal_source="TRADINGVIEW",
+        )
         self.assertEqual(stopped["deploymentId"], paper["deploymentId"])
         self.assertEqual(deployments.get("CRYPTO", "ema_vwap_strong_buy")["mode"], "OFF")
 
@@ -362,12 +470,21 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_walk_forward_graph_is_atomic_idempotent_and_pins_every_run(self) -> None:
         experiments = ResearchExperimentRepository(self.database)
         experiment, _ = experiments.create_generated(
-            name="Phase 8 candidates", generation_mode="MANUAL", sweep_definitions=[],
-            preview_hash="sha256:" + "c" * 64, idempotency_key="database:phase8:candidates",
-            market="CRYPTO", strategy_id="crypto_pullback_v1", strategy_version="1.0.0",
-            strategy_source_id=None, timeframe="5m", symbols=["BTC-USDT"],
-            start_date=date(2026, 1, 1), end_date=date(2026, 1, 31),
-            universe_id=None, universe_name="Crypto snapshot",
+            name="Phase 8 candidates",
+            generation_mode="MANUAL",
+            sweep_definitions=[],
+            preview_hash="sha256:" + "c" * 64,
+            idempotency_key="database:phase8:candidates",
+            market="CRYPTO",
+            strategy_id="crypto_pullback_v1",
+            strategy_version="1.0.0",
+            strategy_source_id=None,
+            timeframe="5m",
+            symbols=["BTC-USDT"],
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            universe_id=None,
+            universe_name="Crypto snapshot",
             variants=[
                 {"name": "candidate-a", "configuration": {}, "execution": {}},
                 {"name": "candidate-b", "configuration": {}, "execution": {}},
@@ -375,29 +492,55 @@ class PlatformDatabaseTests(unittest.TestCase):
         )
         repository = WalkForwardValidationRepository(self.database)
         common = {
-            "name": "Phase 8 database contract", "mode": "ROLLING", "market": "CRYPTO",
-            "strategy_id": "crypto_pullback_v1", "strategy_version": "1.0.0",
-            "strategy_source_id": None, "timeframe": "5m", "symbols": ["BTC-USDT"],
-            "universe_id": None, "universe_name": "Crypto snapshot",
-            "overall_start_date": date(2026, 1, 1), "overall_end_date": date(2026, 1, 31),
-            "training_window": 5, "testing_window": 2, "step_length": 2, "maximum_folds": 2,
-            "candidate_experiment_id": experiment["experimentId"], "ranking_objective": "NET_PNL",
-            "minimum_required_trades": 1, "transaction_cost_bps": 8, "slippage_bps": 2,
-            "preview_hash": "sha256:" + "d" * 64, "idempotency_key": "database:phase8:validation",
+            "name": "Phase 8 database contract",
+            "mode": "ROLLING",
+            "market": "CRYPTO",
+            "strategy_id": "crypto_pullback_v1",
+            "strategy_version": "1.0.0",
+            "strategy_source_id": None,
+            "timeframe": "5m",
+            "symbols": ["BTC-USDT"],
+            "universe_id": None,
+            "universe_name": "Crypto snapshot",
+            "overall_start_date": date(2026, 1, 1),
+            "overall_end_date": date(2026, 1, 31),
+            "training_window": 5,
+            "testing_window": 2,
+            "step_length": 2,
+            "maximum_folds": 2,
+            "candidate_experiment_id": experiment["experimentId"],
+            "ranking_objective": "NET_PNL",
+            "minimum_required_trades": 1,
+            "transaction_cost_bps": 8,
+            "slippage_bps": 2,
+            "preview_hash": "sha256:" + "d" * 64,
+            "idempotency_key": "database:phase8:validation",
             "workload": {
-                "foldCount": 2, "candidateCount": 2, "childRunCount": 6,
-                "symbolCount": 1, "estimatedSymbolRuns": 6, "estimatedCandleWorkload": 3168,
+                "foldCount": 2,
+                "candidateCount": 2,
+                "childRunCount": 6,
+                "symbolCount": 1,
+                "estimatedSymbolRuns": 6,
+                "estimatedCandleWorkload": 3168,
             },
             "folds": [
                 {
-                    "position": 1, "trainingStart": "2026-01-01", "trainingEnd": "2026-01-05",
-                    "testingStart": "2026-01-06", "testingEnd": "2026-01-07",
-                    "trainingSessions": 5, "testingSessions": 2,
+                    "position": 1,
+                    "trainingStart": "2026-01-01",
+                    "trainingEnd": "2026-01-05",
+                    "testingStart": "2026-01-06",
+                    "testingEnd": "2026-01-07",
+                    "trainingSessions": 5,
+                    "testingSessions": 2,
                 },
                 {
-                    "position": 2, "trainingStart": "2026-01-03", "trainingEnd": "2026-01-07",
-                    "testingStart": "2026-01-08", "testingEnd": "2026-01-09",
-                    "trainingSessions": 5, "testingSessions": 2,
+                    "position": 2,
+                    "trainingStart": "2026-01-03",
+                    "trainingEnd": "2026-01-07",
+                    "testingStart": "2026-01-08",
+                    "testingEnd": "2026-01-09",
+                    "trainingSessions": 5,
+                    "testingSessions": 2,
                 },
             ],
             "candidates": experiment["variants"],
@@ -425,13 +568,22 @@ class PlatformDatabaseTests(unittest.TestCase):
         request_id = uuid.uuid4()
         content = "AI-generated source draft"
         repository.start_request(
-            request_id=request_id, actor=f"database-test-{request_id}", action="DRAFT_STRATEGY",
-            categories=["STRATEGY_SOURCE"], provider="test-provider", model="test-model",
-            input_bytes=120, rate_limit=10,
+            request_id=request_id,
+            actor=f"database-test-{request_id}",
+            action="DRAFT_STRATEGY",
+            categories=["STRATEGY_SOURCE"],
+            provider="test-provider",
+            model="test-model",
+            input_bytes=120,
+            rate_limit=10,
         )
         repository.finish_request(
-            request_id, status="SUCCEEDED", duration_ms=5, output_bytes=len(content.encode()),
-            output_sha256=hashlib.sha256(content.encode()).hexdigest(), usage={"total_tokens": 4},
+            request_id,
+            status="SUCCEEDED",
+            duration_ms=5,
+            output_bytes=len(content.encode()),
+            output_sha256=hashlib.sha256(content.encode()).hexdigest(),
+            usage={"total_tokens": 4},
         )
         request = repository.get_request(request_id)
         self.assertEqual(request["status"], "SUCCEEDED")
@@ -456,8 +608,13 @@ class PlatformDatabaseTests(unittest.TestCase):
         cipher = EnvelopeCipher(MasterKeyring("database-test", {"database-test": secrets.token_bytes(32)}))
         encrypted = cipher.encrypt(str(connection_id), private)
         public = repository.create(
-            connection_id=connection_id, provider="OKX", label="Database test", environment="LIVE",
-            masked_key_identifier=f"••••{private['apiKey'][-4:]}", encrypted=encrypted, actor="database-test",
+            connection_id=connection_id,
+            provider="OKX",
+            label="Database test",
+            environment="LIVE",
+            masked_key_identifier=f"••••{private['apiKey'][-4:]}",
+            encrypted=encrypted,
+            actor="database-test",
         )
         self.assertNotIn(private["apiKey"], str(public))
         self.assertNotIn(private["apiSecret"], str(public))

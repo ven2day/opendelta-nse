@@ -430,6 +430,51 @@ export type ExchangeConnectionsResponse = {
   publicMarketData: Record<string, { available: boolean; requiresPrivateConnection: boolean }>;
 };
 
+export type LiveRiskPolicy = {
+  riskPolicyId: string; name: string; maxOrderValue: string; maxPositionValue: string;
+  maxTotalExposure: string; maxOpenPositions: number; maxDailyTrades: number; maxDailyLoss: string;
+  maxPriceDeviationPct: string; maxSignalAgeSeconds: number; maxCandleAgeSeconds: number;
+  symbolAllowlist: string[]; marketAllowlist: PlatformMarket[]; strategyAllowlist: string[];
+  timeframeAllowlist: string[]; createdAt: string; updatedAt: string;
+};
+
+export type LiveDeployment = {
+  liveDeploymentId: string; provider: "DHAN" | "OKX" | "VALR"; connectionId: string | null;
+  approvalId: string; riskPolicyId: string; market: PlatformMarket; strategyId: string;
+  strategyVersion: string; strategySourceId: string | null; configId: string; universeId: string;
+  timeframe: string; configuration: ConfigValues; execution: ConfigValues;
+  status: "DRAFT" | "ACTIVE" | "DISABLED"; activatedAt: string | null; disabledAt: string | null;
+  createdAt: string; updatedAt: string;
+};
+
+export type EmergencyStop = {
+  emergencyStopId: string; scopeType: "GLOBAL" | "PROVIDER" | "MARKET" | "STRATEGY";
+  scopeKey: string; active: boolean; reason: string; changedBy: string;
+  activatedAt: string; clearedAt: string | null; updatedAt: string;
+};
+
+export type LiveOrderIntent = {
+  intentId: string; idempotencyKey: string; liveDeploymentId: string; signalId: string;
+  provider: "DHAN" | "OKX" | "VALR"; market: PlatformMarket; strategyId: string;
+  strategyVersion: string; symbol: string; clientOrderId: string; providerOrderId: string | null;
+  requestedOrder: Record<string, unknown>; state: string; reconciliationStatus: string;
+  blockedReasons: string[]; lastError: string | null; createdAt: string; updatedAt: string;
+};
+
+export type EligiblePaperApproval = {
+  approvalId: string; runId: string; market: PlatformMarket; strategyId: string;
+  strategyVersion: string; configId: string; universeId: string; timeframe: string;
+  strategySourceId: string | null; approvedAt: string;
+};
+
+export type LiveExecutionStatus = {
+  liveTradingEnabled: boolean; deploymentPermission: boolean; deploymentEnvironment: string;
+  environmentAllowed: boolean; defaultState: string; deployments: LiveDeployment[];
+  riskPolicies: LiveRiskPolicy[]; eligiblePaperApprovals: EligiblePaperApproval[];
+  emergencyStops: EmergencyStop[]; intents: LiveOrderIntent[];
+  cancelAllSupported: false; cancelAllMessage: string;
+};
+
 export type EngineStatus = {
   market?: PlatformMarket | string | null;
   status?: string | null;

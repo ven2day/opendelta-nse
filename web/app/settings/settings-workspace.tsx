@@ -11,6 +11,7 @@ import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, StrategySource, StrategySourcesResponse, StrategySourceTemplate, StrategySourceValidation, TradingViewStatus, TradingViewTestResult, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 import { ExchangeConnectionsPanel } from "./exchange-connections-panel";
+import { LiveExecutionPanel } from "./live-execution-panel";
 import styles from "./settings-workspace.module.css";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
@@ -307,5 +308,6 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
     </Panel>
 
     <ExchangeConnectionsPanel />
+    <LiveExecutionPanel />
   </main>;
 }

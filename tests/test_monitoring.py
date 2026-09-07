@@ -104,7 +104,7 @@ def test_collection_emits_required_conditions_without_credentials() -> None:
 def test_health_is_status_aware_and_includes_durable_surfaces() -> None:
     repository, notifications = FakeRepository(), Notifications()
     payload = service(repository, notifications).health()
-    assert payload["overall"] == "HEALTHY"
+    assert payload["overall"] == "DEGRADED"
     assert payload["strategyRunner"]["available"] is False
     assert payload["workerLeases"][0]["status"] == "EXPIRED"
     assert "queues" in payload and "exchangeConnections" in payload

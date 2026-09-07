@@ -170,6 +170,31 @@ or provider response bodies. Public OKX/VALR market data does not require a
 private connection, and a successful connection test does not enable trading.
 See [credential encryption and rotation](credential-encryption.md).
 
+## Live execution foundation
+
+All endpoints are authenticated V2 routes. There is deliberately no API that
+changes deployment environment variables or bypasses an approval, policy, or
+emergency stop.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/live-execution/status` | Secret-free feature flags, deployment gates, pinned drafts, policies, stops, and the bounded intent ledger. |
+| POST | `/v2/live-execution/risk-policies` | Creates a bounded policy containing every mandatory order, exposure, loss, allowlist, deviation, and freshness limit. |
+| POST | `/v2/live-execution/deployments` | Creates an inactive deployment from an exact Paper approval, risk policy, pinned config/universe/timeframe, and provider connection. |
+| POST | `/v2/live-execution/deployments/{id}/activate` | Requires `ENABLE LIVE <strategyId>` and rechecks all backend gates. |
+| POST | `/v2/live-execution/deployments/{id}/disable` | Requires `DISABLE LIVE`; blocks future intents without cancelling provider orders. |
+| POST | `/v2/live-execution/orders` | Accepts an exact persisted signal and pinned deployment. The server derives the idempotency key, persists the intent first, and either blocks it audibly or submits through the provider adapter. |
+| GET | `/v2/live-execution/orders?limit=` | Bounded intent ledger including blocked, incomplete, unknown, and terminal states. |
+| GET | `/v2/live-execution/orders/{id}` | Exact pinned order intent and reconciliation state. No credentials. |
+| POST | `/v2/live-execution/orders/{id}/cancel` | Exact client-order confirmation; provider mutation remains impossible while server gates are off. |
+| POST | `/v2/live-execution/emergency-stops` | Activates or clears a global/provider/market/strategy stop with an exact confirmation phrase. |
+| POST | `/v2/live-execution/reconciliation/run` | Bounded reconciliation cycle; idle while the global live flag is off. |
+
+The order state machine is `CREATED → BLOCKED | SUBMITTED | ACKNOWLEDGED |
+REJECTED | UNKNOWN`, then explicit partial-fill, fill, cancel-request and cancel
+transitions. A network timeout becomes `UNKNOWN`/`REQUIRED`, never an assumed
+failure. See [live execution safety](live-execution.md).
+
 ## Signals
 
 | Method | Path | Notes |

@@ -97,6 +97,7 @@ test("every unified route requires login and renders one topbar market selector"
   assert.match(settingsHtml, /Strategy control/);
   assert.match(settingsHtml, /Secure exchange connections/);
   assert.match(settingsHtml, /Live trading disabled/);
+  assert.match(settingsHtml, /Live execution foundation/);
   assert.doesNotMatch(settingsHtml, /Global minimum price|Global maximum price/);
   assert.doesNotMatch(settingsHtml, /\/legacy\//, "settings no longer links to retired pages");
 
@@ -510,6 +511,36 @@ test("exchange credentials are write-only, encrypted, confirmation-gated, and ne
   assert.doesNotMatch(routes, /return .*apiSecret|return .*passphrase/);
   assert.match(migration, /credentials_ciphertext bytea/);
   assert.doesNotMatch(migration, /api_secret\s+(?:text|varchar)|api_key\s+(?:text|varchar)/i);
+});
+
+test("live execution is server-gated, idempotent, emergency-stopped, and has no casual order control", async () => {
+  const [panel, routes, service, adapters, migration, env] = await Promise.all([
+    readFile(new URL("../app/settings/live-execution-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/api/live_execution_routes.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/live/service.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/live/adapters.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/data/sql/021_live_execution_foundation.sql", import.meta.url), "utf8"),
+    readFile(new URL("../deploy/opendelta-dhan.env.example", import.meta.url), "utf8"),
+  ]);
+  assert.match(panel, /Live trading disabled/);
+  assert.match(panel, /ACTIVATE EMERGENCY STOP/);
+  assert.match(panel, /ENABLE LIVE \$\{item\.strategyId\}/);
+  assert.doesNotMatch(panel, />Place order<|>Submit order</);
+  assert.match(routes, /APIRouter\(prefix="\/v2\/live-execution"/);
+  assert.match(routes, /@router\.post\("\/orders"/);
+  assert.match(service, /create_intent/);
+  assert.match(service, /idempotency_key/);
+  assert.match(service, /ProviderResponseUncertain/);
+  assert.match(service, /nse_session_is_open/);
+  assert.match(adapters, /class DhanOrderAdapter/);
+  assert.match(adapters, /class OkxOrderAdapter/);
+  assert.match(adapters, /class ValrOrderAdapter/);
+  assert.match(adapters, /ProviderMutationDisabled/);
+  assert.match(migration, /CONSTRAINT live_order_intents_deployment_signal UNIQUE/);
+  assert.match(migration, /'UNKNOWN'/);
+  assert.match(env, /LIVE_TRADING_ENABLED=false/);
+  assert.match(env, /LIVE_TRADING_DEPLOYMENT_ALLOWED=false/);
+  assert.doesNotMatch(routes, /approve|credential.*decrypt/i);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

@@ -144,6 +144,26 @@ application version, and retain both additive connection tables. Do not drop
 encrypted records or audit history. Provider-side keys remain independent and
 must be revoked at the exchange when no longer required.
 
+For Phase 12, apply `021_live_execution_foundation` and deploy with all live
+variables absent or explicitly false. Verify Settings says `Live trading
+disabled`, paper workflows still operate, and a test intent is stored as
+`BLOCKED` without any provider request. Only an owner-controlled deployment may
+set all of the following:
+
+```dotenv
+LIVE_TRADING_ENABLED=false
+LIVE_TRADING_DEPLOYMENT_ALLOWED=false
+DEPLOYMENT_ENVIRONMENT=production
+LIVE_TRADING_ALLOWED_ENVIRONMENTS=
+LIVE_CONNECTION_MAX_AGE_SECONDS=900
+```
+
+No production order is part of deployment verification. Follow the
+[live execution](live-execution.md), [emergency-stop](emergency-stop.md), and
+[reconciliation](reconciliation.md) runbooks. To roll back, activate the global
+emergency stop, set both flags false, disable live deployments, restore the
+Phase 11 images, and retain all additive Phase 12 tables for audit/recovery.
+
 For the NSE daily swing worker, production must have all of the following:
 
 ```dotenv

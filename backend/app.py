@@ -13,7 +13,9 @@ Route surface (legacy research endpoints were retired with their engines):
 * ``/market-symbols/*`` and crypto routes (``markets.crypto.api``)
 * ``/v2/*``                               unified NSE+Crypto platform (``platform_runtime.install_platform``)
 
-The service is paper-only: it has no broker client and cannot place real orders.
+The service remains paper-only by default. Live adapters are present behind
+deployment, environment, governance, risk and emergency-stop gates; provider
+mutation is disabled unless every independent server-side control is enabled.
 """
 
 from __future__ import annotations

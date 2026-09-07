@@ -27,6 +27,7 @@ from backend.api.exchange_connection_routes import (
     install_exchange_connection_validation_handler,
 )
 from backend.api.indicator_studio_routes import create_indicator_studio_router
+from backend.api.live_execution_routes import create_live_execution_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.research_routes import ResearchServices, create_research_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
@@ -66,6 +67,9 @@ from backend.data.repositories import (
     WatchlistProfileRepository,
 )
 from backend.integrations.tradingview import TradingViewIngestionService
+from backend.live.factory import LiveAdapterFactory
+from backend.live.repository import LiveExecutionRepository
+from backend.live.service import LiveExecutionConfig, LiveExecutionService
 from backend.markets.base import CandleSource, market_spec
 from backend.observability import get_logger
 from backend.paper_trading.broker import PaperBroker, PaperRepositories
@@ -585,6 +589,17 @@ class PlatformRuntime:
     def exchange_connections(self) -> ExchangeConnectionRepository:
         return ExchangeConnectionRepository(self.require_database())
 
+    def live_execution(self) -> LiveExecutionService:
+        config = LiveExecutionConfig.from_environment()
+        connections = self.exchange_connections()
+        return LiveExecutionService(
+            LiveExecutionRepository(self.require_database()),
+            adapters=LiveAdapterFactory(connections, config),
+            config=config,
+            dhan_status=dhan_connection_status,
+            clock=self.clock,
+        )
+
     def walk_forward_runner(self) -> WalkForwardJobRunner:
         backtests = self.runner()
         with self._lock:
@@ -772,6 +787,7 @@ def install_platform(
         testers=connection_testers,
         dhan_status=dhan_connection_status,
     )).routes)
+    app.router.routes.extend(create_live_execution_router(runtime.live_execution).routes)
     app.router.routes.extend(
         create_dashboard_router(
             overview=overview or (lambda _market: {}),

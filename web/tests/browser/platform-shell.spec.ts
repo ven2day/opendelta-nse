@@ -363,6 +363,7 @@ test("strategies adds a configured instrument with one compact control", async (
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
     const strategy = { strategyId: "rsi_dip_ladder", name: "RSI Dip Ladder", version: "1.0.0", supportedMarkets: ["CRYPTO"], supportedTimeframes: ["5m"], configSchema: {}, defaults: {} };
+    if (path.endsWith("/live-execution/status")) return route.fulfill({ json: { liveTradingEnabled: false, deploymentPermission: false, deploymentEnvironment: "PRODUCTION", environmentAllowed: false, defaultState: "Live trading disabled", deployments: [], riskPolicies: [], eligiblePaperApprovals: [], emergencyStops: [], intents: [], cancelAllSupported: false, cancelAllMessage: "Existing orders require separate confirmation" } });
     if (path.endsWith("/connections") && method === "GET") return route.fulfill({ json: { encryptionConfigured: true, connections: connection ? [connection] : [], platformConnections: [{ provider: "DHAN", managedBy: "deployment", configured: true, status: "CONFIGURED", message: "Dhan authentication remains deployment managed" }], publicMarketData: { OKX: { available: true, requiresPrivateConnection: false }, VALR: { available: true, requiresPrivateConnection: false } } } });
     if (path.endsWith("/connections") && method === "POST") {
       credentialRequest = route.request().postDataJSON();
@@ -408,6 +409,9 @@ test("strategies adds a configured instrument with one compact control", async (
   await page.getByRole("button", { name: "Test connection" }).click();
   await expect(page.getByText("OKX connection test succeeded")).toBeVisible();
   await expect(page.getByText("Allowed", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Live execution foundation" })).toBeVisible();
+  await expect(page.getByText("Live trading disabled").last()).toBeVisible();
+  await expect(page.getByRole("button", { name: /Place|Submit order/ })).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   const connectionOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(connectionOverflow).toBeLessThanOrEqual(1);

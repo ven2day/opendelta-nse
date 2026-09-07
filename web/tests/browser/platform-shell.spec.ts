@@ -38,7 +38,7 @@ test.beforeEach(async ({ page }) => {
 test("route-aware shell has no duplicate navigation or viewport overflow", async ({ page }) => {
   test.setTimeout(240_000);
   const authenticatedRoutes = [
-    "/", "/screener", "/backtest", "/research", "/indicators", "/signals", "/paper-trading", "/settings",
+    "/", "/screener", "/backtest", "/research", "/indicators", "/signals", "/paper-trading", "/operations", "/settings",
     "/?market=CRYPTO", "/screener?market=CRYPTO", "/backtest?market=CRYPTO", "/research?market=CRYPTO", "/indicators?market=CRYPTO", "/signals?market=CRYPTO", "/paper-trading?market=CRYPTO",
     "/admin",
   ];
@@ -57,8 +57,8 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-topnav")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
-      await expect(page.locator(".platform-topnav a")).toHaveCount(8);
-      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Strategies"]);
+      await expect(page.locator(".platform-topnav a")).toHaveCount(9);
+      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Operations", "Strategies"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
         await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
@@ -342,6 +342,47 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test("operations shows durable health, leases, alerts, audit, and exact timestamps", async ({ page }) => {
+  await page.unroute("**/api/v2/**");
+  let acknowledged = false;
+  await page.route("**/api/v2/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/operations/audit")) return route.fulfill({ json: { items: [{
+      auditId: "audit-1", requestId: "request-1", action: "BACKTEST_CREATED", actorType: "USER",
+      actorId: "researcher", subjectType: "HTTP_RESOURCE", subjectId: "backtests", success: true,
+      details: {}, createdAt: "2026-09-07T12:00:00+00:00",
+    }] } });
+    if (url.pathname.endsWith("/operations/health")) return route.fulfill({ json: {
+      overall: "DEGRADED", generatedAt: "2026-09-07T12:00:00+00:00",
+      marketData: {
+        NSE: { dataFreshness: { status: "FRESH", reason: "MARKET_OPEN" } },
+        CRYPTO: { dataFreshness: { status: "STALE", reason: "MARKET_24_7_DATA_LAGGING" } },
+      },
+      workerLeases: [{ leaseId: "lease-1", workerType: "BACKTEST", taskKey: "run-1", workerIdentity: "bounded-backtest-worker", hostIdentity: "host", processIdentity: "7", ownerFingerprint: "12345678", heartbeatAt: "2026-09-07T11:59:55+00:00", expiresAt: "2026-09-07T12:01:00+00:00", status: "ACTIVE" }],
+      queues: { backtests: { pending: 1, limit: 200 }, research: { pending: 0, limit: 200 }, walkForward: { pending: 0, limit: 20 } },
+      strategyRunner: { available: true, networkless: true, transport: "unix-socket" },
+      exchangeConnections: { dhan: { configured: true, status: "CONNECTED" }, connections: [{ connectionId: "okx", provider: "OKX", status: "CONNECTED", lastTestSuccess: true }] },
+      liveExecution: { defaultState: "Live trading disabled", intents: [], emergencyStops: [] },
+      activeAlerts: [{ alertId: "alert-1", alertType: "STALE_CRYPTO_DATA", severity: "WARNING", source: "market-data", title: "Crypto market data is stale", message: "Freshness lag", status: "OPEN", occurrenceCount: 2, lastSeenAt: "2026-09-07T12:00:00+00:00" }],
+    } });
+    if (url.pathname.endsWith("/operations/alerts/alert-1/acknowledge") && route.request().method() === "POST") {
+      acknowledged = true;
+      return route.fulfill({ json: { alertId: "alert-1", status: "ACKNOWLEDGED" } });
+    }
+    return route.fulfill({ status: 404, json: { detail: "Unexpected operations route" } });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/operations");
+  await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Worker leases" })).toBeVisible();
+  await expect(page.getByText("Crypto market data is stale")).toBeVisible();
+  await expect(page.getByText(/07 Sept? 2026|07 Sep 2026/).first()).toBeVisible();
+  await page.getByRole("button", { name: "Acknowledge" }).click();
+  expect(acknowledged).toBe(true);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test("strategies adds a configured instrument with one compact control", async ({ page }) => {
   await page.unroute("**/api/platform?**");
   await page.unroute("**/api/v2/**");
@@ -527,9 +568,9 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
     linkWidths: Array.from(nav.querySelectorAll("a"), (link) => link.getBoundingClientRect().width),
     flexGrow: getComputedStyle(nav).flexGrow,
   }));
-  expect(compactNavigation.width).toBeLessThanOrEqual(350);
+  expect(compactNavigation.width).toBeLessThanOrEqual(390);
   expect(compactNavigation.flexGrow).toBe("0");
-  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40, 40]);
+  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40, 40, 40]);
   const settingsLink = page.getByRole("link", { name: "Strategies", exact: true });
   const collapsedWidth = await settingsLink.evaluate((link) => link.getBoundingClientRect().width);
   await settingsLink.hover();

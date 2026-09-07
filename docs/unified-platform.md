@@ -217,6 +217,11 @@ Long backtests and screener runs execute as background jobs; the HTTP request
 returns 202 with an id to poll. Run state is durable: runs left QUEUED or
 RUNNING by a previous process are marked INTERRUPTED on startup.
 
+Phase 13 adds the Operations workspace, database-backed worker ownership,
+durable alert lifecycle, provider-neutral notifications, and append-only
+operational audit history. Monitoring observes the existing platform; it does
+not grant approval or execution authority.
+
 ## Tests
 
 `PYTHONPATH=. pytest -q` runs everything; set

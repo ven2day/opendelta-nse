@@ -164,6 +164,13 @@ No production order is part of deployment verification. Follow the
 emergency stop, set both flags false, disable live deployments, restore the
 Phase 11 images, and retain all additive Phase 12 tables for audit/recovery.
 
+For Phase 13, apply `022_production_monitoring` before starting the new image.
+Verify `/operations` and `GET /v2/operations/health`, confirm active workers
+hold current leases, and investigate unexpected critical alerts before
+promotion. `MONITORING_WEBHOOK_URL` is optional and must be HTTPS. Roll back the
+application image without dropping worker lease, alert, notification, or audit
+history tables.
+
 For the NSE daily swing worker, production must have all of the following:
 
 ```dotenv

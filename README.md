@@ -208,6 +208,7 @@ opendelta-nse/
 | `LIVE_TRADING_DEPLOYMENT_ALLOWED` | independent deployment permission required in addition to the global flag |
 | `DEPLOYMENT_ENVIRONMENT`, `LIVE_TRADING_ALLOWED_ENVIRONMENTS` | exact environment identity and explicit live allowlist; blank defaults fail closed |
 | `LIVE_CONNECTION_MAX_AGE_SECONDS` | maximum age of the required successful private permission test (default `900`) |
+| `MONITORING_INTERVAL_SECONDS`, `MONITORING_WEBHOOK_URL` | monitoring cadence and optional backend-only HTTPS alert receiver |
 | `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
 | `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 
@@ -218,6 +219,7 @@ are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 - [Architecture and how to add a strategy](docs/unified-platform.md)
 - [API reference](docs/API.md)
+- [Production monitoring and operations](docs/operations-monitoring.md)
 - [AI Research Copilot safety](docs/ai-copilot.md)
 - [Exchange credential encryption and rotation](docs/credential-encryption.md)
 - [Live execution safety](docs/live-execution.md) · [Emergency stop](docs/emergency-stop.md) · [Reconciliation](docs/reconciliation.md)

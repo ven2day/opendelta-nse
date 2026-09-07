@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Sequence
 
-from backend.markets.crypto.providers import OkxPublicProvider
 from backend.collector import DhanClient, DhanConfig, download_instrument_master, historical_payload_to_frame
-from backend.markets.common import MarketCandle, MarketInstrument
+from backend.data.database import Database
 from backend.data.timescale import (
     BackfillWorker,
     CandleProvider,
@@ -17,7 +16,10 @@ from backend.data.timescale import (
     canonical_candles_from_dhan_frame,
     utc,
 )
-
+from backend.markets.common import MarketCandle, MarketInstrument
+from backend.markets.crypto.providers import OkxPublicProvider
+from backend.monitoring.leases import WorkerLeaseGuard
+from backend.monitoring.repository import MonitoringRepository
 
 DHAN_INTERVALS = {"1m": "1", "5m": "5", "15m": "15", "1h": "60"}
 
@@ -32,7 +34,7 @@ class DhanCanonicalProvider:
         self.symbols_by_security_id = symbols_by_security_id
 
     @classmethod
-    def from_environment(cls) -> "DhanCanonicalProvider":
+    def from_environment(cls) -> DhanCanonicalProvider:
         config = DhanConfig.from_environment()
         return cls(DhanClient(config))
 
@@ -109,7 +111,7 @@ class OkxCanonicalProvider:
         self._instruments: dict[str, MarketInstrument] | None = None
 
     @classmethod
-    def from_environment(cls) -> "OkxCanonicalProvider":
+    def from_environment(cls) -> OkxCanonicalProvider:
         return cls(OkxPublicProvider(base_url=os.environ.get("OKX_PUBLIC_API_URL", "https://www.okx.com")))
 
     def _instrument(self, instrument_id: str) -> MarketInstrument:
@@ -172,16 +174,27 @@ def main() -> None:
     )
     args = parser.parse_args()
     store = TimescaleMarketDataStore(database_url())
+    monitoring_database = Database(database_url(), max_pool_size=2)
     store.open()
+    monitoring_database.open()
     try:
-        worker = BackfillWorker(
-            store,
-            providers_from_environment(args.providers.split(",")),
-            worker_id=os.environ.get("MARKET_DATA_WORKER_ID") or None,
-        )
-        results = worker.run_pending(maximum_chunks=args.maximum_chunks)
+        identity = os.environ.get("MARKET_DATA_WORKER_ID") or "canonical-backfill-worker"
+        with WorkerLeaseGuard(
+            MonitoringRepository(monitoring_database),
+            worker_type="MARKET_DATA",
+            task_key="canonical-backfill",
+            worker_identity=identity,
+            current_task={"providers": args.providers.split(",")},
+        ) as lease:
+            worker = BackfillWorker(
+                store,
+                providers_from_environment(args.providers.split(",")),
+                worker_id=identity,
+            )
+            results = worker.run_pending(maximum_chunks=args.maximum_chunks) if lease.acquired else []
         print(json.dumps({"processedChunks": len(results), "results": results}, separators=(",", ":")))
     finally:
+        monitoring_database.close()
         store.close()
 
 

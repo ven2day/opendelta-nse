@@ -28,6 +28,7 @@ from backend.api.exchange_connection_routes import (
 )
 from backend.api.indicator_studio_routes import create_indicator_studio_router
 from backend.api.live_execution_routes import create_live_execution_router
+from backend.api.monitoring_routes import create_monitoring_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.research_routes import ResearchServices, create_research_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
@@ -71,6 +72,15 @@ from backend.live.factory import LiveAdapterFactory
 from backend.live.repository import LiveExecutionRepository
 from backend.live.service import LiveExecutionConfig, LiveExecutionService
 from backend.markets.base import CandleSource, market_spec
+from backend.monitoring.audit import install_audit_middleware
+from backend.monitoring.leases import WorkerLeaseGroup, WorkerLeaseGuard
+from backend.monitoring.repository import MonitoringRepository
+from backend.monitoring.service import (
+    LiveReconciliationWorker,
+    MonitoringService,
+    MonitoringWorker,
+    strategy_runner_health,
+)
 from backend.observability import get_logger
 from backend.paper_trading.broker import PaperBroker, PaperRepositories
 from backend.paper_trading.execution import ExecutionPolicy
@@ -107,6 +117,9 @@ class PlatformRuntime:
         self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
         self._walk_forward_runner: WalkForwardJobRunner | None = None
+        self._monitoring_service: MonitoringService | None = None
+        self._monitoring_worker: MonitoringWorker | None = None
+        self._reconciliation_worker: LiveReconciliationWorker | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
         self._worker_signatures: dict[str, tuple[str, str | None, str | None, str, str | None, str]] = {}
         self._brokers: dict[str, PaperBroker] = {}
@@ -145,6 +158,10 @@ class PlatformRuntime:
             if stale_screens:
                 logger.warning("marked_stale_screener_runs_failed", count=stale_screens)
             self._start_signal_workers()
+            if self._monitoring_worker is not None:
+                self._monitoring_worker.start()
+            if self._reconciliation_worker is not None:
+                self._reconciliation_worker.start()
         except Exception as error:  # noqa: BLE001 - the platform must degrade to disabled, never crash at startup
             logger.error("platform_database_unavailable", reason=str(error))
             self.disabled_reason = str(error)
@@ -157,6 +174,8 @@ class PlatformRuntime:
         with self._lock:
             runner, self._runner = self._runner, None
             walk_forward, self._walk_forward_runner = self._walk_forward_runner, None
+            monitoring, self._monitoring_worker = self._monitoring_worker, None
+            reconciliation, self._reconciliation_worker = self._reconciliation_worker, None
             workers, self._workers = dict(self._workers), {}
             self._worker_signatures = {}
         for worker in workers.values():
@@ -165,6 +184,10 @@ class PlatformRuntime:
             runner.shutdown()
         if walk_forward is not None:
             walk_forward.shutdown()
+        if monitoring is not None:
+            monitoring.stop()
+        if reconciliation is not None:
+            reconciliation.stop()
         if self._screener is not None:
             self._screener.shutdown()
         if self.database is not None:
@@ -460,7 +483,23 @@ class PlatformRuntime:
             ),
             automation_mode=automation_mode,
             signal_source=signal_source,
+            lease_factories=self._signal_lease_factories(spec.market, selected.worker_key, automation_mode),
         )
+
+    def _signal_lease_factories(
+        self, market: str, worker_key: str, automation_mode: str
+    ) -> list[Callable[[], WorkerLeaseGuard]]:
+        types = ["SIGNAL"] + (["PAPER_EXECUTION"] if automation_mode == "PAPER" else [])
+        return [
+            lambda worker_type=worker_type: WorkerLeaseGuard(
+                self.monitoring_repository(),
+                worker_type=worker_type,
+                task_key=f"{market}:{worker_key}",
+                worker_identity=f"{market.lower()}-{worker_type.lower()}-worker",
+                current_task={"market": market, "workerKey": worker_key},
+            )
+            for worker_type in types
+        ]
 
     def worker_status(self, market: str) -> dict[str, Any] | None:
         statuses = self.worker_statuses(market)
@@ -608,6 +647,13 @@ class PlatformRuntime:
                     self.walk_forward_validations(), backtests,
                     poll_seconds=float(os.environ.get("WALK_FORWARD_POLL_SECONDS", "1")),
                     max_pending=int(os.environ.get("WALK_FORWARD_QUEUE_LIMIT", "20")),
+                    lease_factory=lambda validation_id: WorkerLeaseGuard(
+                        self.monitoring_repository(),
+                        worker_type="WALK_FORWARD",
+                        task_key=validation_id,
+                        worker_identity="walk-forward-coordinator",
+                        current_task={"validationId": validation_id},
+                    ),
                 )
             return self._walk_forward_runner
 
@@ -663,8 +709,33 @@ class PlatformRuntime:
                 self._runner = BacktestJobRunner(
                     self.runs(), self._engine,
                     max_workers=_backtest_workers(), max_pending=_backtest_queue_limit(),
+                    lease_factory=self._backtest_lease,
                 )
             return self._runner
+
+    def _backtest_lease(self, run_id: str) -> WorkerLeaseGroup:
+        monitoring = self.monitoring_repository()
+        guards = [
+            WorkerLeaseGuard(
+                monitoring,
+                worker_type="BACKTEST",
+                task_key=run_id,
+                worker_identity="bounded-backtest-worker",
+                current_task={"runId": run_id},
+            )
+        ]
+        experiment_id = monitoring.research_experiment_for_run(run_id)
+        if experiment_id:
+            guards.append(
+                WorkerLeaseGuard(
+                    monitoring,
+                    worker_type="RESEARCH_EXPERIMENT",
+                    task_key=run_id,
+                    worker_identity="research-experiment-worker",
+                    current_task={"runId": run_id, "experimentId": experiment_id},
+                )
+            )
+        return WorkerLeaseGroup(guards)
 
     def _engine(self, request: BacktestRequest, cancel_event: threading.Event) -> BacktestEngine:
         spec = market_spec(request.market)
@@ -697,6 +768,55 @@ class PlatformRuntime:
             ),
             "signalWorkers": workers,
             "strategies": STRATEGIES.ids(),
+        }
+
+    # ---- durable operational monitoring -----------------------------------------
+
+    def monitoring_repository(self) -> MonitoringRepository:
+        return MonitoringRepository(self.require_database())
+
+    def configure_monitoring(self, overview: Callable[[str], dict[str, Any]]) -> MonitoringService:
+        if self._monitoring_service is not None:
+            return self._monitoring_service
+        repository = self.monitoring_repository()
+        service = MonitoringService(
+            repository,
+            platform_status=self.status,
+            market_overview=overview,
+            connection_status=lambda: {
+                "connections": self.exchange_connections().list(),
+                "dhan": dhan_connection_status(),
+            },
+            live_status=self.live_execution().status,
+            strategy_runner_status=strategy_runner_health,
+            queue_capacity=self.queue_capacity,
+            clock=self.clock,
+        )
+        self._monitoring_service = service
+        self._monitoring_worker = MonitoringWorker(
+            service,
+            interval_seconds=float(os.environ.get("MONITORING_INTERVAL_SECONDS", "30")),
+        )
+        live = self.live_execution()
+        self._reconciliation_worker = LiveReconciliationWorker(
+            repository,
+            reconcile=live.reconcile,
+            enabled=lambda: live.config.live_trading_enabled,
+            interval_seconds=float(os.environ.get("LIVE_RECONCILIATION_INTERVAL_SECONDS", "30")),
+        )
+        return service
+
+    def queue_capacity(self) -> dict[str, Any]:
+        runner = self.runner()
+        walk = self.walk_forward_runner()
+        counts = self.monitoring_repository().queue_counts()
+        return {
+            "backtests": {"pending": runner.pending_count(), "limit": runner.max_pending},
+            "research": {
+                "pending": counts["research"]["queued"] + counts["research"]["running"],
+                "limit": runner.max_pending,
+            },
+            "walkForward": {"pending": len(walk.active_validation_ids()), "limit": walk.max_pending},
         }
 
 
@@ -732,6 +852,7 @@ def _backtest_queue_limit() -> int:
 def install_platform(
     app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[str], dict[str, Any]] | None = None
 ) -> None:
+    overview_service = overview or (lambda _market: {})
     services = BacktestServices(
         registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner,
         configs=runtime.strategy_configs, deployments=runtime.strategy_deployments,
@@ -788,9 +909,13 @@ def install_platform(
         dhan_status=dhan_connection_status,
     )).routes)
     app.router.routes.extend(create_live_execution_router(runtime.live_execution).routes)
+    if runtime.database is not None:
+        runtime.configure_monitoring(overview_service)
+    app.router.routes.extend(create_monitoring_router(lambda: runtime.configure_monitoring(overview_service)).routes)
+    install_audit_middleware(app, runtime.monitoring_repository)
     app.router.routes.extend(
         create_dashboard_router(
-            overview=overview or (lambda _market: {}),
+            overview=overview_service,
             screener_runs=lambda market: ScreenerRunRepository(runtime.require_database()).list(market, limit=1),
             backtest_runs=lambda market: runtime.runs().list(market, limit=5),
             engine_health=lambda market: {

@@ -423,6 +423,27 @@ class LiveExecutionRepository:
             (uuid.uuid4(), uuid.UUID(intent_id) if intent_id else None, provider, finding_type, jsonb(dict(details))),
         )
 
+    def list_findings(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        return [
+            {
+                "findingId": str(row["finding_id"]),
+                "intentId": str(row["intent_id"]) if row.get("intent_id") else None,
+                "provider": row["provider"],
+                "findingType": row["finding_type"],
+                "details": row["details"],
+                "status": row["status"],
+                "detectedAt": row["detected_at"].isoformat(),
+                "resolvedAt": _iso(row.get("resolved_at")),
+            }
+            for row in self.database.fetch_all(
+                """
+                SELECT * FROM live_reconciliation_findings
+                ORDER BY detected_at DESC LIMIT %s
+                """,
+                (min(max(limit, 1), 200),),
+            )
+        ]
+
 
 _ALLOWED_TRANSITIONS = {
     "CREATED": {

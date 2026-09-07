@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LogOut,
   Moon,
+  MonitorCog,
   Radio,
   ScanSearch,
   Settings2,
@@ -42,6 +43,7 @@ export const navigation: NavigationItem[] = [
   { href: "/indicators", label: "Indicators", icon: LineChart, match: (path) => path.startsWith("/indicators") },
   { href: "/signals", label: "Signals", icon: Radio, match: (path) => path.startsWith("/signals") },
   { href: "/paper-trading", label: "Paper Trading", icon: Wallet, match: (path) => path.startsWith("/paper-trading") },
+  { href: "/operations", label: "Operations", icon: MonitorCog, match: (path) => path.startsWith("/operations") },
   { href: "/settings", label: "Strategies", icon: Settings2, match: (path) => path.startsWith("/settings") || path.startsWith("/admin") },
 ];
 

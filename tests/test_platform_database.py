@@ -684,7 +684,10 @@ class PlatformDatabaseTests(unittest.TestCase):
             "SELECT action FROM exchange_connection_events WHERE connection_id = %s ORDER BY event_id",
             (connection_id,),
         )
-        self.assertEqual([event["action"] for event in events], ["ADDED", "TEST_FAILED", "ROTATED", "DELETED"])
+        self.assertEqual(
+            [event["action"] for event in events],
+            ["ADDED", "WITHDRAWAL_PERMISSION", "ROTATED", "DELETED"],
+        )
 
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()

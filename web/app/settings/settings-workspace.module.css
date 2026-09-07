@@ -45,9 +45,10 @@
 .validationList { display: grid; gap: 4px; color: var(--od-muted); font-size: 12px; }
 .validationError { color: var(--od-danger); }
 .sourceHistory { display: grid; gap: 8px; border-top: 1px solid var(--od-border); padding-top: 12px; }
-.sourceRow { display: grid; grid-template-columns: minmax(180px, 1fr) 90px 150px auto; align-items: center; gap: 12px; border: 1px solid var(--od-border); border-radius: 6px; padding: 8px 10px; color: var(--od-text); background: var(--od-surface-raised); }
+.sourceRow { display: grid; grid-template-columns: minmax(180px, 1fr) 90px 150px auto auto; align-items: center; gap: 12px; border: 1px solid var(--od-border); border-radius: 6px; padding: 8px 10px; color: var(--od-text); background: var(--od-surface-raised); }
 .sourceRow > span:first-child { display: grid; gap: 2px; }
 .sourceRow small { color: var(--od-muted); }
+.sourceRow > button { min-height: 32px; white-space: nowrap; }
 
 .instrumentControl {
   display: grid;

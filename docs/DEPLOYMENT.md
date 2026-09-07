@@ -46,6 +46,9 @@ capabilities, a PID limit and a memory limit (`--memory 4g`,
 backtests (default `200`); keep it at least as large as `BACKTEST_WORKERS`.
 Parameter experiments reserve all child queue slots before any experiment rows
 are created. The image copies the legacy modules, `opendelta/` and `backend/`.
+Walk-forward submissions reserve their coordinator slot and every training-run
+queue slot before persistence. Testing runs are queued one fold at a time after
+the corresponding training winner is frozen.
 
 ## Database and migrations
 
@@ -97,6 +100,8 @@ until these are set on `opendelta-backtest.service`:
 | `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to daily `rsi_dip_ladder_v1` |
 | `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | legacy single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
+| `WALK_FORWARD_QUEUE_LIMIT` | bounded queued/running walk-forward coordinators (default `10`) |
+| `WALK_FORWARD_POLL_SECONDS` | durable child-run polling cadence (default `0.5`) |
 
 Suggested order: apply migrations → restart the service → verify
 `GET /v2/dashboard?market=NSE` answers 200 → run a screener and save a universe
@@ -108,6 +113,12 @@ For Phase 7 specifically, build the application images without promoting
 traffic, apply `017_parameter_experiments`, restart and verify the backtest API,
 then promote the dashboard. Roll back the application images without deleting
 the additive migration; completed research child runs remain immutable.
+
+For Phase 8, apply `018_walk_forward_validations` after
+`017_parameter_experiments`, restart the backend, then exercise the preview
+endpoint before promoting the web image. A rollback uses the previous backend
+and web images while retaining the additive tables; do not delete completed
+training or unseen-test child runs.
 
 For the NSE daily swing worker, production must have all of the following:
 

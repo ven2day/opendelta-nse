@@ -22,6 +22,7 @@ import type {
 import {
   EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader,
 } from "../platform/workspace-ui";
+import { WalkForwardSection } from "./walk-forward-section";
 
 const PREVIEW_PAGE_SIZE = 10;
 const MAX_VISIBLE_CURVES = 8;
@@ -468,6 +469,13 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
     <Panel icon={<FlaskConical size={17} />} title="Experiments" description="Queued and running variants use the shared bounded backtest worker pool.">
       {experiments.loading ? <LoadingState label="Loading experiments" /> : experiments.error ? <RequestErrorState error={experiments.error} retry={experiments.reload} /> : !experiments.data?.experiments.length ? <EmptyState title="No research experiments" description="Create controlled variants above." /> : <div className="research-experiment-list">{experiments.data.experiments.map((experiment) => <article key={experiment.experimentId} className="research-experiment-card"><header><div><strong>{experiment.name}</strong><small>{experiment.mode} · {experiment.strategyId} v{experiment.strategyVersion} · {experiment.timeframe} · {experiment.symbolCount} symbols · {experiment.variantCount} variants</small></div><div className="research-card-actions"><StatusBadge tone={tone(experiment.status)}>{experiment.status}</StatusBadge>{experiment.variants.some((variant) => ACTIVE_STATUSES.has(variant.run.status)) && <button type="button" onClick={() => cancelExperiment(experiment.experimentId)}><Square size={12} />Cancel</button>}</div></header><div className="research-status-counts">{Object.entries(experiment.variantStatusCounts).map(([status, count]) => <span key={status}>{status.toLowerCase()} {count}</span>)}</div><div className="research-run-grid">{experiment.variants.map((variant) => <div key={variant.variantId}><span>{variant.name}</span><StatusBadge tone={tone(variant.run.status)}>{variant.run.status}</StatusBadge><small>{shortId(variant.run.runId)} · created {formatDateTime(variant.run.createdAt, market)}</small></div>)}</div></article>)}</div>}
     </Panel>
+
+    <WalkForwardSection
+      market={market}
+      strategies={options.map(({ key, id, sourceId, name: optionName, version, timeframes }) => ({ key, id, sourceId, name: optionName, version, timeframes }))}
+      universes={universeOptions}
+      experiments={experiments.data?.experiments ?? []}
+    />
 
     <Panel icon={<FlaskConical size={17} />} title="Strategy comparison" description="Completed variants are ranked; incomplete, failed and cancelled variants remain visible without a rank.">
       {!experiments.data?.experiments.length ? <EmptyState title="Nothing to compare" description="Create an experiment with two or more variants." /> : <div className="quant-panel-body research-comparison">

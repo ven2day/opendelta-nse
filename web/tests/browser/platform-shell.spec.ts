@@ -205,6 +205,26 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
         variants: variants.map(({ name, configuration, execution }) => ({ name, configuration, execution })), warnings: [],
       } });
     }
+    if (path.endsWith("/research/walk-forward/preview") && request.method() === "POST") {
+      return route.fulfill({ json: {
+        previewHash: `sha256:${"c".repeat(64)}`, name: "Walk-forward validation", mode: "ROLLING",
+        market: "NSE", strategyId: "rsi_dip_ladder_v1", strategyVersion: "1.0.0", strategySourceId: null,
+        timeframe: "5m", universeId: "60000000-0000-4000-8000-000000000001", universeName: "Active NSE",
+        symbols: ["INFY", "TCS"], overallStartDate: "2026-03-01", overallEndDate: "2026-09-01",
+        trainingWindow: 20, testingWindow: 5, step: 5, maximumFolds: 6,
+        candidateExperimentId: experiment.experimentId, rankingObjective: "RETURN_DRAWDOWN",
+        minimumRequiredTrades: 3, transactionCostBps: 11.1, slippageBps: 5,
+        foldCount: 2, candidateCount: 2, childRunCount: 6, symbolCount: 2,
+        estimatedSymbolRuns: 12, estimatedCandleWorkload: 30000,
+        folds: [
+          { position: 1, trainingStart: "2026-03-02", trainingEnd: "2026-03-27", testingStart: "2026-03-30", testingEnd: "2026-04-03", trainingSessions: 20, testingSessions: 5 },
+          { position: 2, trainingStart: "2026-03-09", trainingEnd: "2026-04-03", testingStart: "2026-04-06", testingEnd: "2026-04-10", trainingSessions: 20, testingSessions: 5 },
+        ],
+        candidates: variants.map(({ variantId, position, name, configuration, execution }) => ({ variantId, position, name, configuration, execution })),
+        warnings: [],
+      } });
+    }
+    if (path.endsWith("/research/walk-forward")) return route.fulfill({ json: { validations: [] } });
     if (path.endsWith("/research/experiments")) return route.fulfill({ json: { experiments: [experiment] } });
     const runIndex = runs.findIndex((runId) => path.endsWith(`/backtests/${runId}/trades`));
     if (runIndex >= 0) return route.fulfill({ json: {
@@ -232,7 +252,7 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
 
   const chart = page.getByRole("link", { name: "Chart" }).first();
   await expect(chart).toHaveAttribute("href", `/backtest?market=NSE&runId=${runs[0]}`);
-  await page.getByLabel("Ranking").selectOption("RETURN_DRAWDOWN");
+  await page.getByLabel("Ranking", { exact: true }).selectOption("RETURN_DRAWDOWN");
   await expect(page.getByText("Leader", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Net P&L" }).click();
   await expect(page.getByRole("columnheader", { name: "Net P&L" })).toHaveAttribute("aria-sort", "ascending");
@@ -247,6 +267,17 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   await page.getByRole("button", { name: "Preview experiment" }).click();
   await expect(page.getByText(/20,100 symbol-runs/)).toBeVisible();
   await expect(runButton).toBeDisabled();
+
+  const walkRun = page.getByRole("button", { name: "Run validation" });
+  await expect(walkRun).toBeDisabled();
+  await page.getByRole("button", { name: "Preview walk-forward" }).click();
+  await expect(page.getByRole("heading", { name: "Walk-forward workload preview" })).toBeVisible();
+  await expect(page.getByText("TRAINING").first()).toBeVisible();
+  await expect(page.getByText("UNSEEN TEST").first()).toBeVisible();
+  await expect(walkRun).toBeEnabled();
+  await page.getByLabel("Training sessions").fill("25");
+  await expect(page.getByText(/Preview stale/).last()).toBeVisible();
+  await expect(walkRun).toBeDisabled();
   await expect(page.getByText(/Approve for|Deploy/)).toHaveCount(0);
 
   await page.setViewportSize({ width: 390, height: 844 });

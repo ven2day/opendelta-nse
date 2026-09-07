@@ -26,7 +26,7 @@ from backend.backtest.metrics import MetricsAccumulator
 from backend.backtest.result_writer import ResultWriter
 from backend.core.fifo import FifoInventory, FifoMatch, net_profit_target_price
 from backend.core.models import MarketContext, normalize_candles
-from backend.markets.base import CandleSource, MarketSpec
+from backend.markets.base import CandleSource, FeeModel, Fill, MarketSpec
 from backend.strategies.base import Strategy, decision_frame
 from backend.strategies.lot_policy import PriceBandLadder
 
@@ -72,6 +72,14 @@ EXECUTION_SETTINGS_SCHEMA: dict[str, dict[str, Any]] = {
         "type": "integer", "default": 500, "minimum": 1,
         "label": "Candle batch size",
     },
+    "transactionCostBps": {
+        "type": "number", "default": None, "minimum": 0, "maximum": 10_000,
+        "label": "Transaction cost (bps per side)",
+    },
+    "slippageBps": {
+        "type": "number", "default": None, "minimum": 0, "maximum": 10_000,
+        "label": "Slippage (bps per side)",
+    },
 }
 
 CANCEL_CHECK_BARS = 500
@@ -79,6 +87,32 @@ CANCEL_CHECK_BARS = 500
 
 class BacktestCancelled(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PercentageFeeModel:
+    """Explicit research-only percentage cost model, applied independently per side."""
+
+    transaction_cost_bps: float
+    slippage_bps: float
+
+    def _fill(self, price: float, quantity: float, direction: float) -> Fill:
+        executed = price * (1 + direction * self.slippage_bps / 10_000.0)
+        turnover = executed * quantity
+        return Fill(
+            price=executed,
+            fees=turnover * self.transaction_cost_bps / 10_000.0,
+            slippage=abs(executed - price) * quantity,
+        )
+
+    def buy(self, price: float, quantity: float) -> Fill:
+        return self._fill(price, quantity, 1.0)
+
+    def sell(self, price: float, quantity: float) -> Fill:
+        return self._fill(price, quantity, -1.0)
+
+    def public(self) -> dict[str, float]:
+        return {"transactionCostBps": self.transaction_cost_bps, "slippageBps": self.slippage_bps}
 
 
 @dataclass(frozen=True)
@@ -95,6 +129,8 @@ class ExecutionSettings:
     minimum_quantity: float = 1
     maximum_entries_per_cycle: int = 10
     batch_size: int = 500
+    transaction_cost_bps: float | None = None
+    slippage_bps: float | None = None
     whole_units: bool = True
 
     def validate(self) -> ExecutionSettings:
@@ -119,7 +155,18 @@ class ExecutionSettings:
             raise ValueError("maximum_entries_per_cycle must be between 1 and 100")
         if self.batch_size < 1:
             raise ValueError("batch_size must be positive")
+        if (self.transaction_cost_bps is None) != (self.slippage_bps is None):
+            raise ValueError("transactionCostBps and slippageBps must be provided together")
+        if self.transaction_cost_bps is not None and not 0 <= self.transaction_cost_bps <= 10_000:
+            raise ValueError("transactionCostBps must be between 0 and 10000")
+        if self.slippage_bps is not None and not 0 <= self.slippage_bps <= 10_000:
+            raise ValueError("slippageBps must be between 0 and 10000")
         return self
+
+    def fee_model(self, default: FeeModel) -> FeeModel:
+        if self.transaction_cost_bps is None or self.slippage_bps is None:
+            return default
+        return PercentageFeeModel(self.transaction_cost_bps, self.slippage_bps)
 
     def lot_quantity(self, entry_number: int) -> float | int:
         ratio = self.additional_quantity_pct / 100.0
@@ -145,6 +192,8 @@ class ExecutionSettings:
             "minimumQuantity": self.minimum_quantity,
             "maximumEntriesPerCycle": self.maximum_entries_per_cycle,
             "batchSize": self.batch_size,
+            "transactionCostBps": self.transaction_cost_bps,
+            "slippageBps": self.slippage_bps,
             "wholeUnits": self.whole_units,
         }
 
@@ -160,12 +209,15 @@ class ExecutionSettings:
             "initialQuantity": "initial_quantity", "allowAdditionalBuys": "allow_additional_buys",
             "additionalQuantityPct": "additional_quantity_pct", "additionalSizingMode": "additional_sizing_mode",
             "minimumQuantity": "minimum_quantity", "maximumEntriesPerCycle": "maximum_entries_per_cycle", "batchSize": "batch_size",
+            "transactionCostBps": "transaction_cost_bps", "slippageBps": "slippage_bps",
         }
         kwargs: dict[str, Any] = {"whole_units": whole_units}
         for key, value in (values or {}).items():
+            if key in {"whole_units", "wholeUnits"}:
+                if not isinstance(value, bool) or value != whole_units:
+                    raise ValueError("wholeUnits is determined by the selected market")
+                continue
             name = aliases.get(key, key)
-            if name == "whole_units":
-                raise ValueError("whole_units is determined by the selected market")
             if name not in cls.__dataclass_fields__:
                 raise ValueError(f"Unknown execution setting {key!r}")
             public_name = key if key in EXECUTION_SETTINGS_SCHEMA else next(
@@ -257,11 +309,13 @@ class BacktestEngine:
         self.writer = writer
         self.cancel_event = cancel_event or threading.Event()
         self.progress = progress or (lambda _values: None)
+        self._fees: FeeModel = market.fees
 
     # ---- run -------------------------------------------------------------------
 
     def run(self, request: BacktestRequest) -> dict[str, Any]:
         request.validate()
+        self._fees = request.execution.fee_model(self.market.fees)
         config = self.strategy.resolve(request.configuration) if hasattr(self.strategy, "resolve") else dict(request.configuration)
         self.strategy.validate_config(config)
         metrics = MetricsAccumulator()
@@ -484,7 +538,7 @@ class BacktestEngine:
     def _enter(self, _request, execution, config, _symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, _closes, signal_timestamps, signal_prices, signal_targets, cycle_first_entry_price, current_open_capital, expiry_bar_multiplier=1) -> _Lot | None:
         reference_price = float(opens[bar])
         ladder = PriceBandLadder.from_config(config)
-        indicative_fill_price = self.market.fees.buy(reference_price, 1).price
+        indicative_fill_price = self._fees.buy(reference_price, 1).price
         first_price = cycle_first_entry_price or indicative_fill_price
         # Price-band quantities are NSE share counts. Crypto keeps the RSI/dip
         # ladder but takes quantity from its execution settings.
@@ -493,7 +547,7 @@ class BacktestEngine:
             if ladder and self.market.market == "NSE"
             else execution.lot_quantity(entry_number)
         )
-        fill = self.market.fees.buy(reference_price, quantity)
+        fill = self._fees.buy(reference_price, quantity)
         if ladder is not None and not ladder.within_capital(current_open_capital, fill.price, quantity):
             return None
         entry_price = round(fill.price, 4)
@@ -536,7 +590,7 @@ class BacktestEngine:
             return
         for lot in lots:
             matched = inventory.preview_allocations([lot.quantity])[0]
-            lot.target_price = net_profit_target_price(matched, self.market.fees, lot.target_pct)
+            lot.target_price = net_profit_target_price(matched, self._fees, lot.target_pct)
 
     def _maybe_exit(self, lot: _Lot, bar: int, stamp: datetime, highs, lows, closes) -> tuple[str, float, datetime, int] | None:
         if bar <= lot.entry_bar:
@@ -596,7 +650,7 @@ class BacktestEngine:
                 "holding_minutes": float(holding_bars * bar_minutes),
             }
         status, raw_exit, exit_stamp, exit_bar = closed
-        fill = self.market.fees.sell(raw_exit, lot.quantity)
+        fill = self._fees.sell(raw_exit, lot.quantity)
         exit_price = round(fill.price, 4)
         # Stored fields reconcile exactly: net == gross - fees on the rounded values.
         gross = round((exit_price - cost_basis_price) * lot.quantity, 2)

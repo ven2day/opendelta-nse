@@ -1072,9 +1072,34 @@
 .research-equity-chart > div { display: flex; flex-wrap: wrap; gap: 12px; padding: 6px 14px 2px; color: var(--od-muted); font-size: 11px; }
 .research-equity-chart span { display: inline-flex; align-items: center; gap: 5px; }
 .research-equity-chart i { width: 9px; height: 9px; border-radius: 50%; }
+.research-walk-forward-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.research-walk-preview, .research-walk-results, .research-fold-details { display: grid; gap: 12px; min-width: 0; }
+.research-fold-timeline { display: grid; gap: 6px; }
+.research-fold-timeline > div { display: grid; grid-template-columns: 64px 82px minmax(170px, 1fr) 98px minmax(170px, 1fr); align-items: center; gap: 8px; border: 1px solid var(--od-border); border-radius: 7px; padding: 8px 10px; background: var(--od-surface-raised); font-size: 12px; }
+.research-training-label, .research-unseen-label { display: inline-flex; width: fit-content; border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 850; letter-spacing: .055em; }
+.research-training-label { color: var(--od-accent); background: var(--od-accent-soft); }
+.research-unseen-label { color: var(--od-success); background: var(--od-success-soft); }
+.research-walk-card > header small { color: var(--od-muted); }
+.research-unseen-summary { border-bottom: 1px solid var(--od-border); }
+.research-fold-details { padding: 10px 12px; }
+.research-fold-details > details { border: 1px solid var(--od-border); border-radius: 7px; background: var(--od-surface); overflow: hidden; }
+.research-fold-details > details > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 10px; color: var(--od-muted); font-size: 11px; cursor: pointer; }
+.research-fold-details > details > summary strong { color: var(--od-text); }
+.research-fold-details > details > :not(summary) { margin: 10px; }
+.research-fold-selection { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.research-fold-selection > div { display: grid; gap: 4px; border: 1px solid var(--od-border); border-radius: 6px; padding: 8px; color: var(--od-muted); font-size: 12px; }
+.research-fold-selection strong { color: var(--od-text); }
+.research-fold-details pre { overflow: auto; max-height: 320px; border: 1px solid var(--od-border); border-radius: 6px; padding: 9px; background: var(--od-canvas); font: 11px/1.45 var(--font-jetbrains-mono), monospace; }
 .quant-inline-link { color: var(--od-accent); text-decoration: none; }
 .quant-inline-link:hover { text-decoration: underline; }
-@media (max-width: 1100px) { .research-experiment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) {
+  .research-experiment-grid, .research-walk-forward-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .research-fold-timeline > div { grid-template-columns: 60px 78px minmax(145px, 1fr) 92px minmax(145px, 1fr); }
+}
+@media (max-width: 680px) {
+  .research-walk-forward-grid, .research-fold-selection { grid-template-columns: 1fr; }
+  .research-fold-timeline > div { grid-template-columns: auto 1fr; }
+}
 @media (max-width: 640px) {
   .research-experiment-grid, .research-comparison-controls { grid-template-columns: 1fr; }
   .research-variant header, .research-experiment-card > header { align-items: stretch; flex-direction: column; }

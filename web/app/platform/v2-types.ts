@@ -337,6 +337,38 @@ export type ResearchExperiment = {
 };
 export type ResearchExperimentsResponse = { experiments: ResearchExperiment[] };
 
+export type WalkForwardMode = "ANCHORED" | "ROLLING";
+export type WalkForwardRanking = "NET_PNL" | "RETURN_DRAWDOWN" | "LOWEST_DRAWDOWN" | "HIGHEST_WIN_RATE";
+export type WalkForwardFoldPreview = {
+  position: number; trainingStart: string; trainingEnd: string; testingStart: string; testingEnd: string;
+  trainingSessions: number; testingSessions: number;
+};
+export type WalkForwardPreview = {
+  previewHash: string; name: string; mode: WalkForwardMode; market: PlatformMarket;
+  strategyId: string; strategyVersion: string; strategySourceId?: string | null; timeframe: string;
+  universeId?: string | null; universeName: string; symbols: string[];
+  overallStartDate: string; overallEndDate: string; trainingWindow: number; testingWindow: number;
+  step: number; maximumFolds: number; candidateExperimentId: string; rankingObjective: WalkForwardRanking;
+  minimumRequiredTrades: number; transactionCostBps: number; slippageBps: number;
+  foldCount: number; candidateCount: number; childRunCount: number; symbolCount: number;
+  estimatedSymbolRuns: number; estimatedCandleWorkload: number; folds: WalkForwardFoldPreview[];
+  candidates: Array<{ variantId: string; position: number; name: string; configuration: ConfigValues; execution: ConfigValues }>;
+  warnings: string[];
+};
+export type WalkForwardFold = WalkForwardFoldPreview & {
+  foldId: string; status: string; error?: string | null; selectedVariantId?: string | null;
+  selectedCandidateName?: string | null; selectedConfiguration?: ConfigValues | null;
+  selectedExecution?: ConfigValues | null; trainingRank?: number | null;
+  trainingCandidates: ResearchVariant[]; testRun?: BacktestRun | null; completedAt?: string | null;
+};
+export type WalkForwardValidation = Omit<WalkForwardPreview, "folds" | "candidates" | "warnings"> & {
+  validationId: string; cancelRequested: boolean; status: string;
+  foldStatusCounts: Record<string, number>; childRunStatusCounts: Record<string, number>;
+  aggregateUnseenMetrics?: BacktestMetrics & { netPnl?: number; returnDrawdownScore?: number; failedSymbols?: number } | null;
+  folds: WalkForwardFold[]; createdAt: string; completedAt?: string | null;
+};
+export type WalkForwardValidationsResponse = { validations: WalkForwardValidation[] };
+
 export type EngineStatus = {
   market?: PlatformMarket | string | null;
   status?: string | null;

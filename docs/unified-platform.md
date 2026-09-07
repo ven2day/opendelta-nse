@@ -126,6 +126,12 @@ backtest pool; it does not create a worker or engine per variant. Preview is
 read-only, submission revalidates a deterministic hash, and all related initial
 rows are inserted in one transaction.
 
+The comparison workspace reads those same immutable runs. It shows performance,
+cost, outcome, holding, exposure, and operational-failure metrics without
+hiding non-terminal variants. Walk-forward training and unseen-test rows are
+kept visually and semantically separate. Equity curves are cumulative sums of
+recorded closed-trade P&L and remain user-selectable with stable colours.
+
 ## Runtime flags (all default off / safe)
 
 | Variable | Effect |

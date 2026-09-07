@@ -23,6 +23,7 @@ import {
   EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader,
 } from "../platform/workspace-ui";
 import { WalkForwardSection } from "./walk-forward-section";
+import { WalkForwardComparison } from "./walk-forward-comparison";
 
 const PREVIEW_PAGE_SIZE = 10;
 const MAX_VISIBLE_CURVES = 8;
@@ -61,7 +62,9 @@ type StrategyOption = {
   timeframes: string[]; schema: ConfigSchema;
 };
 type VariantTrades = { variant: ResearchVariant; trades: BacktestTrade[]; total: number };
-type ComparisonSort = "netPnl" | "drawdown" | "winRate" | "costs" | "trades" | "exposure" | "name";
+type ComparisonSort =
+  | "netPnl" | "drawdown" | "winRate" | "costs" | "trades" | "openTrades"
+  | "targets" | "stops" | "expiries" | "holding" | "exposure" | "failedSymbols" | "name";
 type SortDirection = "asc" | "desc";
 type Ranking = "NET_PNL" | "RETURN_DRAWDOWN" | "LOWEST_DRAWDOWN" | "HIGHEST_WIN_RATE" | "NONE";
 
@@ -207,14 +210,22 @@ function ComparisonHeading({ label, column, active, direction, onSort, numeric }
 
 function rowMetrics(row: VariantTrades) {
   const metrics = row.variant.run.metrics ?? {};
-  const exposure = row.trades.reduce((sum, trade) => sum + (trade.holdingMinutes ?? 0), 0);
+  const completed = row.trades.filter((trade) => Boolean(trade.exitTimestamp));
+  const exposure = metrics.exposureMinutes
+    ?? row.trades.reduce((sum, trade) => sum + (trade.holdingMinutes ?? 0), 0);
   const netPnl = (metrics.realizedPnl ?? 0) + (metrics.unrealizedPnl ?? 0);
   const drawdown = metrics.maximumDrawdown ?? 0;
   return {
     netPnl, drawdown, winRate: metrics.winRate ?? -1,
     costs: (metrics.fees ?? 0) + (metrics.slippage ?? 0),
-    trades: metrics.completedTrades ?? row.trades.filter((trade) => Boolean(trade.exitTimestamp)).length,
-    exposure,
+    trades: metrics.completedTrades ?? completed.length,
+    openTrades: metrics.openTrades ?? row.trades.filter((trade) => trade.status === "OPEN").length,
+    targets: metrics.targetHits ?? row.trades.filter((trade) => trade.status === "TARGET_HIT").length,
+    stops: metrics.stoppedTrades ?? row.trades.filter((trade) => trade.status === "STOPPED").length,
+    expiries: metrics.expiredTrades ?? row.trades.filter((trade) => trade.status === "EXPIRED").length,
+    holding: metrics.averageHoldingMinutes
+      ?? (completed.length ? completed.reduce((sum, trade) => sum + (trade.holdingMinutes ?? 0), 0) / completed.length : 0),
+    exposure, failedSymbols: row.variant.run.failedSymbols?.length ?? metrics.symbolsFailed ?? 0,
     returnDrawdown: netPnl / Math.max(Math.abs(drawdown), 1),
   };
 }
@@ -357,6 +368,7 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [ranking, setRanking] = useState<Ranking>("NET_PNL");
   const [selectedCurveIds, setSelectedCurveIds] = useState<string[]>([]);
+  const [inspectedVariantId, setInspectedVariantId] = useState<string | null>(null);
 
   const orderedRows = useMemo(() => {
     const rows = [...(comparisonTrades.data ?? [])];
@@ -385,6 +397,7 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
     return [...complete, ...incomplete];
   }, [comparisonSort, comparisonTrades.data, ranking, sortDirection]);
   const leaderId = orderedRows.find((row) => row.variant.run.status === "COMPLETE")?.variant.variantId;
+  const inspectedVariant = orderedRows.find((row) => row.variant.variantId === inspectedVariantId) ?? null;
   const onComparisonSort = (column: ComparisonSort) => {
     setRanking("NONE");
     if (comparisonSort === column) setSortDirection((value) => value === "asc" ? "desc" : "asc");
@@ -488,17 +501,25 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
             <ComparisonHeading label="Win rate" column="winRate" active={ranking === "NONE" && comparisonSort === "winRate"} direction={sortDirection} onSort={onComparisonSort} numeric />
             <ComparisonHeading label="Costs" column="costs" active={ranking === "NONE" && comparisonSort === "costs"} direction={sortDirection} onSort={onComparisonSort} numeric />
             <ComparisonHeading label="Completed trades" column="trades" active={ranking === "NONE" && comparisonSort === "trades"} direction={sortDirection} onSort={onComparisonSort} numeric />
+            <ComparisonHeading label="Open trades" column="openTrades" active={ranking === "NONE" && comparisonSort === "openTrades"} direction={sortDirection} onSort={onComparisonSort} numeric />
+            <ComparisonHeading label="Target hits" column="targets" active={ranking === "NONE" && comparisonSort === "targets"} direction={sortDirection} onSort={onComparisonSort} numeric />
+            <ComparisonHeading label="Stops" column="stops" active={ranking === "NONE" && comparisonSort === "stops"} direction={sortDirection} onSort={onComparisonSort} numeric />
+            <ComparisonHeading label="Expiries" column="expiries" active={ranking === "NONE" && comparisonSort === "expiries"} direction={sortDirection} onSort={onComparisonSort} numeric />
+            <ComparisonHeading label="Average holding" column="holding" active={ranking === "NONE" && comparisonSort === "holding"} direction={sortDirection} onSort={onComparisonSort} numeric />
             <ComparisonHeading label="Exposure" column="exposure" active={ranking === "NONE" && comparisonSort === "exposure"} direction={sortDirection} onSort={onComparisonSort} numeric />
-            <th className="numeric">Failed symbols</th><th>Inspect</th>
+            <ComparisonHeading label="Failed symbols" column="failedSymbols" active={ranking === "NONE" && comparisonSort === "failedSymbols"} direction={sortDirection} onSort={onComparisonSort} numeric />
+            <th>Inspect</th>
           </tr></thead><tbody>{orderedRows.map((row) => {
             const metrics = rowMetrics(row), complete = row.variant.run.status === "COMPLETE";
-            return <tr key={row.variant.variantId} className={leaderId === row.variant.variantId ? "research-leading-variant" : undefined}><td><strong>{row.variant.name}</strong>{leaderId === row.variant.variantId && <small>Leader</small>}<small>{shortId(row.variant.run.runId)}{ranking === "RETURN_DRAWDOWN" && complete ? ` · score ${metrics.returnDrawdown.toFixed(3)}` : ""}</small></td><td><StatusBadge tone={tone(row.variant.run.status)}>{row.variant.run.status}</StatusBadge></td><td className="numeric">{formatMoney(metrics.netPnl, market)}</td><td className="numeric">{formatMoney(metrics.drawdown, market)}</td><td className="numeric">{metrics.winRate < 0 ? "—" : formatPercent(metrics.winRate, 1)}</td><td className="numeric">{formatMoney(metrics.costs, market)}</td><td className="numeric">{formatInteger(metrics.trades)}</td><td className="numeric">{formatMinutes(metrics.exposure)}</td><td className="numeric">{formatInteger(row.variant.run.failedSymbols?.length ?? 0)}</td><td><a className="quant-inline-link" href={`/backtest?${new URLSearchParams({ market, runId: row.variant.run.runId })}`}>Chart</a></td></tr>;
+            return <tr key={row.variant.variantId} className={leaderId === row.variant.variantId ? "research-leading-variant" : undefined}><td><strong>{row.variant.name}</strong>{leaderId === row.variant.variantId && <small>Leader</small>}<small>{shortId(row.variant.run.runId)}{ranking === "RETURN_DRAWDOWN" && complete ? ` · score ${metrics.returnDrawdown.toFixed(3)}` : ""}</small></td><td><StatusBadge tone={tone(row.variant.run.status)}>{row.variant.run.status}</StatusBadge></td><td className="numeric">{formatMoney(metrics.netPnl, market)}</td><td className="numeric">{formatMoney(metrics.drawdown, market)}</td><td className="numeric">{metrics.winRate < 0 ? "—" : formatPercent(metrics.winRate, 1)}</td><td className="numeric">{formatMoney(metrics.costs, market)}</td><td className="numeric">{formatInteger(metrics.trades)}</td><td className="numeric">{formatInteger(metrics.openTrades)}</td><td className="numeric">{formatInteger(metrics.targets)}</td><td className="numeric">{formatInteger(metrics.stops)}</td><td className="numeric">{formatInteger(metrics.expiries)}</td><td className="numeric">{formatMinutes(metrics.holding)}</td><td className="numeric">{formatMinutes(metrics.exposure)}</td><td className="numeric">{formatInteger(metrics.failedSymbols)}</td><td><div className="quant-row-actions"><button type="button" onClick={() => setInspectedVariantId(row.variant.variantId)}>JSON</button><a className="quant-inline-link" href={`/backtest?${new URLSearchParams({ market, runId: row.variant.run.runId })}`}>Chart</a></div></td></tr>;
           })}</tbody></table></div>
+          {inspectedVariant && <details className="quant-details research-comparison-inspection" open><summary>Exact immutable configuration · {inspectedVariant.variant.name} · run {shortId(inspectedVariant.variant.run.runId)}</summary><pre>{JSON.stringify({ strategy: inspectedVariant.variant.run.configurationSnapshot ?? inspectedVariant.variant.configuration, execution: inspectedVariant.variant.run.executionSettings ?? inspectedVariant.variant.execution }, null, 2)}</pre></details>}
           <p className="quant-inline-note">Return / drawdown score = net P&amp;L ÷ max(|maximum drawdown|, 1). It is not a Sharpe ratio. Exposure is based on recorded trade holding minutes. Failed symbols are operational failures. Rejected trades: unavailable — true rejection analytics require a future decision-event audit model; a strategy emitting no BUY is not a rejection.</p>
           <EquityComparison rows={comparisonTrades.data ?? []} selectedIds={selectedCurveIds} setSelectedIds={setSelectedCurveIds} />
         </>}
       </div>}
     </Panel>
+    <WalkForwardComparison market={market} />
   </main>;
 }
 

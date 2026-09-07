@@ -26,6 +26,7 @@ def test_v2_cutover_contract_reports_every_required_boundary() -> None:
         "live-disabled-default",
         "agent-safety-boundary",
         "strategy-runner-isolation",
+        "obsolete-v1-removal",
     }
 
 

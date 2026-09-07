@@ -88,7 +88,7 @@ from backend.paper_trading.broker import PaperBroker, PaperRepositories
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.research.walk_forward_jobs import WalkForwardJobRunner
 from backend.screener.engine import ScreenerEngine
-from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
+from backend.signals.configuration import LiveStrategyBinding
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
@@ -384,21 +384,6 @@ class PlatformRuntime:
             self._brokers.setdefault(key, broker)
             return self._brokers[key]
 
-    def live_bindings(self, market: str) -> tuple[LiveStrategyBinding, ...]:
-        bindings = live_strategy_bindings(market)
-        spec = market_spec(market)
-        for binding in bindings:
-            strategy = STRATEGIES.get(binding.strategy_id)
-            if spec.market not in strategy.supported_markets:
-                raise ValueError(f"{binding.strategy_id} does not support {spec.market}")
-            if binding.timeframe not in strategy.supported_timeframes:
-                raise ValueError(f"{binding.strategy_id} does not support the {binding.timeframe} timeframe")
-            if spec.market == "NSE" and binding.timeframe == "4h":
-                raise ValueError(
-                    "NSE 4h is currently backtest-only; live use requires session-aligned handling of the shortened closing bar"
-                )
-        return bindings
-
     @staticmethod
     def _worker_key(market: str, binding: LiveStrategyBinding) -> str:
         return f"{market.strip().upper()}:{binding.worker_key}"
@@ -407,9 +392,7 @@ class PlatformRuntime:
         self,
         market: str,
         *,
-        strategy_id: str | None = None,
-        timeframe: str | None = None,
-        binding: LiveStrategyBinding | None = None,
+        binding: LiveStrategyBinding,
         generation_enabled: bool = True,
         universe_id: str | None = None,
         automation_mode: str = "SIGNALS",
@@ -419,11 +402,7 @@ class PlatformRuntime:
         config_id: str | None = None,
     ) -> MarketSignalWorker:
         spec = market_spec(market)
-        selected = binding or (
-            LiveStrategyBinding(strategy_id, timeframe or LIVE_TIMEFRAME)
-            if strategy_id is not None
-            else self.live_bindings(spec.market)[0]
-        )
+        selected = binding
         strategy = self.strategy_for_deployment({
             "strategyId": selected.strategy_id,
             "strategyVersion": strategy_version or STRATEGIES.get(selected.strategy_id).version,

@@ -71,7 +71,7 @@ No production order submission belongs in this verification.
 
 ## Post-cutover cleanup
 
-The follow-up removal release deletes only dead environment parsing and the
-duplicate old Crypto scanner startup hook. Compatibility Crypto APIs, cache
-history and fallback readers remain because the dependency audit classifies
-them `UNCERTAIN` or `KEEP`.
+The removal release deletes only dead environment parsing and the duplicate
+old Crypto scanner startup hook. Compatibility Crypto APIs, cache history and
+fallback readers remain because the dependency audit classifies them
+`UNCERTAIN` or `KEEP`.

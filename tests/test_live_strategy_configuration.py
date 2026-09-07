@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from backend.platform_runtime import PlatformRuntime
-from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
+from backend.signals.configuration import LiveStrategyBinding
 from backend.strategies.adapter_v2 import StrategyV2BacktestAdapter
 from backend.strategies.source_v2 import starter_source, validate_source
 
@@ -74,67 +74,6 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
         self.assertEqual(configured["configId"], "approved-config")
         self.assertEqual(configured["configuration"], {"threshold": 7})
 
-    def test_nse_defaults_to_the_daily_rsi_swing_strategy(self) -> None:
-        self.assertEqual(
-            live_strategy_bindings("nse", {}),
-            (LiveStrategyBinding("rsi_dip_ladder_v1", "1d"),),
-        )
-
-    def test_plural_json_runs_independent_strategy_timeframes(self) -> None:
-        environment = {
-            "NSE_LIVE_STRATEGIES": """
-                [
-                  {"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"},
-                  {"strategyId":"ema_vwap_strong_buy","timeframe":"5m"},
-                  {"strategyId":"disabled","timeframe":"15m","enabled":false}
-                ]
-            """,
-        }
-        self.assertEqual(
-            live_strategy_bindings("NSE", environment),
-            (
-                LiveStrategyBinding("rsi_dip_ladder_v1", "1d"),
-                LiveStrategyBinding("ema_vwap_strong_buy", "5m"),
-            ),
-        )
-
-    def test_legacy_single_strategy_variables_remain_supported(self) -> None:
-        bindings = live_strategy_bindings(
-            "NSE",
-            {"NSE_LIVE_STRATEGY": "ema_vwap_strong_buy", "NSE_LIVE_TIMEFRAME": "15m"},
-        )
-        self.assertEqual(bindings, (LiveStrategyBinding("ema_vwap_strong_buy", "15m"),))
-
-    def test_invalid_and_duplicate_bindings_fail_closed(self) -> None:
-        for raw in ("not json", "[]", '[{"strategyId":"x"}]'):
-            with self.subTest(raw=raw), self.assertRaises(ValueError):
-                live_strategy_bindings("NSE", {"NSE_LIVE_STRATEGIES": raw})
-        duplicate = '[{"strategyId":"x","timeframe":"1d"},{"strategyId":"x","timeframe":"1d"}]'
-        with self.assertRaisesRegex(ValueError, "Duplicate"):
-            live_strategy_bindings("NSE", {"NSE_LIVE_STRATEGIES": duplicate})
-
-    def test_runtime_validates_registry_market_and_timeframe_compatibility(self) -> None:
-        runtime = PlatformRuntime(database=None, candle_sources={})
-        with patch.dict(
-            "os.environ",
-            {"NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"}]'},
-            clear=False,
-        ):
-            self.assertEqual(runtime.live_bindings("NSE")[0].public(), {"strategyId": "rsi_dip_ladder_v1", "timeframe": "1d"})
-        with patch.dict(
-            "os.environ",
-            {"NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1m"}]'},
-            clear=False,
-        ), self.assertRaisesRegex(ValueError, "does not support"):
-            runtime.live_bindings("NSE")
-
-        with patch.dict(
-            "os.environ",
-            {"NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"4h"}]'},
-            clear=False,
-        ), self.assertRaisesRegex(ValueError, "backtest-only"):
-            runtime.live_bindings("NSE")
-
     def test_runtime_starts_only_durable_deployments_independently(self) -> None:
         runtime = PlatformRuntime(database=object(), candle_sources={})
         started: list[tuple[str, str]] = []
@@ -176,15 +115,8 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
     def test_runtime_ignores_environment_activation_without_a_durable_deployment(self) -> None:
         runtime = PlatformRuntime(database=object(), candle_sources={})
         repository = SimpleNamespace(list=lambda _market: [])
-        environment = {
-            "NSE_SIGNAL_ENGINE_V2_ENABLED": "true",
-            "NSE_PAPER_TRADING_V2_ENABLED": "true",
-            "NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"}]',
-        }
 
-        with patch.dict("os.environ", environment, clear=False), patch.object(
-            runtime, "strategy_deployments", return_value=repository
-        ):
+        with patch.object(runtime, "strategy_deployments", return_value=repository):
             self.assertEqual(runtime.configured_deployments("NSE"), [])
 
     def test_runtime_resolves_latest_paper_outcome_for_each_worker_cycle(self) -> None:

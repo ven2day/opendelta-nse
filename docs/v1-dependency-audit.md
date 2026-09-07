@@ -34,9 +34,9 @@ the immutable V2 lifecycle.
 
 | Candidate | Current consumers | V2 replacement | Coverage / migration impact | Risk and recommendation |
 | --- | --- | --- | --- | --- |
-| `*_LIVE_STRATEGY`, `*_LIVE_TIMEFRAME`, `*_LIVE_STRATEGIES`, `*_SIGNAL_ENGINE_V2_ENABLED`, `*_PAPER_TRADING_V2_ENABLED` environment deployment fallbacks | Compatibility parser/tests only after cutover; runtime now reads durable deployments exclusively | Pinned database deployments | deployment/governance tests cover replacement; no schema impact | Low risk after release-note warning. Remove parser, tests and samples in the final cleanup PR. |
-| Startup use of `CRYPTO_SIGNAL_ENGINE_ENABLED` | Starts the older Crypto pullback scanner thread; the data service itself is also used on demand | Durable V2 deployment-backed Crypto signal workers | V2 signal/paper suites and worker lease monitoring; no schema impact | Remove only the duplicate startup hook and deployment setting. Keep CryptoMarketService data methods. |
-| Stale README claims that no live adapter/order path exists and all V2 features default off | Documentation only | Disabled-by-default live foundation and V2-default platform docs | documentation review; no migration | Remove/replace during cutover. |
+| `*_LIVE_STRATEGY`, `*_LIVE_TIMEFRAME`, `*_LIVE_STRATEGIES`, `*_SIGNAL_ENGINE_V2_ENABLED`, `*_PAPER_TRADING_V2_ENABLED` environment deployment fallbacks | None after cleanup | Pinned database deployments | deployment/governance and removal-contract tests; no schema impact | REMOVED: parser, runtime fallback, tests and samples. |
+| Startup use of `CRYPTO_SIGNAL_ENGINE_ENABLED` | None after cleanup; Crypto data methods remain on demand | Durable V2 deployment-backed Crypto signal workers | V2 signal/paper, Crypto provider and removal-contract tests; no schema impact | REMOVED: duplicate scanner startup hook and setting. CryptoMarketService data APIs were kept. |
+| Stale README claims that no live adapter/order path exists and all V2 features default off | None | Disabled-by-default live foundation and V2-default platform docs | documentation review; no migration | REMOVED/replaced during cutover. |
 
 ## UNCERTAIN — requires owner decision
 
@@ -50,7 +50,8 @@ the immutable V2 lifecycle.
 
 ## Safe release policy
 
-The cutover stops obsolete writes/workers before considering data removal. All
+The cutover stopped obsolete writes/workers before the cleanup removed their
+dead parser/settings. All
 historical tables remain intact. Compatibility APIs in `UNCERTAIN` remain
 available but are absent from V2 navigation. A future deletion requires access
 logs, an owner decision, explicit export/retention steps and a separately

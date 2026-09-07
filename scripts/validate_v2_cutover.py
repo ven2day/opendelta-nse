@@ -158,6 +158,35 @@ def _isolated_runner() -> str:
     return "runner service has no network; validator blocks host/network modules"
 
 
+def _obsolete_v1_removed() -> str:
+    files = (
+        ROOT / "backend" / "app.py",
+        ROOT / "backend" / "platform_runtime.py",
+        ROOT / "backend" / "signals" / "configuration.py",
+        ROOT / "web" / "deploy" / "opendelta-backtest.service",
+        ROOT / "web" / "deploy" / "opendelta-dhan.env.example",
+    )
+    retired = (
+        "CRYPTO_SIGNAL_ENGINE_ENABLED",
+        "LIVE_SIGNAL_ENGINE_ENABLED",
+        "RESEARCH_ENGINE_V2_ENABLED",
+        "NSE_SIGNAL_ENGINE_V2_ENABLED",
+        "NSE_PAPER_TRADING_V2_ENABLED",
+        "NSE_LIVE_STRATEGIES",
+        "NSE_LIVE_STRATEGY",
+        "NSE_LIVE_TIMEFRAME",
+        "CRYPTO_SIGNAL_ENGINE_V2_ENABLED",
+        "CRYPTO_PAPER_TRADING_V2_ENABLED",
+        "CRYPTO_LIVE_STRATEGIES",
+        "CRYPTO_LIVE_STRATEGY",
+        "CRYPTO_LIVE_TIMEFRAME",
+    )
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in files)
+    found = [name for name in retired if name in combined]
+    assert not found, f"retired settings remain: {', '.join(found)}"
+    return "dead environment activation and duplicate scanner startup are absent"
+
+
 def collect_checks() -> tuple[ValidationCheck, ...]:
     return tuple(
         _evaluate(name, check)
@@ -170,6 +199,7 @@ def collect_checks() -> tuple[ValidationCheck, ...]:
             ("live-disabled-default", _live_default),
             ("agent-safety-boundary", _agent_boundary),
             ("strategy-runner-isolation", _isolated_runner),
+            ("obsolete-v1-removal", _obsolete_v1_removed),
         )
     )
 

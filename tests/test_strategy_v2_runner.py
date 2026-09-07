@@ -64,6 +64,27 @@ class StrategyV2RunnerTests(unittest.TestCase):
         self.assertEqual([row["decision"] for row in rows], ["NONE", "NONE", "BUY"])
         self.assertEqual(rows[-1]["reasons"], ["IST_SESSION"])
 
+    def test_integer_lookback_one_past_warmup_waits_for_the_next_candle(self) -> None:
+        source = starter_source().replace(
+            '"parameters": {"rsi_length": 14, "rsi_low": 30},',
+            '"parameters": {"rsi_length": 14, "rsi_low": 30},\n    "requiredHistory": 20,',
+        ).replace(
+            'return "HOLD"',
+            'return {"decision": "BUY", "reasons": ["LOOKBACK_READY"]} if close[20] == 120 else "HOLD"',
+        )
+        payload = self.payload(source)
+        payload["candles"] = {
+            "timestamp": [f"2026-09-06T00:{minute:02d}:00Z" for minute in range(21)],
+            "open": list(range(100, 121)), "high": list(range(101, 122)),
+            "low": list(range(99, 120)), "close": list(range(100, 121)),
+            "volume": [10] * 21,
+        }
+
+        rows = evaluate_isolated(payload, timeout_seconds=10)["rows"]
+
+        self.assertEqual(rows[19]["decision"], "NONE")
+        self.assertEqual(rows[20]["decision"], "BUY")
+
     def test_adapter_exposes_the_live_signal_decision_contract(self) -> None:
         source_code = starter_source().replace(
             'return "HOLD"',

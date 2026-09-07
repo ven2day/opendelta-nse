@@ -142,7 +142,19 @@ def evaluate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
             rows.append(_normalise_decision(None, float(frame.iloc[position]["close"]), params))
             continue
         data = SimpleNamespace(candles=frame.iloc[: position + 1], current=frame.iloc[position])
-        rows.append(_normalise_decision(handle_data(context, data), float(frame.iloc[position]["close"]), params))
+        try:
+            decision = handle_data(context, data)
+        except KeyError as error:
+            # A declared warm-up can still be one row shorter than a direct
+            # zero-based lookback (for example requiredHistory=20 with
+            # close[20]). Treat only an out-of-range integer row lookup as
+            # insufficient history; missing candle columns and other keys
+            # remain hard strategy failures.
+            key = error.args[0] if error.args else None
+            if not isinstance(key, int) or -len(data.candles) <= key < len(data.candles):
+                raise
+            decision = None
+        rows.append(_normalise_decision(decision, float(frame.iloc[position]["close"]), params))
     return {"rows": rows}
 
 

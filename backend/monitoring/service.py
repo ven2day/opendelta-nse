@@ -1,4 +1,4 @@
-"""Health aggregation and leased monitoring/reconciliation workers."""
+"""Health aggregation and leased production-monitoring workers."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ class MonitoringService:
         platform_status: Callable[[], Mapping[str, Any]],
         market_overview: Callable[[str], Mapping[str, Any]],
         connection_status: Callable[[], Mapping[str, Any]],
-        live_status: Callable[[], Mapping[str, Any]],
         strategy_runner_status: Callable[[], Mapping[str, Any]],
         queue_capacity: Callable[[], Mapping[str, Any]],
         notifications: NotificationDispatcher | None = None,
@@ -32,7 +31,6 @@ class MonitoringService:
         self.platform_status = platform_status
         self.market_overview = market_overview
         self.connection_status = connection_status
-        self.live_status = live_status
         self.strategy_runner_status = strategy_runner_status
         self.queue_capacity = queue_capacity
         self.notifications = notifications or NotificationDispatcher.from_environment(repository)
@@ -44,7 +42,6 @@ class MonitoringService:
         crypto = _safe_call(lambda: self.market_overview("CRYPTO"))
         platform = _safe_call(self.platform_status)
         connections = _safe_call(self.connection_status)
-        live = _safe_call(self.live_status)
         strategy_runner = _safe_call(self.strategy_runner_status)
         queues = {**self.repository.queue_counts(), **dict(_safe_call(self.queue_capacity))}
         leases = self.repository.leases(limit=200)
@@ -61,8 +58,6 @@ class MonitoringService:
             "queues": queues,
             "strategyRunner": strategy_runner,
             "exchangeConnections": connections,
-            "liveExecution": live,
-            "emergencyStops": live.get("emergencyStops", []) if isinstance(live, Mapping) else [],
             "activeAlerts": active_alerts,
         }
 
@@ -148,8 +143,8 @@ class MonitoringService:
                     alert_type="STRATEGY_RUNNER_UNAVAILABLE",
                     severity="CRITICAL",
                     source="strategy-runner",
-                    title="Strategy V2 runner is unavailable",
-                    message="The isolated Strategy V2 runner socket is unavailable.",
+                    title="Strategy runner is unavailable",
+                    message="The isolated strategy runner socket is unavailable.",
                     context={},
                 )
             )
@@ -170,47 +165,6 @@ class MonitoringService:
                         title=f"{name.title()} queue is near capacity",
                         message=f"{pending} of {limit} bounded queue slots are occupied.",
                         context={"taskKey": name, "pending": pending, "limit": limit},
-                    )
-                )
-
-        live = _safe_call(self.live_status)
-        for intent in live.get("intents", []) if isinstance(live, Mapping) else []:
-            if intent.get("state") == "UNKNOWN":
-                raised.append(
-                    self._alert(
-                        alert_type="UNKNOWN_LIVE_ORDER_STATE",
-                        severity="CRITICAL",
-                        source="live-reconciliation",
-                        title="Live order requires reconciliation",
-                        message="A provider outcome is unknown; no failure assumption was made.",
-                        context={"provider": intent.get("provider"), "taskKey": intent.get("intentId")},
-                    )
-                )
-        for finding in live.get("reconciliationFindings", []) if isinstance(live, Mapping) else []:
-            if finding.get("status") != "RESOLVED" and finding.get("findingType") != "PROVIDER_OUTAGE":
-                raised.append(
-                    self._alert(
-                        alert_type="RECONCILIATION_MISMATCH",
-                        severity="CRITICAL",
-                        source="live-reconciliation",
-                        title="Provider reconciliation mismatch",
-                        message="OpenDelta and provider state require operator review.",
-                        context={
-                            "provider": finding.get("provider"),
-                            "taskKey": finding.get("findingId"),
-                        },
-                    )
-                )
-        for stop in live.get("emergencyStops", []) if isinstance(live, Mapping) else []:
-            if stop.get("active"):
-                raised.append(
-                    self._alert(
-                        alert_type="EMERGENCY_STOP_ACTIVATED",
-                        severity="CRITICAL",
-                        source="live-execution",
-                        title="Emergency stop is active",
-                        message=str(stop.get("reason") or "Live order creation is blocked."),
-                        context={"taskKey": stop.get("stopId"), "scope": stop.get("scopeType")},
                     )
                 )
 
@@ -313,68 +267,6 @@ class MonitoringWorker:
         finally:
             self.service.repository.release_lease(
                 "MONITORING", "health-collection", self.owner_token, error=error
-            )
-
-    def stop(self, timeout: float = 10.0) -> None:
-        self._stop.set()
-        if self._thread and self._thread is not threading.current_thread():
-            self._thread.join(timeout=timeout)
-
-
-class LiveReconciliationWorker:
-    """Lease-protected reconciler; starts only when live mutation is server-enabled."""
-
-    def __init__(
-        self,
-        repository: MonitoringRepository,
-        reconcile: Callable[[], Mapping[str, int]],
-        enabled: Callable[[], bool],
-        *,
-        interval_seconds: float = 30.0,
-    ) -> None:
-        self.repository = repository
-        self.reconcile = reconcile
-        self.enabled = enabled
-        self.interval_seconds = max(5.0, interval_seconds)
-        self.owner_token = str(uuid.uuid4())
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if not self.enabled() or (self._thread and self._thread.is_alive()):
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self.run, name="live-reconciliation", daemon=True)
-        self._thread.start()
-
-    def run(self) -> None:
-        lease = self.repository.acquire_lease(
-            worker_type="LIVE_RECONCILIATION",
-            task_key="provider-orders",
-            worker_identity="live-reconciler",
-            host_identity=socket.gethostname(),
-            process_identity=str(os.getpid()),
-            owner_token=self.owner_token,
-            ttl_seconds=90,
-        )
-        if lease is None:
-            return
-        failure: str | None = None
-        try:
-            while not self._stop.is_set() and self.enabled():
-                try:
-                    self.reconcile()
-                    failure = None
-                    if self.repository.heartbeat(
-                        "LIVE_RECONCILIATION", "provider-orders", self.owner_token, ttl_seconds=90
-                    ) is None:
-                        break
-                except Exception as error:  # noqa: BLE001 - an unknown provider outcome must retry
-                    failure = str(error)[:500]
-                self._stop.wait(self.interval_seconds)
-        finally:
-            self.repository.release_lease(
-                "LIVE_RECONCILIATION", "provider-orders", self.owner_token, error=failure
             )
 
     def stop(self, timeout: float = 10.0) -> None:

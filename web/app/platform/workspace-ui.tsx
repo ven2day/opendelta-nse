@@ -22,7 +22,7 @@ export function EmptyState({ title, description }: { title: string; description:
 
 /** Rendered when the platform answers 503: the unified platform database is not configured on the service. */
 export function UnconfiguredState({ detail }: { detail?: string }) {
-  return <div className="quant-state empty unconfigured" role="status"><DatabaseZap size={22} /><div><strong>Unified platform database not configured</strong><span>{detail || "The v2 platform service has no database configured. Legacy tools remain available from Settings."}</span></div></div>;
+  return <div className="quant-state empty unconfigured" role="status"><DatabaseZap size={22} /><div><strong>Platform database not configured</strong><span>{detail || "The platform service has no database configured. Configure TimescaleDB before using this workspace."}</span></div></div>;
 }
 
 /** Picks the right state for a failed request: configuration problem versus transient error. */

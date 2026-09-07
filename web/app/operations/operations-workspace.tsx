@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, AlertTriangle, BellRing, Database, RefreshCw, ScrollText, Server, ShieldAlert } from "lucide-react";
+import { Activity, AlertTriangle, BellRing, Database, RefreshCw, ScrollText, Server } from "lucide-react";
 import { useCallback, useState } from "react";
 import { formatDateTime, humanize, tone } from "../platform/format";
 import { useV2Resource } from "../platform/use-v2";
@@ -26,7 +26,6 @@ type OperationsHealth = {
   queues: Record<string, { pending?: number; limit?: number; queued?: number; running?: number; active?: number }>;
   strategyRunner: { available?: boolean; networkless?: boolean; transport?: string };
   exchangeConnections: { connections?: Array<{ connectionId: string; provider: string; status: string; lastTestSuccess?: boolean | null }>; dhan?: { configured?: boolean; status?: string } };
-  liveExecution: { defaultState?: string; intents?: Array<{ state: string; reconciliationStatus?: string }>; emergencyStops?: Array<{ stopId: string; scopeType: string; reason: string; active: boolean; activatedAt: string }> };
   activeAlerts: Alert[];
 };
 
@@ -65,13 +64,13 @@ export function OperationsWorkspace() {
   };
 
   return <main className="quant-workspace quant-operations-workspace">
-    <WorkspaceHeader eyebrow="Production observability" title="Operations" description="Durable health, lease ownership, alerts, reconciliation and secret-free audit history." actions={<button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button>} />
+    <WorkspaceHeader eyebrow="Production observability" title="Operations" description="Durable health, lease ownership, alerts and secret-free audit history for signals and paper trading." actions={<button type="button" onClick={refresh}><RefreshCw size={15} />Refresh</button>} />
     {loading ? <LoadingState label="Loading operational health" /> : error ? <RequestErrorState error={error} retry={reload} /> : data && <>
       <section className="quant-overview-strip" aria-label="Operational health summary">
         <div><span>Overall</span><strong><StatusBadge tone={badgeTone(data.health.overall)}>{humanize(data.health.overall)}</StatusBadge></strong><small>{displayTime(data.health.generatedAt)}</small></div>
         {Object.entries(data.health.marketData).map(([market, value]) => <div key={market}><span>{market} data</span><strong>{humanize(value.dataFreshness?.status ?? "unavailable")}</strong><small>{humanize(value.dataFreshness?.reason ?? "not reported")}</small></div>)}
         <div><span>Strategy runner</span><strong>{data.health.strategyRunner.available ? "Available" : "Unavailable"}</strong><small>{data.health.strategyRunner.networkless ? "Isolated · networkless" : "Status unavailable"}</small></div>
-        <div><span>Live execution</span><strong>{data.health.liveExecution.defaultState ?? "Unavailable"}</strong><small>{data.health.liveExecution.intents?.filter((item) => item.reconciliationStatus === "REQUIRED").length ?? 0} need reconciliation</small></div>
+        <div><span>Execution</span><strong>Paper only</strong><small>No broker or exchange orders</small></div>
       </section>
 
       {message && <Message kind={message.kind}>{message.text}</Message>}
@@ -85,16 +84,13 @@ export function OperationsWorkspace() {
           <dl className="quant-facts">{Object.entries(data.health.queues).map(([name, queue]) => <div key={name}><dt>{humanize(name)}</dt><dd>{queue.pending ?? queue.active ?? ((queue.queued ?? 0) + (queue.running ?? 0))} active{queue.limit ? ` / ${queue.limit}` : ""}</dd></div>)}</dl>
         </Panel>
 
-        <Panel icon={<Activity size={18} />} title="Exchange and reconciliation" description="Public data, private connectivity and live enablement remain separate.">
+        <Panel icon={<Activity size={18} />} title="Data and account connections" description="Provider health and read-only API connectivity for research and monitoring.">
           <div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Provider</th><th>Private connection</th><th>Last test</th></tr></thead><tbody>
             <tr><td>Dhan</td><td>{data.health.exchangeConnections.dhan?.configured ? humanize(data.health.exchangeConnections.dhan.status ?? "configured") : "Not configured"}</td><td>Deployment managed</td></tr>
             {(data.health.exchangeConnections.connections ?? []).map((connection) => <tr key={connection.connectionId}><td>{connection.provider}</td><td><StatusBadge tone={badgeTone(connection.status)}>{humanize(connection.status)}</StatusBadge></td><td>{connection.lastTestSuccess === true ? "Passed" : connection.lastTestSuccess === false ? "Failed" : "Not tested"}</td></tr>)}
           </tbody></table></div>
         </Panel>
 
-        <Panel icon={<ShieldAlert size={18} />} title="Emergency-stop state" description="Stops block new live intents; existing orders are not cancelled automatically.">
-          {(data.health.liveExecution.emergencyStops ?? []).filter((item) => item.active).length ? <div className="quant-alert-list">{(data.health.liveExecution.emergencyStops ?? []).filter((item) => item.active).map((stop) => <article key={stop.stopId}><StatusBadge tone="bad">{humanize(stop.scopeType)}</StatusBadge><strong>{stop.reason}</strong><small>{displayTime(stop.activatedAt)}</small></article>)}</div> : <EmptyState title="No active emergency stop" description="All configured scopes are clear; all other live-execution gates still apply." />}
-        </Panel>
       </div>
 
       <Panel icon={<BellRing size={18} />} title="Active alerts" description="Occurrences are deduplicated with cooldowns; acknowledgement does not resolve the condition.">
@@ -105,7 +101,7 @@ export function OperationsWorkspace() {
         {data.audit.length ? <div className="quant-table-scroll tall"><table className="quant-table"><thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Subject</th><th>Outcome</th><th>Request</th></tr></thead><tbody>{data.audit.map((event) => <tr key={event.auditId}><td>{displayTime(event.createdAt)}</td><td>{humanize(event.action)}</td><td>{event.actorType} · {event.actorId}</td><td>{event.subjectType ?? "—"}<small>{event.subjectId ?? "—"}</small></td><td><StatusBadge tone={event.success ? "good" : "bad"}>{event.success ? "Succeeded" : "Failed"}</StatusBadge></td><td>{event.requestId}</td></tr>)}</tbody></table></div> : <EmptyState title="No audited actions" description="Important mutations will appear here after the first action." />}
       </Panel>
 
-      <p className="quant-inline-note"><AlertTriangle size={14} />Exact timestamps use UTC with year. Monitoring never exposes credentials and cannot enable live trading.</p>
+      <p className="quant-inline-note"><AlertTriangle size={14} />Exact timestamps use UTC with year. Monitoring never exposes credentials. OpenDelta executes simulated paper orders only.</p>
     </>}
   </main>;
 }

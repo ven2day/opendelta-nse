@@ -42,7 +42,7 @@ class StrategyV2RunnerTests(unittest.TestCase):
 
     def test_rejects_invalid_decision_output(self) -> None:
         source = starter_source().replace('return "HOLD"', 'return "MAYBE"')
-        with self.assertRaisesRegex(RuntimeError, "Unsupported Strategy V2 decision"):
+        with self.assertRaisesRegex(RuntimeError, "Unsupported strategy decision"):
             evaluate_isolated(self.payload(source), timeout_seconds=10)
 
     def test_adapter_exposes_the_live_signal_decision_contract(self) -> None:

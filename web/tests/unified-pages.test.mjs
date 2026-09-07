@@ -96,9 +96,9 @@ test("every unified route requires login and renders one topbar market selector"
   const settings = await fetchFromWorker(worker, "/settings", { headers: { accept: "text/html", cookie } });
   const settingsHtml = await settings.text();
   assert.match(settingsHtml, /Strategy control/);
-  assert.match(settingsHtml, /Secure exchange connections/);
-  assert.match(settingsHtml, /Live trading disabled/);
-  assert.match(settingsHtml, /Live execution foundation/);
+  assert.match(settingsHtml, /API connections/);
+  assert.match(settingsHtml, /Paper only/);
+  assert.doesNotMatch(settingsHtml, /Live execution foundation|ENABLE LIVE|Submit order/);
   assert.doesNotMatch(settingsHtml, /Global minimum price|Global maximum price/);
   assert.doesNotMatch(settingsHtml, /\/legacy\//, "settings no longer links to retired pages");
 
@@ -329,7 +329,7 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.doesNotMatch(source, /VALR/);
   assert.match(source, /<ExchangeConnectionsPanel \/>/);
   assert.match(connections, /publicMarketData/);
-  assert.match(connections, /No private key required/);
+  assert.match(connections, /Public data needs no private key/);
   assert.match(source, /aria-label="Strategy mode"/);
   assert.match(source, /\["OFF", "SIGNALS", "PAPER"\]/);
   assert.match(source, /strategies\/\$\{selectedStrategy\.strategyId\}\/deployment/);
@@ -344,12 +344,12 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.match(proxy, /\{ provider: "OKX", providerSymbol: symbol \}/);
 });
 
-test("Strategy Studio V2 is collapsed and promotion remains backtest-gated", async () => {
+test("Strategy Studio is collapsed and promotion remains backtest-gated", async () => {
   const source = await readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8");
   const schema = await readFile(new URL("../app/platform/schema-form.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className=\{`quant-secondary-disclosure \$\{styles\.studio\}`\}>/);
-  assert.match(source, /Strategy Studio V2/);
-  assert.match(source, /aria-label="Strategy V2 Python source"/);
+  assert.match(source, /Strategy Studio/);
+  assert.match(source, /aria-label="Strategy Python source"/);
   assert.match(source, /strategy-studio\/validate/);
   assert.match(source, /strategy-studio\/sources/);
   assert.match(source, /Backtest it, then approve that exact run for Signals or Paper/);
@@ -358,13 +358,13 @@ test("Strategy Studio V2 is collapsed and promotion remains backtest-gated", asy
   assert.doesNotMatch(source, /styles\.studio\}`\} open/);
 });
 
-test("Indicator Studio V2 is separate, immutable and preview-only", async () => {
+test("Indicator Studio is separate, immutable and preview-only", async () => {
   const [source, types] = await Promise.all([
     readFile(new URL("../app/indicators/indicator-studio-workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
   ]);
-  assert.match(source, /title="Indicator Studio V2"/);
-  assert.match(source, /aria-label="Indicator V2 Python source"/);
+  assert.match(source, /title="Indicator Studio"/);
+  assert.match(source, /aria-label="Indicator Python source"/);
   assert.match(source, /indicator-studio\/validate/);
   assert.match(source, /Save new version/);
   assert.match(source, /Edit as new/);
@@ -376,7 +376,7 @@ test("Indicator Studio V2 is separate, immutable and preview-only", async () => 
   assert.match(types, /"LINE" \| "HISTOGRAM" \| "BAND" \| "POINTS"/);
 });
 
-test("completed V2 backtests expose the same ordered approval workflow", async () => {
+test("completed Studio backtests expose the same ordered approval workflow", async () => {
   const [source, types] = await Promise.all([
     readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
@@ -384,7 +384,7 @@ test("completed V2 backtests expose the same ordered approval workflow", async (
   assert.match(source, /run\?\.strategySourceId \? "OPENDELTA"/);
   assert.match(source, /Approve for Signals/);
   assert.match(source, /Approve for Paper/);
-  assert.match(source, /immutable V2 source/);
+  assert.match(source, /immutable source/);
   assert.doesNotMatch(source, /Promotion to Signals and Paper remains locked/);
   assert.match(types, /strategySourceId\?: string \| null/);
 });
@@ -517,7 +517,7 @@ test("AI Research Copilot is explicit, fail-closed, and draft-only in all three 
   assert.doesNotMatch(copilot, /Approve for|Deploy strategy|Enable live|Place order|API key/);
 });
 
-test("exchange credentials are write-only, encrypted, confirmation-gated, and never enable live trading", async () => {
+test("exchange credentials are write-only, encrypted, confirmation-gated, and read-only", async () => {
   const [source, routes, repository, migration] = await Promise.all([
     readFile(new URL("../app/settings/exchange-connections-panel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../../backend/api/exchange_connection_routes.py", import.meta.url), "utf8"),
@@ -525,46 +525,27 @@ test("exchange credentials are write-only, encrypted, confirmation-gated, and ne
     readFile(new URL("../../backend/data/sql/020_secure_exchange_connections.sql", import.meta.url), "utf8"),
   ]);
   assert.match(source, /type="password"/);
-  assert.match(source, /Live trading disabled/);
-  assert.match(source, /Withdrawal-capable keys are automatically held disabled/);
+  assert.match(source, /Paper only/);
+  assert.match(source, /trade or withdrawal permission are rejected/);
   assert.match(source, /REPLACE \$\{connection\.provider\}/);
   assert.match(source, /DELETE \$\{connection\.provider\}/);
   assert.doesNotMatch(source, /enable live|approve|deploy strategy/i);
   assert.match(routes, /Exchange credential encryption is not configured/);
-  assert.match(repository, /withdrawal permission cannot be enabled/i);
+  assert.match(repository, /Only read-only connections can be enabled/i);
   assert.doesNotMatch(routes, /return .*apiSecret|return .*passphrase/);
   assert.match(migration, /credentials_ciphertext bytea/);
   assert.doesNotMatch(migration, /api_secret\s+(?:text|varchar)|api_key\s+(?:text|varchar)/i);
 });
 
-test("live execution is server-gated, idempotent, emergency-stopped, and has no casual order control", async () => {
-  const [panel, routes, service, adapters, migration, env] = await Promise.all([
-    readFile(new URL("../app/settings/live-execution-panel.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../../backend/api/live_execution_routes.py", import.meta.url), "utf8"),
-    readFile(new URL("../../backend/live/service.py", import.meta.url), "utf8"),
-    readFile(new URL("../../backend/live/adapters.py", import.meta.url), "utf8"),
-    readFile(new URL("../../backend/data/sql/021_live_execution_foundation.sql", import.meta.url), "utf8"),
+test("the product contains no executable real-money order surface", async () => {
+  const [settings, runtime, environment] = await Promise.all([
+    readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/platform_runtime.py", import.meta.url), "utf8"),
     readFile(new URL("../deploy/opendelta-dhan.env.example", import.meta.url), "utf8"),
   ]);
-  assert.match(panel, /Live trading disabled/);
-  assert.match(panel, /ACTIVATE EMERGENCY STOP/);
-  assert.match(panel, /ENABLE LIVE \$\{item\.strategyId\}/);
-  assert.doesNotMatch(panel, />Place order<|>Submit order</);
-  assert.match(routes, /APIRouter\(prefix="\/v2\/live-execution"/);
-  assert.match(routes, /@router\.post\("\/orders"/);
-  assert.match(service, /create_intent/);
-  assert.match(service, /idempotency_key/);
-  assert.match(service, /ProviderResponseUncertain/);
-  assert.match(service, /nse_session_is_open/);
-  assert.match(adapters, /class DhanOrderAdapter/);
-  assert.match(adapters, /class OkxOrderAdapter/);
-  assert.match(adapters, /class ValrOrderAdapter/);
-  assert.match(adapters, /ProviderMutationDisabled/);
-  assert.match(migration, /CONSTRAINT live_order_intents_deployment_signal UNIQUE/);
-  assert.match(migration, /'UNKNOWN'/);
-  assert.match(env, /LIVE_TRADING_ENABLED=false/);
-  assert.match(env, /LIVE_TRADING_DEPLOYMENT_ALLOWED=false/);
-  assert.doesNotMatch(routes, /approve|credential.*decrypt/i);
+  assert.doesNotMatch(settings, /LiveExecutionPanel|ENABLE LIVE|live-execution/);
+  assert.doesNotMatch(runtime, /create_live_execution_router|LiveAdapterFactory|LiveExecutionService/);
+  assert.doesNotMatch(environment, /LIVE_TRADING_ENABLED|LIVE_TRADING_DEPLOYMENT_ALLOWED/);
 });
 
 test("production monitoring uses durable leases, append-only audits, and deduplicated alerts", async () => {
@@ -578,12 +559,12 @@ test("production monitoring uses durable leases, append-only audits, and dedupli
   assert.match(workspace, /Production observability/);
   assert.match(workspace, /Worker leases/);
   assert.match(workspace, /Append-only audit history/);
-  assert.match(workspace, /Emergency-stop state/);
+  assert.match(workspace, /Paper only/);
   assert.match(routes, /prefix="\/v2\/operations"/);
   assert.match(repository, /ON CONFLICT \(worker_type, task_key\) DO UPDATE/);
   assert.match(repository, /cooldown_until/);
   assert.match(leases, /worker-lease-heartbeat/);
-  for (const worker of ["MARKET_DATA", "SIGNAL", "BACKTEST", "RESEARCH_EXPERIMENT", "WALK_FORWARD", "PAPER_EXECUTION", "LIVE_RECONCILIATION", "MONITORING"]) {
+  for (const worker of ["MARKET_DATA", "SIGNAL", "BACKTEST", "RESEARCH_EXPERIMENT", "WALK_FORWARD", "PAPER_EXECUTION", "MONITORING"]) {
     assert.match(migration, new RegExp(`'${worker}'`));
   }
   assert.match(migration, /operational_audit_append_only/);

@@ -19,7 +19,7 @@ export function ExchangeConnectionsPanel() {
     [],
   ));
   const [provider, setProvider] = useState<Provider>("OKX");
-  const [label, setLabel] = useState("Research account");
+  const [label, setLabel] = useState("OpenDelta account");
   const [environment, setEnvironment] = useState<"LIVE" | "DEMO">("LIVE");
   const [secret, setSecret] = useState(EMPTY_SECRET);
   const [busy, setBusy] = useState<string | null>(null);
@@ -46,17 +46,17 @@ export function ExchangeConnectionsPanel() {
     setSecret(EMPTY_SECRET);
   };
 
-  return <Panel icon={<KeyRound size={17} />} title="Secure exchange connections" description="OKX and VALR private credentials are envelope-encrypted on the backend. Public market data remains separate from trading authorization." aside={<StatusBadge tone="warn">Live trading disabled</StatusBadge>}>
+  return <Panel icon={<KeyRound size={17} />} title="API connections" description="Add, test, replace or remove OKX and VALR API keys. Credentials are encrypted on the backend and are used only for read-only account access; OpenDelta executes paper trades only." aside={<StatusBadge tone="good">Paper only</StatusBadge>}>
     {connections.loading ? <LoadingState label="Loading exchange connection status" />
       : connections.error ? <RequestErrorState error={connections.error} retry={connections.reload} />
         : <div className="quant-panel-body exchange-connections-panel">
           <div className="connection-safety-strip">
             <StatusBadge tone={connections.data?.encryptionConfigured ? "good" : "warn"}>{connections.data?.encryptionConfigured ? "Encryption ready" : "Master key required"}</StatusBadge>
-            <span>A successful test never enables trading. Withdrawal-capable keys are automatically held disabled.</span>
+            <span>Use read-only keys. Keys with trade or withdrawal permission are rejected and held disabled.</span>
           </div>
           <div className="connection-platform-grid">
             {connections.data?.platformConnections.map((item) => <article key={item.provider}><strong>{item.provider}</strong><StatusBadge tone={item.configured ? "good" : "warn"}>{item.status.replace("_", " ")}</StatusBadge><small>{item.message}</small></article>)}
-            {Object.entries(connections.data?.publicMarketData ?? {}).map(([name, item]) => <article key={name}><strong>{name} public data</strong><StatusBadge tone={item.available ? "good" : "warn"}>{item.available ? "Available" : "Unavailable"}</StatusBadge><small>{item.requiresPrivateConnection ? "Private deployment connection required" : "No private key required"}</small></article>)}
+            {Object.entries(connections.data?.publicMarketData ?? {}).map(([name, item]) => <article key={name}><strong>{name} data</strong><StatusBadge tone={item.available ? "good" : "warn"}>{item.available ? "Available" : "Unavailable"}</StatusBadge><small>{item.requiresPrivateConnection ? "Managed by the Dhan collector" : "Public data needs no private key"}</small></article>)}
           </div>
           <details className="quant-secondary-disclosure connection-add"><summary><span><KeyRound size={15} />Add encrypted connection</span><small>Credentials are write-only and cleared after submission</small></summary>
             <form className="quant-form-grid" onSubmit={(event) => void add(event)}>
@@ -92,7 +92,7 @@ function ConnectionRow({ connection, busy, mutate }: {
     <header><span><strong>{connection.provider} · {connection.label}</strong><small>{connection.maskedKeyIdentifier} · {connection.environment}</small></span><StatusBadge tone={tone}>{connection.status.replaceAll("_", " ")}</StatusBadge></header>
     <dl className="quant-facts">
       <div><dt>Read</dt><dd>{permission.read === undefined ? "Not tested" : permission.read ? "Allowed" : "Missing"}</dd></div>
-      <div><dt>Trading</dt><dd>{permission.trade === undefined ? "Not tested" : permission.trade ? "Allowed" : "Not allowed"}</dd></div>
+      <div><dt>Trade permission</dt><dd>{permission.trade === undefined ? "Not tested" : permission.trade ? "Rejected — remove it" : "None (safe)"}</dd></div>
       <div><dt>Withdrawal</dt><dd>{permission.withdrawal == null ? "Unknown" : permission.withdrawal ? "Detected — disabled" : "Not detected"}</dd></div>
       <div><dt>IP restriction</dt><dd>{permission.ipAllowlisted == null ? "Unavailable" : permission.ipAllowlisted ? "Detected" : "Not detected"}</dd></div>
       <div><dt>Last test</dt><dd>{connection.lastTestedAt ? formatDateTime(connection.lastTestedAt, "CRYPTO") : "Never"}</dd></div>
@@ -101,7 +101,7 @@ function ConnectionRow({ connection, busy, mutate }: {
     {connection.lastTestMessage && <small>{connection.lastTestMessage}</small>}
     <div className="quant-form-actions">
       <button type="button" disabled={busy !== null} onClick={() => void mutate(`${key}:test`, () => v2Post(`connections/${key}/test`, {}), `${connection.provider} read-only connection test completed.`)}><ShieldCheck size={14} />Test connection</button>
-      <button type="button" disabled={busy !== null || (!connection.disabled && connection.permissions.withdrawal === true)} onClick={() => void mutate(`${key}:disable`, () => v2Post(`connections/${key}/disable`, { disabled: !connection.disabled }), connection.disabled ? "Connection enabled; live trading remains independently disabled." : "Connection disabled.")}>{connection.disabled ? "Enable" : "Disable"}</button>
+      <button type="button" disabled={busy !== null || (!connection.disabled && (connection.permissions.withdrawal === true || connection.permissions.trade === true))} onClick={() => void mutate(`${key}:disable`, () => v2Post(`connections/${key}/disable`, { disabled: !connection.disabled }), connection.disabled ? "Read-only connection enabled for account access." : "Connection disabled.")}>{connection.disabled ? "Enable read access" : "Disable"}</button>
       <button type="button" disabled={busy !== null} onClick={() => void mutate(`${key}:rotate`, () => v2Post(`connections/${key}/rotate`, { confirmation: "ROTATE" }), "Encrypted material rotated with a fresh data key and nonces.")}><RefreshCw size={14} />Rotate encryption</button>
     </div>
     <details className="quant-secondary-disclosure"><summary><span>Replace credentials</span><small>Type REPLACE {connection.provider}</small></summary><div className="quant-form-grid">

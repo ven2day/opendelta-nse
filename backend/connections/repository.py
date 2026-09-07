@@ -134,10 +134,10 @@ class ExchangeConnectionRepository:
     ) -> dict[str, Any]:
         key = uuid.UUID(str(connection_id))
         now = datetime.now(UTC)
-        withdrawal = report is not None and report.withdrawal is True
+        unsafe_permission = report is not None and (report.withdrawal is True or report.trade is True)
         failed = report is None or not report.authenticated or not report.read
-        status = "WITHDRAWAL_PERMISSION" if withdrawal else "FAILED" if failed else "CONNECTED"
-        disabled = withdrawal
+        status = "WITHDRAWAL_PERMISSION" if unsafe_permission else "FAILED" if failed else "CONNECTED"
+        disabled = unsafe_permission
         permissions = report.public() if report else {}
         message = report.message if report else (failure_message or "Exchange connection test failed")
         with self.database.transaction() as connection, connection.cursor() as cursor:
@@ -147,12 +147,12 @@ class ExchangeConnectionRepository:
                     last_test_success = %s, last_test_message = %s, last_tested_at = %s, updated_at = %s
                 WHERE connection_id = %s RETURNING *
                 """,
-                (status, disabled, jsonb(permissions), not failed and not withdrawal, message, now, now, key),
+                (status, disabled, jsonb(permissions), not failed and not unsafe_permission, message, now, now, key),
             )
             row = cursor.fetchone()
             if row is None:
                 raise KeyError(f"Exchange connection {connection_id} was not found")
-            action = "WITHDRAWAL_PERMISSION" if withdrawal else "TEST_FAILED" if failed else "TEST_SUCCEEDED"
+            action = "WITHDRAWAL_PERMISSION" if unsafe_permission else "TEST_FAILED" if failed else "TEST_SUCCEEDED"
             _event(cursor, key, row["provider"], actor, action, {"status": status})
         return _public_connection(row)
 
@@ -173,8 +173,8 @@ class ExchangeConnectionRepository:
             row = cursor.fetchone()
             if row is None:
                 raise KeyError(f"Exchange connection {connection_id} was not found")
-            if not disabled and row["permissions"].get("withdrawal") is True:
-                raise ValueError("A connection with withdrawal permission cannot be enabled")
+            if not disabled and (row["permissions"].get("withdrawal") is True or row["permissions"].get("trade") is True):
+                raise ValueError("Only read-only connections can be enabled")
             _event(cursor, key, row["provider"], actor, "DISABLED" if disabled else "ENABLED", {})
         return _public_connection(row)
 

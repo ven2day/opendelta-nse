@@ -1,4 +1,4 @@
-"""Narrow MCP tool catalogue backed only by existing OpenDelta V2 HTTP workflows."""
+"""Narrow MCP tool catalogue backed only by OpenDelta research HTTP workflows."""
 
 from __future__ import annotations
 

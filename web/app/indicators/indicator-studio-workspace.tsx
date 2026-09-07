@@ -108,12 +108,12 @@ export function IndicatorStudioWorkspace({ initialMarket }: { initialMarket: Pla
   };
 
   return <main className="quant-workspace">
-    <WorkspaceHeader eyebrow={`${marketLabel(market)} research`} title="Indicator Studio V2" actions={<div className="quant-header-actions"><StatusBadge tone="good">Isolated Python</StatusBadge><StatusBadge>Immutable versions</StatusBadge></div>} />
+    <WorkspaceHeader eyebrow={`${marketLabel(market)} research`} title="Indicator Studio" actions={<div className="quant-header-actions"><StatusBadge tone="good">Isolated Python</StatusBadge><StatusBadge>Immutable versions</StatusBadge></div>} />
     {notice && <Message kind={notice.kind}>{notice.text}</Message>}
 
     <Panel icon={<Code2 size={17} />} title="Python indicator editor" description="Validate and save a new immutable indicator version. Saving does not attach it to a strategy.">
       {template.loading ? <LoadingState label="Loading indicator template" /> : template.error ? <RequestErrorState error={template.error} retry={template.reload} /> : <div className="quant-panel-body">
-        <textarea className={styles.editor} aria-label="Indicator V2 Python source" spellCheck={false} value={currentSource} disabled={busy !== null} onChange={(event) => { setSourceCode(event.target.value); setValidation(null); setNotice(null); }} />
+        <textarea className={styles.editor} aria-label="Indicator Python source" spellCheck={false} value={currentSource} disabled={busy !== null} onChange={(event) => { setSourceCode(event.target.value); setValidation(null); setNotice(null); }} />
         <div className={styles.actions}>
           <button type="button" onClick={() => navigator.clipboard.writeText(currentSource)}><Copy size={15} />Copy</button>
           <button type="button" disabled={busy !== null} onClick={() => { setSourceCode(template.data?.sourceCode ?? ""); setValidation(null); setSelectedId(null); setPreview(null); }}><RotateCcw size={15} />New template</button>
@@ -124,7 +124,7 @@ export function IndicatorStudioWorkspace({ initialMarket }: { initialMarket: Pla
       </div>}
     </Panel>
 
-    <AICopilotPanel surface="indicator" market={market} onUseDraft={(content) => { setSourceCode(content); setValidation(null); setPreview(null); setNotice({ kind: "success", text: "AI draft loaded into the editor. Review it, then run normal V2 validation before saving." }); }} />
+    <AICopilotPanel surface="indicator" market={market} onUseDraft={(content) => { setSourceCode(content); setValidation(null); setPreview(null); setNotice({ kind: "success", text: "AI draft loaded into the editor. Review it, then run normal validation before saving." }); }} />
 
     <Panel icon={<Archive size={17} />} title="Version history" description="Saved versions never change. Load one to create its next draft, or archive it without deleting history.">
       {sources.loading ? <LoadingState label="Loading indicator versions" /> : sources.error ? <RequestErrorState error={sources.error} retry={sources.reload} /> : !sources.data?.sources.length ? <EmptyState title="No indicators saved" description="Validate the starter template and save version 1.0.0." /> : <div className={styles.history} role="table" aria-label="Indicator versions">

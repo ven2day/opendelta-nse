@@ -244,7 +244,7 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
       .map((item) => ({ key: `builtin:${item.strategyId}:${item.version}`, id: item.strategyId, sourceId: null, name: item.name, version: item.version, timeframes: item.supportedTimeframes, schema: item.configSchema })),
     ...(sources.data?.sources ?? [])
       .filter((item) => item.status === "VALIDATED")
-      .map((item) => ({ key: `v2:${item.sourceId}`, id: item.strategyId, sourceId: item.sourceId, name: `${item.name} (V2)`, version: item.strategyVersion, timeframes: item.manifest.supportedTimeframes, schema: schemaFromValues(item.manifest.parameters) })),
+      .map((item) => ({ key: `source:${item.sourceId}`, id: item.strategyId, sourceId: item.sourceId, name: item.name, version: item.strategyVersion, timeframes: item.manifest.supportedTimeframes, schema: schemaFromValues(item.manifest.parameters) })),
   ], [market, sources.data, strategies.data]);
   const [strategyKey, setStrategyKey] = useState("");
   const selected = options.find((item) => item.key === strategyKey) ?? options[0] ?? null;

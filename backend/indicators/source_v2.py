@@ -1,8 +1,8 @@
-"""Static validation for user-authored Indicator V2 Python source.
+"""Static validation for user-authored Indicator Studio Python source.
 
 Submitted source is parsed but never imported or executed by the API process.
 Execution is delegated to the same resource-limited, networkless worker used by
-Strategy V2.
+Strategy Studio.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ class SourceValidation:
 
 
 def starter_source() -> str:
-    return '''"""OpenDelta Indicator V2 example: simple moving average."""
+    return '''"""OpenDelta Indicator Studio example: simple moving average."""
 
 INDICATOR = {
     "id": "simple_moving_average",

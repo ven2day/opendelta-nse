@@ -29,7 +29,6 @@ from backend.api.exchange_connection_routes import (
     install_exchange_connection_validation_handler,
 )
 from backend.api.indicator_studio_routes import create_indicator_studio_router
-from backend.api.live_execution_routes import create_live_execution_router
 from backend.api.monitoring_routes import create_monitoring_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.research_routes import ResearchServices, create_research_router
@@ -70,15 +69,11 @@ from backend.data.repositories import (
     WatchlistProfileRepository,
 )
 from backend.integrations.tradingview import TradingViewIngestionService
-from backend.live.factory import LiveAdapterFactory
-from backend.live.repository import LiveExecutionRepository
-from backend.live.service import LiveExecutionConfig, LiveExecutionService
 from backend.markets.base import CandleSource, market_spec
 from backend.monitoring.audit import install_audit_middleware
 from backend.monitoring.leases import WorkerLeaseGroup, WorkerLeaseGuard
 from backend.monitoring.repository import MonitoringRepository
 from backend.monitoring.service import (
-    LiveReconciliationWorker,
     MonitoringService,
     MonitoringWorker,
     strategy_runner_health,
@@ -121,7 +116,6 @@ class PlatformRuntime:
         self._walk_forward_runner: WalkForwardJobRunner | None = None
         self._monitoring_service: MonitoringService | None = None
         self._monitoring_worker: MonitoringWorker | None = None
-        self._reconciliation_worker: LiveReconciliationWorker | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
         self._worker_signatures: dict[str, tuple[str, str | None, str | None, str, str | None, str]] = {}
         self._brokers: dict[str, PaperBroker] = {}
@@ -162,8 +156,6 @@ class PlatformRuntime:
             self._start_signal_workers()
             if self._monitoring_worker is not None:
                 self._monitoring_worker.start()
-            if self._reconciliation_worker is not None:
-                self._reconciliation_worker.start()
         except Exception as error:  # noqa: BLE001 - the platform must degrade to disabled, never crash at startup
             logger.error("platform_database_unavailable", reason=str(error))
             self.disabled_reason = str(error)
@@ -177,7 +169,6 @@ class PlatformRuntime:
             runner, self._runner = self._runner, None
             walk_forward, self._walk_forward_runner = self._walk_forward_runner, None
             monitoring, self._monitoring_worker = self._monitoring_worker, None
-            reconciliation, self._reconciliation_worker = self._reconciliation_worker, None
             workers, self._workers = dict(self._workers), {}
             self._worker_signatures = {}
         for worker in workers.values():
@@ -188,8 +179,6 @@ class PlatformRuntime:
             walk_forward.shutdown()
         if monitoring is not None:
             monitoring.stop()
-        if reconciliation is not None:
-            reconciliation.stop()
         if self._screener is not None:
             self._screener.shutdown()
         if self.database is not None:
@@ -202,7 +191,7 @@ class PlatformRuntime:
             self.reconcile_signal_workers(market)
 
     def configured_deployments(self, market: str) -> list[dict[str, Any]]:
-        """Return only durable, operator-reviewed V2 deployment records."""
+        """Return only durable, operator-reviewed deployment records."""
         key = market.strip().upper()
         return self.strategy_deployments().list(key) if self.database is not None else []
 
@@ -216,14 +205,14 @@ class PlatformRuntime:
         return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "signalSource": "OPENDELTA", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
     def strategy_for_deployment(self, deployment: Mapping[str, Any]):
-        """Resolve exactly the built-in version or immutable V2 source named by a deployment."""
+        """Resolve exactly the built-in version or immutable source named by a deployment."""
         source_id = deployment.get("strategySourceId")
         if not source_id:
             strategy = STRATEGIES.get(str(deployment["strategyId"]))
         else:
             source = self.strategy_sources().get(str(source_id))
             if source.get("status", "VALIDATED") != "VALIDATED":
-                raise ValueError("Deployment Strategy V2 source is archived")
+                raise ValueError("Deployment strategy source is archived")
             socket_path = os.environ.get("STRATEGY_V2_RUNNER_SOCKET", "/run/opendelta-strategy/runner.sock")
             strategy = StrategyV2BacktestAdapter(
                 source,
@@ -601,17 +590,6 @@ class PlatformRuntime:
     def exchange_connections(self) -> ExchangeConnectionRepository:
         return ExchangeConnectionRepository(self.require_database())
 
-    def live_execution(self) -> LiveExecutionService:
-        config = LiveExecutionConfig.from_environment()
-        connections = self.exchange_connections()
-        return LiveExecutionService(
-            LiveExecutionRepository(self.require_database()),
-            adapters=LiveAdapterFactory(connections, config),
-            config=config,
-            dhan_status=dhan_connection_status,
-            clock=self.clock,
-        )
-
     def walk_forward_runner(self) -> WalkForwardJobRunner:
         backtests = self.runner()
         with self._lock:
@@ -760,7 +738,6 @@ class PlatformRuntime:
                 "connections": self.exchange_connections().list(),
                 "dhan": dhan_connection_status(),
             },
-            live_status=self.live_execution().status,
             strategy_runner_status=strategy_runner_health,
             queue_capacity=self.queue_capacity,
             clock=self.clock,
@@ -769,13 +746,6 @@ class PlatformRuntime:
         self._monitoring_worker = MonitoringWorker(
             service,
             interval_seconds=float(os.environ.get("MONITORING_INTERVAL_SECONDS", "30")),
-        )
-        live = self.live_execution()
-        self._reconciliation_worker = LiveReconciliationWorker(
-            repository,
-            reconcile=live.reconcile,
-            enabled=lambda: live.config.live_trading_enabled,
-            interval_seconds=float(os.environ.get("LIVE_RECONCILIATION_INTERVAL_SECONDS", "30")),
         )
         return service
 
@@ -882,7 +852,6 @@ def install_platform(
         testers=connection_testers,
         dhan_status=dhan_connection_status,
     )).routes)
-    app.router.routes.extend(create_live_execution_router(runtime.live_execution).routes)
     if runtime.database is not None:
         runtime.configure_monitoring(overview_service)
     app.router.routes.extend(create_monitoring_router(lambda: runtime.configure_monitoring(overview_service)).routes)

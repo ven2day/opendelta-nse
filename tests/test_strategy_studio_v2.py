@@ -35,7 +35,7 @@ class StrategySourceValidationTests(unittest.TestCase):
         self.assertEqual(result.manifest["supportedMarkets"], ["NSE", "CRYPTO"])
 
     def test_rejects_unsafe_imports_calls_and_lookahead(self) -> None:
-        source = starter_source().replace('"""OpenDelta Strategy V2 example."""', "import os").replace('return "HOLD"', 'open("secret"); close.shift(-1); return "HOLD"')
+        source = starter_source().replace('"""OpenDelta Strategy Studio example."""', "import os").replace('return "HOLD"', 'open("secret"); close.shift(-1); return "HOLD"')
         result = validate_source(source)
         self.assertFalse(result.valid)
         self.assertTrue(any("Import 'os'" in error for error in result.errors))

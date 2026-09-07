@@ -4668,26 +4668,6 @@ footer {
   .research-actions > span { margin-left: 0; }
 }
 
-/* Live execution stays visually subordinate to research/paper workflows and never overflows. */
-.live-execution-panel { min-width: 0; overflow: hidden; }
-.live-safety-banner { display: flex; align-items: flex-start; gap: 10px; border: 1px solid color-mix(in srgb, var(--od-danger) 45%, var(--od-border)); border-radius: 9px; padding: 11px 12px; color: var(--od-danger); background: var(--od-danger-soft); }
-.live-safety-banner > div { display: grid; gap: 3px; min-width: 0; }
-.live-safety-banner span { color: var(--od-muted); font-size: 11px; line-height: 1.45; }
-.live-policy-form { padding: 14px 16px; }
-.live-deployment-list { display: grid; gap: 8px; margin-top: 10px; }
-.live-deployment-list article { display: grid; gap: 10px; min-width: 0; border: 1px solid var(--od-border); border-radius: 9px; padding: 11px 12px; background: var(--od-surface); }
-.live-deployment-list header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; min-width: 0; }
-.live-deployment-list header > span { display: grid; gap: 2px; min-width: 0; }
-.live-deployment-list header small { color: var(--od-muted); overflow-wrap: anywhere; }
-.live-deployment-list .quant-toolbar { min-width: 0; }
-.live-deployment-list .quant-toolbar label { flex: 1 1 260px; }
-.live-deployment-list input { width: 100%; max-width: 430px; }
-
-@media (max-width: 560px) {
-  .live-safety-banner { align-items: flex-start; }
-  .live-deployment-list .quant-toolbar button { width: 100%; justify-content: center; }
-}
-
 /* Site-wide readability pass: retain the compact OpenDelta layout without tiny text. */
 .site-shell {
   font-size: 16px;

@@ -80,10 +80,6 @@ def service(repository: FakeRepository, notifications: Notifications) -> Monitor
             "connections": [{"provider": "OKX", "connectionId": "okx", "status": "ERROR", "lastTestSuccess": False}],
             "dhan": {"configured": True, "status": "CONNECTED"},
         },
-        live_status=lambda: {
-            "intents": [{"intentId": "intent", "provider": "OKX", "state": "UNKNOWN"}],
-            "emergencyStops": [{"stopId": "stop", "scopeType": "GLOBAL", "active": True, "reason": "Operator"}],
-        },
         strategy_runner_status=lambda: {"available": False, "networkless": True},
         queue_capacity=lambda: {
             "backtests": {"pending": 9, "limit": 10}, "research": {"pending": 0, "limit": 10}
@@ -99,8 +95,7 @@ def test_collection_emits_required_conditions_without_credentials() -> None:
     kinds = {item["alert_type"] for item in raised}
     assert {
         "STALE_CRYPTO_DATA", "OKX_DISCONNECTION", "STRATEGY_RUNNER_UNAVAILABLE",
-        "BACKTEST_QUEUE_SATURATION", "UNKNOWN_LIVE_ORDER_STATE", "EMERGENCY_STOP_ACTIVATED",
-        "FAILED_WORKER_CYCLE",
+        "BACKTEST_QUEUE_SATURATION", "FAILED_WORKER_CYCLE",
     } <= kinds
     assert notifications.items == raised
     assert "credential" not in str(raised).lower()

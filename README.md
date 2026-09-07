@@ -137,15 +137,14 @@ cd web && npm run test:browser                                               # P
 python scripts/security_scan.py                                              # secret scan
 ```
 
-The suites prove, among other things: backtest and live evaluation agree bar
+The suites prove, among other things: backtest and signal evaluation agree bar
 for bar; an incomplete candle never produces a signal; entries use the next
 candle open; a different future never changes earlier trades; duplicate
 signals and duplicate paper orders are rejected by the database; NSE and
 Crypto balances stay separate; the paper portfolio survives a restart; fees
 and slippage reconcile exactly; a 100-symbol one-year backtest writes
 incrementally and stays under 256 MB; each Strong Buy lot closes
-independently; provider adapters cannot mutate when server gates are unset; and
-automated tests never submit a production order.
+independently; and no broker or exchange order-submission implementation is present.
 
 ## 📁 Project Structure
 
@@ -164,7 +163,6 @@ opendelta-nse/
 │   ├── config/                   # application and strategy configuration
 │   ├── research/                 # immutable experiments, comparison and walk-forward
 │   ├── monitoring/               # leases, audit, alerts and notification adapters
-│   ├── live/                     # disabled-by-default provider adapters and risk gates
 │   ├── agent/                    # scoped research-only MCP gateway
 │   ├── app.py                    # FastAPI composition root
 │   ├── collector.py              # Dhan client and NSE data collector
@@ -203,18 +201,13 @@ opendelta-nse/
 | `AI_PROVIDER`, `AI_PROVIDER_ENDPOINT`, `AI_MODEL`, `AI_PROVIDER_API_KEY` | optional backend-only AI Research Copilot provider; incomplete/unset configuration fails closed |
 | `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | versioned backend-only AES-256-GCM key for encrypted OKX/VALR connections |
 | `EXCHANGE_CREDENTIAL_PREVIOUS_KEYS` | optional secret-manager JSON keyring used only while rotating old encrypted records |
-| `LIVE_TRADING_ENABLED` | global live mutation flag; defaults to `false` |
-| `LIVE_TRADING_DEPLOYMENT_ALLOWED` | independent deployment permission required in addition to the global flag |
-| `DEPLOYMENT_ENVIRONMENT`, `LIVE_TRADING_ALLOWED_ENVIRONMENTS` | exact environment identity and explicit live allowlist; blank defaults fail closed |
-| `LIVE_CONNECTION_MAX_AGE_SECONDS` | maximum age of the required successful private permission test (default `900`) |
 | `MONITORING_INTERVAL_SECONDS`, `MONITORING_WEBHOOK_URL` | monitoring cadence and optional backend-only HTTPS alert receiver |
 | `MCP_ALLOWED_ORIGINS` | optional comma-separated browser origins allowed to call the scoped MCP endpoint; server clients normally omit `Origin` |
 | `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
 | `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 
-V2 is the default UI/API platform. Signal and paper activity still requires an
-operator-reviewed durable deployment, and live provider mutations remain off
-until every independent server-side gate is satisfied. See
+OpenDelta is the default UI/API platform. Signal and paper activity still requires an
+operator-reviewed durable deployment. Paper trading is the only execution mode. See
 [docs/v2-cutover.md](docs/v2-cutover.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## 📚 Documentation

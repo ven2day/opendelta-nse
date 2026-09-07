@@ -1,4 +1,4 @@
-"""Release-contract coverage for the V2-default assessment."""
+"""Release-contract coverage for the default OpenDelta platform."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def test_v2_cutover_contract_reports_every_required_boundary() -> None:
         "migration-chain",
         "v2-route-surface",
         "v2-platform-defaults",
-        "live-disabled-default",
+        "paper-only-execution",
         "agent-safety-boundary",
         "strategy-runner-isolation",
         "obsolete-v1-removal",

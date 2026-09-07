@@ -362,7 +362,6 @@ test("operations shows durable health, leases, alerts, audit, and exact timestam
       queues: { backtests: { pending: 1, limit: 200 }, research: { pending: 0, limit: 200 }, walkForward: { pending: 0, limit: 20 } },
       strategyRunner: { available: true, networkless: true, transport: "unix-socket" },
       exchangeConnections: { dhan: { configured: true, status: "CONNECTED" }, connections: [{ connectionId: "okx", provider: "OKX", status: "CONNECTED", lastTestSuccess: true }] },
-      liveExecution: { defaultState: "Live trading disabled", intents: [], emergencyStops: [] },
       activeAlerts: [{ alertId: "alert-1", alertType: "STALE_CRYPTO_DATA", severity: "WARNING", source: "market-data", title: "Crypto market data is stale", message: "Freshness lag", status: "OPEN", occurrenceCount: 2, lastSeenAt: "2026-09-07T12:00:00+00:00" }],
     } });
     if (url.pathname.endsWith("/operations/alerts/alert-1/acknowledge") && route.request().method() === "POST") {
@@ -404,15 +403,14 @@ test("strategies adds a configured instrument with one compact control", async (
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
     const strategy = { strategyId: "rsi_dip_ladder", name: "RSI Dip Ladder", version: "1.0.0", supportedMarkets: ["CRYPTO"], supportedTimeframes: ["5m"], configSchema: {}, defaults: {} };
-    if (path.endsWith("/live-execution/status")) return route.fulfill({ json: { liveTradingEnabled: false, deploymentPermission: false, deploymentEnvironment: "PRODUCTION", environmentAllowed: false, defaultState: "Live trading disabled", deployments: [], riskPolicies: [], eligiblePaperApprovals: [], emergencyStops: [], intents: [], cancelAllSupported: false, cancelAllMessage: "Existing orders require separate confirmation" } });
     if (path.endsWith("/connections") && method === "GET") return route.fulfill({ json: { encryptionConfigured: true, connections: connection ? [connection] : [], platformConnections: [{ provider: "DHAN", managedBy: "deployment", configured: true, status: "CONFIGURED", message: "Dhan authentication remains deployment managed" }], publicMarketData: { OKX: { available: true, requiresPrivateConnection: false }, VALR: { available: true, requiresPrivateConnection: false } } } });
     if (path.endsWith("/connections") && method === "POST") {
       credentialRequest = route.request().postDataJSON();
-      connection = { connectionId: "44444444-4444-4444-8444-444444444444", provider: "OKX", label: "Research account", environment: "DEMO", configured: true, maskedKeyIdentifier: "••••wxyz", disabled: true, status: "NOT_TESTED", permissions: {}, lastTestSuccess: null, lastTestMessage: null, lastTestedAt: null, createdAt: "2026-09-07T01:00:00Z", updatedAt: "2026-09-07T01:00:00Z" };
+      connection = { connectionId: "44444444-4444-4444-8444-444444444444", provider: "OKX", label: "OpenDelta account", environment: "DEMO", configured: true, maskedKeyIdentifier: "••••wxyz", disabled: true, status: "NOT_TESTED", permissions: {}, lastTestSuccess: null, lastTestMessage: null, lastTestedAt: null, createdAt: "2026-09-07T01:00:00Z", updatedAt: "2026-09-07T01:00:00Z" };
       return route.fulfill({ status: 201, json: connection });
     }
     if (path.endsWith("/connections/44444444-4444-4444-8444-444444444444/test")) {
-      connection = { ...connection, status: "CONNECTED", permissions: { authenticated: true, read: true, trade: true, withdrawal: false, ipAllowlisted: true }, lastTestSuccess: true, lastTestMessage: "OKX connection test succeeded", lastTestedAt: "2026-09-07T01:01:00Z" };
+      connection = { ...connection, status: "CONNECTED", permissions: { authenticated: true, read: true, trade: false, withdrawal: false, ipAllowlisted: true }, lastTestSuccess: true, lastTestMessage: "OKX connection test succeeded", lastTestedAt: "2026-09-07T01:01:00Z" };
       return route.fulfill({ json: connection });
     }
     if (path.endsWith("/strategies")) return route.fulfill({ json: { strategies: [strategy], markets: ["NSE", "CRYPTO"], riskDefaults: {}, riskSchema: {} } });
@@ -446,12 +444,11 @@ test("strategies adds a configured instrument with one compact control", async (
   await page.getByRole("button", { name: "Encrypt and save" }).click();
   await expect(page.getByText("••••wxyz")).toBeVisible();
   await expect(page.getByText("browser-dummy-secret-value")).toHaveCount(0);
-  expect(credentialRequest).toEqual({ provider: "OKX", label: "Research account", environment: "DEMO", apiKey: "browser-dummy-key-wxyz", apiSecret: "browser-dummy-secret-value", passphrase: "browser-dummy-passphrase" });
+  expect(credentialRequest).toEqual({ provider: "OKX", label: "OpenDelta account", environment: "DEMO", apiKey: "browser-dummy-key-wxyz", apiSecret: "browser-dummy-secret-value", passphrase: "browser-dummy-passphrase" });
   await page.getByRole("button", { name: "Test connection" }).click();
   await expect(page.getByText("OKX connection test succeeded")).toBeVisible();
-  await expect(page.getByText("Allowed", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Live execution foundation" })).toBeVisible();
-  await expect(page.getByText("Live trading disabled").last()).toBeVisible();
+  await expect(page.getByText("None (safe)", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "API connections" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Place|Submit order/ })).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   const connectionOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

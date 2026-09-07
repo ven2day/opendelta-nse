@@ -11,7 +11,6 @@ import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, StrategySource, StrategySourcesResponse, StrategySourceTemplate, StrategySourceValidation, TradingViewStatus, TradingViewTestResult, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
 import { ExchangeConnectionsPanel } from "./exchange-connections-panel";
-import { LiveExecutionPanel } from "./live-execution-panel";
 import styles from "./settings-workspace.module.css";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
@@ -230,21 +229,23 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   return <main className="quant-workspace">
     <WorkspaceHeader eyebrow={`${marketLabel(market)} strategy control`} title="Strategies" actions={<div className="quant-header-actions"><StatusBadge tone="good">Paper only</StatusBadge><StatusBadge>Server-managed keys</StatusBadge></div>} />
 
+    <ExchangeConnectionsPanel />
+
     <details className={`quant-secondary-disclosure ${styles.studio}`}>
-      <summary><span><Code2 size={15} />Strategy Studio V2</span><small>Python editor · validation and immutable versions</small></summary>
+      <summary><span><Code2 size={15} />Strategy Studio</span><small>Python editor · validation and immutable versions</small></summary>
       <div className="quant-panel-body">
-        <div className={styles.studioIntro}><div><strong>Create a Strategy V2</strong><small>Edit Python here. Saving never deploys code; a completed backtest must be approved before Signals or Paper.</small></div><StatusBadge tone="good">Backtest-gated</StatusBadge></div>
-        {sourceTemplate.loading ? <LoadingState label="Loading Strategy V2 template" /> : sourceTemplate.error ? <Message kind="error">Strategy Studio is unavailable while the V2 service is offline. <button type="button" onClick={sourceTemplate.reload}>Retry</button></Message> : <>
-          <textarea className={styles.codeEditor} aria-label="Strategy V2 Python source" spellCheck={false} value={currentSource} disabled={sourceBusy !== null} onChange={(event) => { setStrategySource(event.target.value); setSourceValidation(null); setSourceNotice(null); }} />
+        <div className={styles.studioIntro}><div><strong>Create a strategy</strong><small>Edit Python here. Saving never deploys code; a completed backtest must be approved before Signals or Paper.</small></div><StatusBadge tone="good">Backtest-gated</StatusBadge></div>
+        {sourceTemplate.loading ? <LoadingState label="Loading strategy template" /> : sourceTemplate.error ? <Message kind="error">Strategy Studio is unavailable while the strategy service is offline. <button type="button" onClick={sourceTemplate.reload}>Retry</button></Message> : <>
+          <textarea className={styles.codeEditor} aria-label="Strategy Python source" spellCheck={false} value={currentSource} disabled={sourceBusy !== null} onChange={(event) => { setStrategySource(event.target.value); setSourceValidation(null); setSourceNotice(null); }} />
           <div className={styles.studioActions}><button type="button" disabled={sourceBusy !== null} onClick={() => { setStrategySource(sourceTemplate.data?.sourceCode ?? ""); setSourceValidation(null); setSourceNotice(null); }}>Reset template</button><button type="button" disabled={sourceBusy !== null || !currentSource.trim()} onClick={() => void validateStrategySource()}>{sourceBusy === "validate" ? "Validating…" : "Validate"}</button><button type="button" className="primary" disabled={sourceBusy !== null || !currentSource.trim() || sourceValidation?.valid === false} onClick={() => void saveStrategySource()}><Save size={15} />{sourceBusy === "save" ? "Saving…" : "Save new version"}</button></div>
         </>}
         {sourceNotice && <Message kind={sourceNotice.kind}>{sourceNotice.text}</Message>}
         {sourceValidation && (sourceValidation.errors.length > 0 || sourceValidation.warnings.length > 0) && <div className={styles.validationList}>{sourceValidation.errors.map((item) => <span key={item} className={styles.validationError}>{item}</span>)}{sourceValidation.warnings.map((item) => <span key={item}>{item}</span>)}</div>}
-        <div className={styles.sourceHistory}><strong>Saved V2 sources</strong>{strategySources.loading ? <small>Loading…</small> : strategySources.error ? <small>Unavailable until migration 012 is applied</small> : strategySources.data?.sources.length ? strategySources.data.sources.map((item) => <div key={item.sourceId} className={styles.sourceRow}><span><strong>{item.name}</strong><small>{item.strategyId}</small></span><code>v{item.strategyVersion}</code><span>{item.manifest.supportedMarkets.join(" + ")}</span><StatusBadge tone="good">Validated</StatusBadge></div>) : <small>No V2 source versions saved for {marketLabel(market)}.</small>}</div>
+        <div className={styles.sourceHistory}><strong>Saved sources</strong>{strategySources.loading ? <small>Loading…</small> : strategySources.error ? <small>Unavailable until migration 012 is applied</small> : strategySources.data?.sources.length ? strategySources.data.sources.map((item) => <div key={item.sourceId} className={styles.sourceRow}><span><strong>{item.name}</strong><small>{item.strategyId}</small></span><code>v{item.strategyVersion}</code><span>{item.manifest.supportedMarkets.join(" + ")}</span><StatusBadge tone="good">Validated</StatusBadge></div>) : <small>No source versions saved for {marketLabel(market)}.</small>}</div>
       </div>
     </details>
 
-    <AICopilotPanel surface="strategy" market={market} onUseDraft={(content) => { setStrategySource(content); setSourceValidation(null); setSourceNotice({ kind: "success", text: "AI draft loaded into the editor. Review it, then run normal V2 validation before saving." }); }} />
+    <AICopilotPanel surface="strategy" market={market} onUseDraft={(content) => { setStrategySource(content); setSourceValidation(null); setSourceNotice({ kind: "success", text: "AI draft loaded into the editor. Review it, then run normal validation before saving." }); }} />
 
     <Panel icon={<Settings2 size={17} />} title="Strategy control" description="Select a strategy, assign its timeframe and watchlist, then run signals or paper trading." aside={active ? <StatusBadge tone="good">Active: {active.name}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
       {strategies.loading ? <LoadingState label="Loading strategies" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !selectedStrategy ? <EmptyState title="No strategies registered" description={`No strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={save} noValidate>
@@ -307,7 +308,5 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
       </details>
     </Panel>
 
-    <ExchangeConnectionsPanel />
-    <LiveExecutionPanel />
   </main>;
 }

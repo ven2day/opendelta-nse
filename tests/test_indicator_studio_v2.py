@@ -66,7 +66,7 @@ class IndicatorSourceValidationTests(unittest.TestCase):
         self.assertEqual(result.manifest["outputs"][0]["pane"], "OVERLAY")
 
     def test_rejects_unsafe_source_and_invalid_outputs(self) -> None:
-        source = starter_source().replace('"""OpenDelta Indicator V2 example: simple moving average."""', "import requests")
+        source = starter_source().replace('"""OpenDelta Indicator Studio example: simple moving average."""', "import requests")
         source = source.replace('"name": "sma"', '"name": "Bad Name"')
         result = validate_source(source)
         self.assertFalse(result.valid)

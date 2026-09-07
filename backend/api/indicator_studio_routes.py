@@ -1,4 +1,4 @@
-"""Indicator Studio V2 authoring and isolated preview endpoints."""
+"""Indicator Studio authoring and isolated preview endpoints."""
 
 from __future__ import annotations
 

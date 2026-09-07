@@ -1,7 +1,7 @@
-"""Run the environment-free OpenDelta V2 release contract.
+"""Run the environment-free OpenDelta release contract.
 
 This is deliberately a structural and policy validation. Provider credentials,
-production data and live order mutations are never required or attempted.
+production data and broker order mutations are never required or attempted.
 """
 
 from __future__ import annotations
@@ -16,8 +16,6 @@ from backend.agent.mcp import TOOLS, MCPGateway
 from backend.app import app
 from backend.connections.providers import connection_testers
 from backend.core.models import MARKET_TIMEZONES, MARKETS
-from backend.live.adapters import DhanOrderAdapter, OkxOrderAdapter, ValrOrderAdapter
-from backend.live.service import LiveExecutionConfig
 from backend.markets.base import market_spec
 from backend.runtime import DEFAULT_CANDLE_READ_MODE
 
@@ -32,7 +30,6 @@ REQUIRED_MIGRATIONS = {
     "018_walk_forward_validations.sql",
     "019_ai_research_copilot.sql",
     "020_secure_exchange_connections.sql",
-    "021_live_execution_foundation.sql",
     "022_production_monitoring.sql",
     "023_agent_mcp_access.sql",
 }
@@ -49,7 +46,6 @@ REQUIRED_ROUTES = {
     "/v2/signals",
     "/v2/paper/orders",
     "/v2/connections",
-    "/v2/live-execution/status",
     "/v2/operations/health",
     "/v2/ai/copilot/requests",
     "/v2/agent/tokens",
@@ -95,12 +91,7 @@ def _markets() -> str:
 
 def _providers() -> str:
     assert set(connection_testers({})) == {"OKX", "VALR"}
-    assert {item.__name__ for item in (DhanOrderAdapter, OkxOrderAdapter, ValrOrderAdapter)} == {
-        "DhanOrderAdapter",
-        "OkxOrderAdapter",
-        "ValrOrderAdapter",
-    }
-    return "Dhan, OKX and VALR adapters; OKX/VALR private tests"
+    return "Dhan market data plus OKX/VALR read-only private tests; no order adapters"
 
 
 def _migrations() -> str:
@@ -108,7 +99,7 @@ def _migrations() -> str:
     missing = sorted(REQUIRED_MIGRATIONS - actual)
     assert not missing, f"missing migrations: {', '.join(missing)}"
     assert max(actual) == "023_agent_mcp_access.sql"
-    return "immutable V2 schema sequence 012-023 present"
+    return "immutable strategy, indicator, research and monitoring migrations present"
 
 
 def _routes() -> str:
@@ -130,13 +121,12 @@ def _v2_defaults() -> str:
     return "TimescaleDB is canonical and durable deployments are the signal/paper source of truth"
 
 
-def _live_default() -> str:
-    config = LiveExecutionConfig.from_environment({})
-    assert config.live_trading_enabled is False
-    assert config.deployment_permission is False
-    assert config.environment_allowed is False
-    assert config.public()["defaultState"] == "Live trading disabled"
-    return "all independent live activation flags fail closed when unset"
+def _paper_only() -> str:
+    runtime = (ROOT / "backend" / "platform_runtime.py").read_text(encoding="utf-8")
+    assert "create_live_execution_router" not in runtime
+    assert not list((ROOT / "backend" / "live").glob("*.py"))
+    assert not (ROOT / "backend" / "api" / "live_execution_routes.py").exists()
+    return "paper broker is the only execution implementation"
 
 
 def _agent_boundary() -> str:
@@ -146,7 +136,7 @@ def _agent_boundary() -> str:
     assert all(tool.arguments.model_json_schema().get("additionalProperties") is False for tool in TOOLS)
     forbidden_fragments = ("credential", "approve", "deploy", "place_order", "cancel_live", "emergency_stop")
     assert not any(fragment in name for name in names for fragment in forbidden_fragments)
-    return f"{len(TOOLS)} strict research tools; no live/governance/credential capability"
+    return f"{len(TOOLS)} strict research tools; no broker/governance/credential capability"
 
 
 def _isolated_runner() -> str:
@@ -196,7 +186,7 @@ def collect_checks() -> tuple[ValidationCheck, ...]:
             ("migration-chain", _migrations),
             ("v2-route-surface", _routes),
             ("v2-platform-defaults", _v2_defaults),
-            ("live-disabled-default", _live_default),
+            ("paper-only-execution", _paper_only),
             ("agent-safety-boundary", _agent_boundary),
             ("strategy-runner-isolation", _isolated_runner),
             ("obsolete-v1-removal", _obsolete_v1_removed),

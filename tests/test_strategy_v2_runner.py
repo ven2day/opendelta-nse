@@ -48,7 +48,7 @@ class StrategyV2RunnerTests(unittest.TestCase):
     def test_nse_strategy_receives_completed_candle_timestamp_in_ist(self) -> None:
         source = starter_source().replace(
             'return "HOLD"',
-            'stamp = data.candles["timestamp"].iloc[-1]\n'
+            'stamp = data.candles.index[-1].tz_convert("Asia/Kolkata")\n'
             '    third_close = close[2] if len(close) == 3 else 0\n'
             '    return {"decision": "BUY", "reasons": ["IST_SESSION"]} if stamp.hour == 9 and stamp.minute == 20 and third_close == 102 else "HOLD"',
         )

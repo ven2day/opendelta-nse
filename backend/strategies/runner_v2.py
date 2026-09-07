@@ -50,6 +50,20 @@ SAFE_BUILTINS = {
 }
 
 
+class _StrategyCandleFrame(pd.DataFrame):
+    """Timestamp-indexed candles whose individual columns use row positions."""
+
+    @property
+    def _constructor(self):  # type: ignore[override]
+        return _StrategyCandleFrame
+
+    def __getitem__(self, key: Any) -> Any:
+        result = super().__getitem__(key)
+        if isinstance(key, str) and key != "timestamp" and isinstance(result, pd.Series):
+            return result.reset_index(drop=True)
+        return result
+
+
 def _apply_limits() -> None:
     if resource is not None:
         resource.setrlimit(resource.RLIMIT_CPU, (60, 65))
@@ -119,12 +133,10 @@ def evaluate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # comparisons of NSE session times against UTC.
     timezone = "Asia/Kolkata" if str(payload["market"]).upper() == "NSE" else "UTC"
     frame["timestamp"] = frame.index.tz_convert(timezone)
-    # Strategy Studio presents candles as an append-only row table. Keep the
-    # row labels positional so common lookbacks such as close[20] address the
-    # 21st completed candle instead of looking for an integer label inside a
-    # DatetimeIndex. The canonical timestamp remains available in the explicit
-    # timestamp column above.
-    frame.reset_index(drop=True, inplace=True)
+    # Preserve the DatetimeIndex for code using candles.index[-1].tz_convert(),
+    # while making individual OHLCV columns positional for common lookbacks
+    # such as candles["close"][20].
+    frame = _StrategyCandleFrame(frame)
     params = dict(payload.get("params") or {})
     namespace: dict[str, Any] = {"__builtins__": SAFE_BUILTINS, "pd": pd, "np": np, "math": math}
     exec(compile(source, "strategy_v2.py", "exec"), namespace, namespace)  # noqa: S102 - isolated worker purpose

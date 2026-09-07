@@ -26,6 +26,8 @@ web/.vinext/
 web/dist/
 web/.wrangler/
 web/coverage/
+web/test-results/
+web/playwright-report/
 
 # Runtime state, caches, reports, and exports
 run/

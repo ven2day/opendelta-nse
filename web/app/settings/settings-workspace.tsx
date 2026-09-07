@@ -1,6 +1,6 @@
 "use client";
 
-import { Braces, Code2, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";
+import { Braces, Code2, Copy, Plus, Save, Settings2 } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { AICopilotPanel } from "../ai/ai-copilot-panel";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
@@ -10,6 +10,7 @@ import { useV2Resource } from "../platform/use-v2";
 import { errorMessage, v2Get, v2Post } from "../platform/v2-client";
 import type { StrategiesResponse, StrategyConfig, StrategyConfigResponse, StrategyDeployment, StrategyDeploymentMode, StrategyDeploymentsResponse, StrategySignalSource, StrategySource, StrategySourcesResponse, StrategySourceTemplate, StrategySourceValidation, TradingViewStatus, TradingViewTestResult, UniversesResponse } from "../platform/v2-types";
 import { EmptyState, LoadingState, Message, Panel, RequestErrorState, StatusBadge, WorkspaceHeader } from "../platform/workspace-ui";
+import { ExchangeConnectionsPanel } from "./exchange-connections-panel";
 import styles from "./settings-workspace.module.css";
 
 type Notice = { kind: "success" | "error"; text: string } | null;
@@ -305,13 +306,6 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
       </details>
     </Panel>
 
-    <Panel icon={<ShieldCheck size={17} />} title="Connections and safety" description="Connection details are informational; secrets cannot be entered in the browser." aside={<StatusBadge tone="good">Live orders disabled</StatusBadge>}>
-      <div className="quant-panel-body"><dl className="quant-facts">
-        <div><dt>Market data</dt><dd>{market === "CRYPTO" ? "OKX public feed" : "Dhan server connection"}</dd></div>
-        <div><dt>Market-data key</dt><dd>{market === "CRYPTO" ? "Not required" : "Server managed"}</dd></div>
-        <div><dt>Trading keys</dt><dd>Not accepted</dd></div>
-        <div><dt>Execution</dt><dd>Paper simulation only</dd></div>
-      </dl></div>
-    </Panel>
+    <ExchangeConnectionsPanel />
   </main>;
 }

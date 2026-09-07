@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import unittest
 import uuid
 from datetime import UTC, date, datetime
 
 from backend.ai.repository import AICopilotRepository
 from backend.backtest.result_writer import DatabaseResultWriter
+from backend.connections.crypto import EnvelopeCipher, MasterKeyring
+from backend.connections.providers import ConnectionPermissionReport
+from backend.connections.repository import ExchangeConnectionRepository
 from backend.data.database import Database
 from backend.data.repositories import (
     BacktestRunRepository,
@@ -82,6 +86,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "017_parameter_experiments",
                 "018_walk_forward_validations",
                 "019_ai_research_copilot",
+                "020_secure_exchange_connections",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -109,6 +114,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             "walk_forward_training_runs",
             "ai_copilot_requests",
             "ai_research_drafts",
+            "exchange_connections",
+            "exchange_connection_events",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -167,6 +174,21 @@ class PlatformDatabaseTests(unittest.TestCase):
         }
         self.assertIn("walk_forward_validations_date_range", walk_forward_constraints)
         self.assertIn("walk_forward_validations_workload", walk_forward_constraints)
+        connection_columns = {
+            row["column_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'exchange_connections'
+                """
+            )
+        }
+        self.assertNotIn("api_key", connection_columns)
+        self.assertNotIn("api_secret", connection_columns)
+        self.assertTrue({
+            "credentials_ciphertext", "credentials_nonce", "encrypted_data_key",
+            "data_key_nonce", "master_key_version",
+        } <= connection_columns)
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)
@@ -421,6 +443,41 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertEqual(draft["status"], "DRAFT")
         self.assertEqual(repeated["draftId"], draft["draftId"])
         self.assertEqual(repository.get_request(request_id)["draftIds"], [draft["draftId"]])
+
+    def test_exchange_credentials_are_encrypted_rotatable_and_never_returned(self) -> None:
+        repository = ExchangeConnectionRepository(self.database)
+        connection_id = uuid.uuid4()
+        private = {
+            "apiKey": secrets.token_hex(32),
+            "apiSecret": secrets.token_hex(32),
+            "passphrase": secrets.token_urlsafe(20),
+            "environment": "LIVE",
+        }
+        cipher = EnvelopeCipher(MasterKeyring("database-test", {"database-test": secrets.token_bytes(32)}))
+        encrypted = cipher.encrypt(str(connection_id), private)
+        public = repository.create(
+            connection_id=connection_id, provider="OKX", label="Database test", environment="LIVE",
+            masked_key_identifier=f"••••{private['apiKey'][-4:]}", encrypted=encrypted, actor="database-test",
+        )
+        self.assertNotIn(private["apiKey"], str(public))
+        self.assertNotIn(private["apiSecret"], str(public))
+        row, stored = repository.encrypted(connection_id)
+        self.assertNotIn(private["apiSecret"].encode(), bytes(row["credentials_ciphertext"]))
+        self.assertEqual(cipher.decrypt(str(connection_id), stored), private)
+        report = ConnectionPermissionReport(
+            True, True, True, False, True, "LIVE", "AVAILABLE", "Connection test succeeded"
+        )
+        tested = repository.record_test(connection_id, report=report, actor="database-test")
+        self.assertEqual(tested["status"], "CONNECTED")
+        rotated = cipher.rotate(str(connection_id), stored)
+        repository.update_encryption(connection_id, encrypted=rotated, actor="database-test")
+        self.assertEqual(cipher.decrypt(str(connection_id), repository.encrypted(connection_id)[1]), private)
+        repository.delete(connection_id, actor="database-test")
+        events = self.database.fetch_all(
+            "SELECT action FROM exchange_connection_events WHERE connection_id = %s ORDER BY event_id",
+            (connection_id,),
+        )
+        self.assertEqual([event["action"] for event in events], ["ADDED", "TEST_SUCCEEDED", "ROTATED", "DELETED"])
 
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()

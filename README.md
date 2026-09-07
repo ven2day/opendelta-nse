@@ -202,6 +202,8 @@ opendelta-nse/
 | `BACKTEST_WORKERS`, `BACKTEST_QUEUE_LIMIT`, `BACKTEST_CACHE_DIR` | bounded backtest worker/queue tuning (queue default `200`) and candle cache |
 | `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded walk-forward coordinators (default `10`) and child-run polling cadence |
 | `AI_PROVIDER`, `AI_PROVIDER_ENDPOINT`, `AI_MODEL`, `AI_PROVIDER_API_KEY` | optional backend-only AI Research Copilot provider; incomplete/unset configuration fails closed |
+| `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | versioned backend-only AES-256-GCM key for encrypted OKX/VALR connections |
+| `EXCHANGE_CREDENTIAL_PREVIOUS_KEYS` | optional secret-manager JSON keyring used only while rotating old encrypted records |
 | `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
 | `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 
@@ -213,6 +215,7 @@ are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 - [Architecture and how to add a strategy](docs/unified-platform.md)
 - [API reference](docs/API.md)
 - [AI Research Copilot safety](docs/ai-copilot.md)
+- [Exchange credential encryption and rotation](docs/credential-encryption.md)
 - [TradingView signal integration](docs/tradingview-integration.md)
 - [Deployment](docs/DEPLOYMENT.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Market-data operations](docs/market-data-operations.md) · [TimescaleDB bootstrap](docs/timescaledb-production-bootstrap.md)

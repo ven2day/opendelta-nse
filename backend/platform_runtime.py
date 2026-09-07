@@ -20,6 +20,12 @@ from backend.ai.repository import AICopilotRepository
 from backend.api.ai_copilot_routes import CopilotServices, configured_ai_provider, create_ai_copilot_router
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
+from backend.api.exchange_connection_routes import (
+    ExchangeConnectionServices,
+    create_exchange_connection_router,
+    dhan_connection_status,
+    install_exchange_connection_validation_handler,
+)
 from backend.api.indicator_studio_routes import create_indicator_studio_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.research_routes import ResearchServices, create_research_router
@@ -32,6 +38,9 @@ from backend.api.walk_forward_routes import WalkForwardServices, create_walk_for
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
+from backend.connections.crypto import EnvelopeCipher, MasterKeyring
+from backend.connections.providers import connection_testers
+from backend.connections.repository import ExchangeConnectionRepository
 from backend.data.database import Database, DatabaseUnavailable
 from backend.data.repositories import (
     BacktestRunRepository,
@@ -573,6 +582,9 @@ class PlatformRuntime:
     def ai_copilot_audit(self) -> AICopilotRepository:
         return AICopilotRepository(self.require_database())
 
+    def exchange_connections(self) -> ExchangeConnectionRepository:
+        return ExchangeConnectionRepository(self.require_database())
+
     def walk_forward_runner(self) -> WalkForwardJobRunner:
         backtests = self.runner()
         with self._lock:
@@ -739,6 +751,7 @@ def install_platform(
         candle_source=lambda market: runtime.candle_sources[market](),
         clock=runtime.clock,
     ).routes)
+    install_exchange_connection_validation_handler(app)
     app.router.routes.extend(create_ai_copilot_router(CopilotServices(
         audit=runtime.ai_copilot_audit,
         strategy_sources=runtime.strategy_sources,
@@ -748,6 +761,16 @@ def install_platform(
         experiments=runtime.research_experiments,
         walk_forward=runtime.walk_forward_validations,
         provider=configured_ai_provider,
+    )).routes)
+    app.router.routes.extend(create_exchange_connection_router(ExchangeConnectionServices(
+        repository=runtime.exchange_connections,
+        cipher=lambda: (
+            EnvelopeCipher(keyring)
+            if (keyring := MasterKeyring.from_environment()) is not None
+            else None
+        ),
+        testers=connection_testers,
+        dhan_status=dhan_connection_status,
     )).routes)
     app.router.routes.extend(
         create_dashboard_router(

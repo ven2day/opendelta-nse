@@ -139,6 +139,12 @@ responses stay ephemeral unless the user explicitly saves the exact response as
 a research draft. Drafts still pass through the existing V2 validation and
 immutable-version workflow; the Copilot cannot approve or deploy them.
 
+Private OKX and VALR connections are isolated from public market-data adapters
+and governance. Each credential document is encrypted by a random per-record
+DEK; AES-256-GCM wraps that DEK with a versioned deployment master key.
+Read-only provider testers retain normalized permission booleans only. Dhan
+remains deployment-managed through the existing collector.
+
 ## Runtime flags (all default off / safe)
 
 | Variable | Effect |
@@ -154,6 +160,8 @@ immutable-version workflow; the Copilot cannot approve or deploy them.
 | `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | backwards-compatible single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 | `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded validation coordinators and durable-run polling cadence |
+| `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | backend-only envelope-encryption key and version; connection mutation fails closed if absent |
+| `EXCHANGE_CREDENTIAL_PREVIOUS_KEYS` | temporary previous-version keyring for controlled re-encryption |
 
 Example with the daily swing strategy plus a future scalping strategy:
 

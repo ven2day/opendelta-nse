@@ -346,6 +346,8 @@ test("strategies adds a configured instrument with one compact control", async (
   await page.unroute("**/api/platform?**");
   await page.unroute("**/api/v2/**");
   let added: unknown;
+  let credentialRequest: Record<string, unknown> | null = null;
+  let connection: Record<string, unknown> | null = null;
   await page.route("**/api/platform?**", async (route) => {
     const request = route.request();
     const parameters = new URL(request.url()).searchParams;
@@ -359,7 +361,18 @@ test("strategies adds a configured instrument with one compact control", async (
   });
   await page.route("**/api/v2/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
     const strategy = { strategyId: "rsi_dip_ladder", name: "RSI Dip Ladder", version: "1.0.0", supportedMarkets: ["CRYPTO"], supportedTimeframes: ["5m"], configSchema: {}, defaults: {} };
+    if (path.endsWith("/connections") && method === "GET") return route.fulfill({ json: { encryptionConfigured: true, connections: connection ? [connection] : [], platformConnections: [{ provider: "DHAN", managedBy: "deployment", configured: true, status: "CONFIGURED", message: "Dhan authentication remains deployment managed" }], publicMarketData: { OKX: { available: true, requiresPrivateConnection: false }, VALR: { available: true, requiresPrivateConnection: false } } } });
+    if (path.endsWith("/connections") && method === "POST") {
+      credentialRequest = route.request().postDataJSON();
+      connection = { connectionId: "44444444-4444-4444-8444-444444444444", provider: "OKX", label: "Research account", environment: "DEMO", configured: true, maskedKeyIdentifier: "••••wxyz", disabled: true, status: "NOT_TESTED", permissions: {}, lastTestSuccess: null, lastTestMessage: null, lastTestedAt: null, createdAt: "2026-09-07T01:00:00Z", updatedAt: "2026-09-07T01:00:00Z" };
+      return route.fulfill({ status: 201, json: connection });
+    }
+    if (path.endsWith("/connections/44444444-4444-4444-8444-444444444444/test")) {
+      connection = { ...connection, status: "CONNECTED", permissions: { authenticated: true, read: true, trade: true, withdrawal: false, ipAllowlisted: true }, lastTestSuccess: true, lastTestMessage: "OKX connection test succeeded", lastTestedAt: "2026-09-07T01:01:00Z" };
+      return route.fulfill({ json: connection });
+    }
     if (path.endsWith("/strategies")) return route.fulfill({ json: { strategies: [strategy], markets: ["NSE", "CRYPTO"], riskDefaults: {}, riskSchema: {} } });
     if (path.endsWith("/strategy-deployments")) return route.fulfill({ json: { deployments: [] } });
     if (path.endsWith("/screener/universes")) return route.fulfill({ json: { active: {}, universes: [] } });
@@ -382,6 +395,22 @@ test("strategies adds a configured instrument with one compact control", async (
   await button.click();
   await expect(page.getByText("BTC-USDT is now available to watchlists, backtests and strategies.")).toBeVisible();
   expect(added).toEqual({ market: "CRYPTO", symbol: "BTC-USDT" });
+
+  await page.getByText("Add encrypted connection", { exact: true }).click();
+  await page.getByLabel("Environment").selectOption("DEMO");
+  await page.getByLabel("Exchange API key").fill("browser-dummy-key-wxyz");
+  await page.getByLabel("Exchange API secret").fill("browser-dummy-secret-value");
+  await page.getByLabel("OKX passphrase").fill("browser-dummy-passphrase");
+  await page.getByRole("button", { name: "Encrypt and save" }).click();
+  await expect(page.getByText("••••wxyz")).toBeVisible();
+  await expect(page.getByText("browser-dummy-secret-value")).toHaveCount(0);
+  expect(credentialRequest).toEqual({ provider: "OKX", label: "Research account", environment: "DEMO", apiKey: "browser-dummy-key-wxyz", apiSecret: "browser-dummy-secret-value", passphrase: "browser-dummy-passphrase" });
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await expect(page.getByText("OKX connection test succeeded")).toBeVisible();
+  await expect(page.getByText("Allowed", { exact: true }).first()).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const connectionOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(connectionOverflow).toBeLessThanOrEqual(1);
 });
 
 test("backtest ticket is compact and trade controls filter and sort the full result", async ({ page }) => {

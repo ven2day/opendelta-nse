@@ -254,7 +254,9 @@ contract and production setup.
 | GET | `/v2/paper/lots?market=&status=` | Lot history. |
 | POST | `/v2/paper/lots/{id}/close?market=` | Body `{price}` — manual close at a price. |
 
-A signal can open at most one filled paper order per account (database unique index). There is no order-placement client anywhere in the codebase.
+A signal can open at most one filled paper order per account (database unique
+index). Live provider adapters are isolated behind the `/v2/live-execution/*`
+gate service and default to mutation-disabled; paper routes never call them.
 
 ## Operational (non-v2) routes
 

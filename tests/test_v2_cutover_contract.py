@@ -22,6 +22,7 @@ def test_v2_cutover_contract_reports_every_required_boundary() -> None:
         "supported-providers",
         "migration-chain",
         "v2-route-surface",
+        "v2-platform-defaults",
         "live-disabled-default",
         "agent-safety-boundary",
         "strategy-runner-isolation",

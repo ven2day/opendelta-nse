@@ -5,7 +5,7 @@ Assessment date: 2026-09-07. Validation stack: migrations 001-023.
 ## Release decision
 
 The codebase is ready for a staged V2-default cutover after the ordered Phase
-8-14 pull requests and this validation change are reviewed and merged. The
+8-14, validation and cutover pull requests are reviewed and merged. The
 automated lifecycle, policy and browser suites pass without credentials or
 provider mutations. Real live trading remains disabled unless every server-side
 gate is separately configured and an operator completes the explicit approval
@@ -65,10 +65,10 @@ Validation-branch results on Windows/Python 3.12/Node 22:
 
 | Command | Result |
 | --- | --- |
-| `PYTHONPATH=. pytest -q` | 368 passed, 28 skipped in 18.97s |
-| `PYTHONPATH=. python -m scripts.validate_v2_cutover` | PASS, seven checks; no credentials/mutations |
+| `PYTHONPATH=. pytest -q` | 369 passed, 28 skipped in 19.02s |
+| `PYTHONPATH=. python -m scripts.validate_v2_cutover` | PASS, eight checks; no credentials/mutations |
 | `ruff check` on changed Python files | passed |
-| `ruff check .` | 217 pre-existing findings outside this change; no new finding |
+| `ruff check .` | 216 pre-existing findings outside this change; no new finding |
 | `python scripts/security_scan.py` | passed |
 | Git Bash `bash -n web/deploy/*.sh` | passed |
 | `npm ci` | completed; audit reported development dependency findings |

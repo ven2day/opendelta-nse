@@ -145,19 +145,14 @@ DEK; AES-256-GCM wraps that DEK with a versioned deployment master key.
 Read-only provider testers retain normalized permission booleans only. Dhan
 remains deployment-managed through the existing collector.
 
-## Runtime flags (all default off / safe)
+## Runtime configuration (safe defaults)
 
 | Variable | Effect |
 |---|---|
 | `MARKET_DATA_DATABASE_URL` | PostgreSQL URL; without it every `/v2/*` route answers 503 |
-| `PLATFORM_CANDLE_READ_MODE` | shared engine source: `legacy` (default), `timescale-fallback`, or strict `timescale` |
+| `PLATFORM_CANDLE_READ_MODE` | shared engine source: strict `timescale` (default), or explicit rollback modes `timescale-fallback` / `legacy` |
 | `SCREENER_CANDLE_BATCH_SIZE` | symbols read per TimescaleDB screener batch (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup (otherwise explicit) |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start all configured NSE live-signal workers (session-aware polling) |
-| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start all configured Crypto live-signal workers (24/7) |
-| `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default true when the worker runs) |
-| `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
-| `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | backwards-compatible single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 | `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded validation coordinators and durable-run polling cadence |
 | `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | backend-only envelope-encryption key and version; connection mutation fails closed if absent |
@@ -177,15 +172,11 @@ credential-backed adapter. Provider uncertainty enters reconciliation instead
 of being treated as a failed order. Emergency stops and the explicit state
 machine are persisted by migration `021_live_execution_foundation`.
 
-Example with the daily swing strategy plus a future scalping strategy:
-
-```dotenv
-NSE_LIVE_STRATEGIES=[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"},{"strategyId":"scalping_v1","timeframe":"5m","enabled":false}]
-```
-
-Each binding has an independent worker, completed-candle history, health row,
-deduplication identity and paper-lot grouping. Enable the second entry only
-after `scalping_v1` is registered.
+Each durable deployment has an independent worker, completed-candle history,
+health row, deduplication identity and paper-lot grouping. Create it through
+the authenticated V2 Settings workflow only after pinning an exact validated
+source/version, configuration, watchlist and supported timeframe. Environment
+variables cannot create or promote a deployment.
 
 Daily strategies use two clocks. The strategy evaluates the completed `1d`
 candle once after the NSE close. Its paper instruction is stored durably and
@@ -198,10 +189,11 @@ cannot replay a candle whose open predates creation of the pending instruction.
 rejected as a live binding until the shortened 13:15–15:30 closing bar is
 aggregated and completed with exchange-session semantics.
 
-The legacy NSE live-signal engine and legacy pages keep running unchanged
-until the v2 workers are switched on and the legacy routes are retired.
+The unified V2 workspaces and durable deployment records are the default. Safe
+legacy URL redirects and explicit candle fallback readers remain available for
+rollback; they cannot approve or activate a strategy.
 
-## API (all JSON, all paper-only)
+## API (all JSON; live mutation disabled by default)
 
 - `GET /v2/dashboard?market=` — everything the Dashboard shows, per section
 - `GET /v2/strategies?market=`, `GET|POST /v2/strategies/{id}/config`

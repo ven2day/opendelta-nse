@@ -67,7 +67,7 @@ python -m backend.data.migrate           # apply
 
 Run this inside the backtest container (or any environment with the same
 `MARKET_DATA_DATABASE_URL`). Until it has run, every `/v2/*` route answers 503
-with the pending versions and the legacy routes are unaffected.
+with the pending versions; operational health routes remain available.
 
 ## Dashboard cutover and rollback
 
@@ -83,10 +83,11 @@ release symlink/image tags with the same scripts, start those two units, and
 run the authenticated smoke tests. Do not restart the unrelated market-data
 collector.
 
-## Enabling the unified platform
+## V2 default platform
 
-Everything is opt-in and defaults to off; production behaviour is unchanged
-until these are set on `opendelta-backtest.service`:
+The V2 UI/API and strict Timescale reader are the defaults. Signals and paper
+execution still require durable, operator-reviewed deployment records; live
+mutations remain independently disabled:
 
 | Variable | Effect |
 | --- | --- |
@@ -94,11 +95,6 @@ until these are set on `opendelta-backtest.service`:
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup instead of explicitly |
 | `TRADINGVIEW_WEBHOOK_KEY` | random, revocable key placed only in TradingView alert JSON |
 | `TRADINGVIEW_MAX_ALERT_AGE_SECONDS` | delivery freshness window; default `900` seconds |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured NSE v2 live-signal worker |
-| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured Crypto v2 live-signal worker |
-| `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default `true` with the worker) |
-| `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to daily `rsi_dip_ladder_v1` |
-| `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | legacy single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 | `WALK_FORWARD_QUEUE_LIMIT` | bounded queued/running walk-forward coordinators (default `10`) |
 | `WALK_FORWARD_POLL_SECONDS` | durable child-run polling cadence (default `0.5`) |
@@ -108,11 +104,10 @@ until these are set on `opendelta-backtest.service`:
 | `AI_PROVIDER_TIMEOUT_SECONDS` | request timeout, clamped to 1–60 seconds (default `30`) |
 | `AI_COPILOT_REQUESTS_PER_MINUTE` | durable per-actor request limit (default `10`, maximum `60`) |
 
-Suggested order: apply migrations → restart the service → verify
-`GET /v2/dashboard?market=NSE` answers 200 → run a screener and save a universe
-→ enable the Crypto worker (24/7, public data) → enable the NSE worker →
-retire the legacy live-signal engine (`LIVE_SIGNAL_ENGINE_ENABLED`) and the
-`/legacy/*` pages.
+Use the complete [V2 cutover and rollback runbook](v2-cutover.md). Apply
+migrations, verify strict canonical data, restart the backend, validate both
+market dashboards and previews, confirm exact durable deployments, then
+promote the web image. Environment feature flags cannot create workers.
 
 For Phase 7 specifically, build the application images without promoting
 traffic, apply `017_parameter_experiments`, restart and verify the backtest API,
@@ -181,16 +176,18 @@ application image without dropping hashed tokens, rate-limit windows, tool
 request records, or operational audit history; revoke any issued tokens if the
 endpoint must be disabled immediately.
 
-For the NSE daily swing worker, production must have all of the following:
+For the NSE daily swing worker, production must use strict canonical reads and
+an approved durable deployment:
 
 ```dotenv
-PLATFORM_CANDLE_READ_MODE=timescale-fallback
-NSE_SIGNAL_ENGINE_V2_ENABLED=true
-NSE_PAPER_TRADING_V2_ENABLED=true
-NSE_LIVE_STRATEGIES=[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"}]
+PLATFORM_CANDLE_READ_MODE=timescale
+LIVE_TRADING_ENABLED=false
+LIVE_TRADING_DEPLOYMENT_ALLOWED=false
 ```
 
-After restart, verify the signal-health response reports the daily worker and
+Save the exact `rsi_dip_ladder_v1` version, config, NSE watchlist, `1d`
+timeframe and approved mode through V2 Settings. After restart, verify the
+signal-health response reports the daily worker and
 that the paper account's execution policy is `NEXT_OPEN`. Daily signals are
 created only after 15:30 IST; the independent 5-minute tracking feed supplies
 the next-session paper fill and in-session marks. Do not certify the service for

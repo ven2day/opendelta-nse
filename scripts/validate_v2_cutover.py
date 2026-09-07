@@ -19,6 +19,7 @@ from backend.core.models import MARKET_TIMEZONES, MARKETS
 from backend.live.adapters import DhanOrderAdapter, OkxOrderAdapter, ValrOrderAdapter
 from backend.live.service import LiveExecutionConfig
 from backend.markets.base import market_spec
+from backend.runtime import DEFAULT_CANDLE_READ_MODE
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_MIGRATIONS = {
@@ -124,6 +125,11 @@ def _routes() -> str:
     return f"{len(REQUIRED_ROUTES)} lifecycle routes present; retired entry points absent"
 
 
+def _v2_defaults() -> str:
+    assert DEFAULT_CANDLE_READ_MODE == "timescale"
+    return "TimescaleDB is canonical and durable deployments are the signal/paper source of truth"
+
+
 def _live_default() -> str:
     config = LiveExecutionConfig.from_environment({})
     assert config.live_trading_enabled is False
@@ -160,6 +166,7 @@ def collect_checks() -> tuple[ValidationCheck, ...]:
             ("supported-providers", _providers),
             ("migration-chain", _migrations),
             ("v2-route-surface", _routes),
+            ("v2-platform-defaults", _v2_defaults),
             ("live-disabled-default", _live_default),
             ("agent-safety-boundary", _agent_boundary),
             ("strategy-runner-isolation", _isolated_runner),

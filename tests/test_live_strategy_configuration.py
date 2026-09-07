@@ -135,8 +135,8 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
         ), self.assertRaisesRegex(ValueError, "backtest-only"):
             runtime.live_bindings("NSE")
 
-    def test_runtime_starts_every_configured_binding_independently(self) -> None:
-        runtime = PlatformRuntime(database=None, candle_sources={})
+    def test_runtime_starts_only_durable_deployments_independently(self) -> None:
+        runtime = PlatformRuntime(database=object(), candle_sources={})
         started: list[tuple[str, str]] = []
 
         def fake_worker(_market: str, *, binding: LiveStrategyBinding, **_kwargs):
@@ -151,13 +151,20 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
                 status=lambda: {**binding.public(), "status": "READY"},
             )
 
-        environment = {
-            "NSE_SIGNAL_ENGINE_V2_ENABLED": "true",
-            "NSE_PAPER_TRADING_V2_ENABLED": "false",
-            "CRYPTO_SIGNAL_ENGINE_V2_ENABLED": "false",
-            "NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"},{"strategyId":"ema_vwap_strong_buy","timeframe":"5m"}]',
-        }
-        with patch.dict("os.environ", environment, clear=False), patch.object(runtime, "build_signal_worker", side_effect=fake_worker):
+        deployments = [
+            {
+                "strategyId": "rsi_dip_ladder_v1", "strategyVersion": "1.0.0",
+                "timeframe": "1d", "mode": "SIGNALS", "signalSource": "OPENDELTA",
+            },
+            {
+                "strategyId": "ema_vwap_strong_buy", "strategyVersion": "1.0.0",
+                "timeframe": "5m", "mode": "SIGNALS", "signalSource": "OPENDELTA",
+            },
+        ]
+        repository = SimpleNamespace(list=lambda market: deployments if market == "NSE" else [])
+        with patch.object(runtime, "strategy_deployments", return_value=repository), patch.object(
+            runtime, "paper_broker", return_value=None
+        ), patch.object(runtime, "build_signal_worker", side_effect=fake_worker):
             runtime._start_signal_workers()
 
         self.assertEqual(started, [("rsi_dip_ladder_v1", "1d"), ("ema_vwap_strong_buy", "5m")])
@@ -165,6 +172,20 @@ class LiveStrategyConfigurationTests(unittest.TestCase):
             [(row["strategyId"], row["timeframe"]) for row in runtime.worker_statuses("NSE")],
             started,
         )
+
+    def test_runtime_ignores_environment_activation_without_a_durable_deployment(self) -> None:
+        runtime = PlatformRuntime(database=object(), candle_sources={})
+        repository = SimpleNamespace(list=lambda _market: [])
+        environment = {
+            "NSE_SIGNAL_ENGINE_V2_ENABLED": "true",
+            "NSE_PAPER_TRADING_V2_ENABLED": "true",
+            "NSE_LIVE_STRATEGIES": '[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"}]',
+        }
+
+        with patch.dict("os.environ", environment, clear=False), patch.object(
+            runtime, "strategy_deployments", return_value=repository
+        ):
+            self.assertEqual(runtime.configured_deployments("NSE"), [])
 
     def test_runtime_resolves_latest_paper_outcome_for_each_worker_cycle(self) -> None:
         runtime = PlatformRuntime(database=None, candle_sources={})

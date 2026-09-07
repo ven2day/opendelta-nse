@@ -144,6 +144,13 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
         winRate: index ? 0.5 : 0.75,
         fees: 4,
         slippage: 2,
+        completedTrades: 2,
+        openTrades: index,
+        targetHits: 1,
+        stoppedTrades: index,
+        expiredTrades: 0,
+        averageHoldingMinutes: 25,
+        exposureMinutes: 50,
       },
       createdAt: "2026-09-05T09:00:00Z",
     },
@@ -224,7 +231,27 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
         warnings: [],
       } });
     }
-    if (path.endsWith("/research/walk-forward")) return route.fulfill({ json: { validations: [] } });
+    if (path.endsWith("/research/walk-forward")) return route.fulfill({ json: { validations: [{
+      validationId: "73333333-3333-4333-8333-333333333333", previewHash: `sha256:${"c".repeat(64)}`,
+      name: "Completed walk-forward", mode: "ROLLING", market: "NSE", strategyId: "rsi_dip_ladder_v1",
+      strategyVersion: "1.0.0", strategySourceId: null, timeframe: "5m", universeName: "Active NSE",
+      symbols: ["INFY", "TCS"], overallStartDate: "2026-03-01", overallEndDate: "2026-09-01",
+      trainingWindow: 20, testingWindow: 5, step: 5, maximumFolds: 6,
+      candidateExperimentId: experiment.experimentId, rankingObjective: "RETURN_DRAWDOWN",
+      minimumRequiredTrades: 3, transactionCostBps: 11.1, slippageBps: 5,
+      foldCount: 1, candidateCount: 2, childRunCount: 3, symbolCount: 2,
+      estimatedSymbolRuns: 6, estimatedCandleWorkload: 15000, cancelRequested: false, status: "COMPLETE",
+      foldStatusCounts: { COMPLETE: 1 }, childRunStatusCounts: { COMPLETE: 3 }, createdAt: "2026-09-05T09:00:00Z",
+      aggregateUnseenMetrics: { realizedPnl: 35, maximumDrawdown: 8, winRate: 60, completedTrades: 2, openTrades: 0, targetHits: 1, stoppedTrades: 1, expiredTrades: 0, averageHoldingMinutes: 20, exposureMinutes: 40 },
+      folds: [{
+        foldId: "74444444-4444-4444-8444-444444444444", position: 1, status: "COMPLETE",
+        trainingStart: "2026-03-02", trainingEnd: "2026-03-27", testingStart: "2026-03-30", testingEnd: "2026-04-03",
+        trainingSessions: 20, testingSessions: 5, selectedVariantId: variants[0].variantId,
+        selectedCandidateName: variants[0].name, selectedConfiguration: variants[0].configuration,
+        selectedExecution: variants[0].execution, trainingRank: 1, trainingCandidates: variants,
+        testRun: { ...variants[0].run, runId: "75555555-5555-4555-8555-555555555555", startDate: "2026-03-30", endDate: "2026-04-03", metrics: { ...variants[0].run.metrics, realizedPnl: 35, maximumDrawdown: 8 } },
+      }],
+    }] } });
     if (path.endsWith("/research/experiments")) return route.fulfill({ json: { experiments: [experiment] } });
     const runIndex = runs.findIndex((runId) => path.endsWith(`/backtests/${runId}/trades`));
     if (runIndex >= 0) return route.fulfill({ json: {
@@ -255,8 +282,16 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   await page.getByLabel("Ranking", { exact: true }).selectOption("RETURN_DRAWDOWN");
   await expect(page.getByText("Leader", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Net P&L" }).click();
-  await expect(page.getByRole("columnheader", { name: "Net P&L" })).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.getByRole("columnheader", { name: "Net P&L" }).first()).toHaveAttribute("aria-sort", "ascending");
+  const strategyComparison = page.getByRole("heading", { name: "Strategy comparison" }).locator("xpath=ancestor::section[1]");
+  await strategyComparison.getByRole("button", { name: "JSON" }).first().click();
+  await expect(strategyComparison.getByText(/Exact immutable configuration/)).toBeVisible();
   await expect(page.getByRole("group", { name: "Equity curve selection" }).getByRole("checkbox")).toHaveCount(2);
+  await expect(page.getByRole("heading", { name: "Training versus unseen comparison" })).toBeVisible();
+  const foldComparison = page.getByRole("heading", { name: "Training versus unseen comparison" }).locator("xpath=ancestor::section[1]");
+  await expect(foldComparison.getByText("TRAINING", { exact: true })).toBeVisible();
+  await expect(foldComparison.getByText("UNSEEN TEST", { exact: true })).toBeVisible();
+  await expect(foldComparison.getByRole("link", { name: "Chart" }).last()).toHaveAttribute("href", "/backtest?market=NSE&runId=75555555-5555-4555-8555-555555555555");
 
   await page.getByLabel("rsi_low values").fill("[20, 25, 30]");
   await expect(page.getByText(/Preview stale/)).toBeVisible();

@@ -85,7 +85,7 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 
 `execution`: `targetPct?, stopLossPct?, maximumHoldingBars?, initialQuantity, allowAdditionalBuys, additionalQuantityPct, additionalSizingMode (REDUCE_EVERY_NEW_LOT|FIXED_PERCENTAGE_OF_FIRST_LOT), minimumQuantity, maximumEntriesPerCycle, batchSize, transactionCostBps?, slippageBps?`. The two optional basis-point overrides are research-only and must be supplied together.
 
-`metrics`: `totalSignals, completedTrades, targetHits, stoppedTrades, expiredTrades, openTrades, realizedPnl, unrealizedPnl, fees, slippage, winRate, averageMaePct, averageMfePct, averageHoldingMinutes, medianHoldingMinutes, maximumDrawdown, symbolsProcessed, symbolsFailed`.
+`metrics`: `totalSignals, completedTrades, targetHits, stoppedTrades, expiredTrades, openTrades, realizedPnl, unrealizedPnl, fees, slippage, winRate, averageMaePct, averageMfePct, averageHoldingMinutes, medianHoldingMinutes, exposureMinutes, maximumDrawdown, symbolsProcessed, symbolsFailed`.
 
 ## Research Lab parameter experiments
 
@@ -132,6 +132,9 @@ test results to select a candidate.
 
 Comparison uses recorded metrics and trades. The optional Return / drawdown
 score is `netPnl / max(abs(maximumDrawdown), 1)` and is not a Sharpe ratio.
+The workspace sorts every persisted performance, outcome, holding-time,
+exposure, and failure metric; inspects one exact immutable configuration at a
+time; and pairs each walk-forward training winner with its unseen test result.
 Failed symbols remain a separate operational metric. Rejected-trade analytics
 are unavailable because the engine does not yet persist decision-event
 candidates; a strategy emitting no BUY is not counted as a rejection.

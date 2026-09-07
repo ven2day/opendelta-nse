@@ -232,6 +232,7 @@ export type BacktestMetrics = {
   unrealizedPnl?: number | null;
   fees?: number | null;
   slippage?: number | null;
+  exposureMinutes?: number | null;
   winRate?: number | null;
   averageMaePct?: number | null;
   averageMfePct?: number | null;

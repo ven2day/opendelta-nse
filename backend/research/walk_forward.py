@@ -233,8 +233,19 @@ def aggregate_unseen_metrics(metrics_rows: Sequence[Mapping[str, Any]]) -> dict[
         "slippage": round(sum(float(row.get("slippage") or 0.0) for row in metrics_rows), 2),
         "completedTrades": completed_trades,
         "openTrades": sum(int(row.get("openTrades") or 0) for row in metrics_rows),
+        "targetHits": sum(int(row.get("targetHits") or 0) for row in metrics_rows),
+        "stoppedTrades": sum(int(row.get("stoppedTrades") or 0) for row in metrics_rows),
+        "expiredTrades": sum(int(row.get("expiredTrades") or 0) for row in metrics_rows),
         "failedSymbols": sum(int(row.get("symbolsFailed") or 0) for row in metrics_rows),
-        "exposureMinutes": round(sum(float(row.get("exposureMinutes") or 0.0) for row in metrics_rows), 2),
+        "exposureMinutes": round(
+            sum(
+                float(row.get("exposureMinutes") or (
+                    int(row.get("completedTrades") or 0) * float(row.get("averageHoldingMinutes") or 0.0)
+                ))
+                for row in metrics_rows
+            ),
+            2,
+        ),
         "averageHoldingMinutes": round(holding_weight / completed_trades, 2) if completed_trades else None,
     }
     result["returnDrawdownScore"] = round(

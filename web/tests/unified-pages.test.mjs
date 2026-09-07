@@ -420,19 +420,27 @@ test("Research Lab creates immutable grouped backtest variants without deploymen
   assert.doesNotMatch(source, /backtests\/\$\{.*\}\/approve|strategy-deployments|paper-trading|Approve for|Deploy/);
 });
 
-test("Research Lab compares completed variants and opens their immutable charts", async () => {
-  const [research, backtestPage, backtest] = await Promise.all([
+test("Research Lab completes strategy and walk-forward comparisons", async () => {
+  const [research, walkComparison, backtestPage, backtest] = await Promise.all([
     readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/research/walk-forward-comparison.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/backtest/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
   ]);
-  for (const metric of ["Net P&amp;L", "Drawdown", "Win rate", "Costs", "Exposure", "Failed symbols"]) assert.match(research, new RegExp(metric));
+  for (const metric of ["Net P&amp;L", "Drawdown", "Win rate", "Costs", "Completed trades", "Open trades", "Target hits", "Stops", "Expiries", "Average holding", "Exposure", "Failed symbols"]) assert.match(research, new RegExp(metric));
   assert.match(research, /Variant equity curves/);
   assert.match(research, /Return \/ drawdown score/);
+  assert.match(research, /Exact immutable configuration/);
   assert.match(research, /MAX_VISIBLE_CURVES = 8/);
   assert.match(research, /Equity curve selection/);
   assert.match(research, /new URLSearchParams\(\{ market, runId: row\.variant\.run\.runId \}\)/);
   assert.match(research, /Rejected trades: unavailable/);
+  assert.match(walkComparison, /Training versus unseen comparison/);
+  assert.match(walkComparison, /TRAINING/);
+  assert.match(walkComparison, /UNSEEN TEST/);
+  assert.match(walkComparison, /Exact immutable inputs/);
+  assert.match(walkComparison, /Rejected trades: unavailable/);
+  assert.doesNotMatch(walkComparison, /Approve for|Deploy strategy|Enable live|Place order/);
   assert.match(backtestPage, /initialRunId=\{parameters\.runId\}/);
   assert.match(backtest, /useState<string \| null>\(initialRunId \?\? null\)/);
 });

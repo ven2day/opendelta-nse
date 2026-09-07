@@ -15,6 +15,7 @@ ExecStartPre=-/usr/bin/docker rm -f opendelta-backtest
 ExecStart=/usr/bin/docker run --rm --name opendelta-backtest \
   --network opendelta-internal \
   --env-file /etc/opendelta-dhan.env \
+  --env PLATFORM_CANDLE_READ_MODE=timescale-fallback \
   --env BACKTEST_CACHE_DIR=/var/lib/opendelta/backtest \
   --env BACKTEST_WORKERS=5 \
   --env BACKTEST_QUEUE_LIMIT=200 \

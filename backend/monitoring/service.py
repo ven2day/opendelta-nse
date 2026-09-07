@@ -37,23 +37,32 @@ class MonitoringService:
         self.clock = clock or (lambda: datetime.now(UTC))
 
     def health(self) -> dict[str, Any]:
-        self.repository.expire_stale_leases(now=self.clock())
+        repository_status: dict[str, Any] = {"status": "AVAILABLE"}
+        try:
+            self.repository.expire_stale_leases(now=self.clock())
+        except Exception as error:  # noqa: BLE001 - health must return a degraded snapshot
+            repository_status = {"status": "UNAVAILABLE", "reason": type(error).__name__}
         nse = _safe_call(lambda: self.market_overview("NSE"))
         crypto = _safe_call(lambda: self.market_overview("CRYPTO"))
         platform = _safe_call(self.platform_status)
         connections = _safe_call(self.connection_status)
         strategy_runner = _safe_call(self.strategy_runner_status)
-        queues = {**self.repository.queue_counts(), **dict(_safe_call(self.queue_capacity))}
-        leases = self.repository.leases(limit=200)
-        alerts = self.repository.alerts(limit=200)
+        persisted_queues = _safe_call(self.repository.queue_counts)
+        capacity = _safe_call(self.queue_capacity)
+        queues = {**persisted_queues, **capacity}
+        leases = _safe_list(lambda: self.repository.leases(limit=200))
+        alerts = _safe_list(lambda: self.repository.alerts(limit=200))
         active_alerts = [item for item in alerts if item["status"] != "RESOLVED"]
-        unhealthy = any(item["severity"] == "CRITICAL" for item in active_alerts)
+        unhealthy = repository_status["status"] == "UNAVAILABLE" or any(
+            item["severity"] == "CRITICAL" for item in active_alerts
+        )
         degraded = unhealthy or bool(active_alerts)
         return {
             "overall": "UNHEALTHY" if unhealthy else "DEGRADED" if degraded else "HEALTHY",
             "generatedAt": self.clock().isoformat(),
             "marketData": {"NSE": nse, "CRYPTO": crypto},
             "platform": platform,
+            "monitoringStore": repository_status,
             "workerLeases": leases,
             "queues": queues,
             "strategyRunner": strategy_runner,
@@ -285,3 +294,10 @@ def _safe_call(call: Callable[[], Mapping[str, Any]]) -> dict[str, Any]:
         return dict(call())
     except Exception as error:  # noqa: BLE001 - health surfaces degrade without exposing internals
         return {"status": "UNAVAILABLE", "reason": type(error).__name__}
+
+
+def _safe_list(call: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    try:
+        return call()
+    except Exception:  # noqa: BLE001 - sibling status fields expose degraded health
+        return []

@@ -7,6 +7,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
       "fastapi>=0.116,<1" \
+      "cryptography>=46,<47" \
       "numpy>=2.3,<3" \
       "pandas>=3.0.5,<4" \
       "pyarrow>=21,<22" \

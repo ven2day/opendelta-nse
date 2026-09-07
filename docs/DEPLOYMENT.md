@@ -132,6 +132,18 @@ Then supply provider settings through deployment secrets and restart. Rollback
 removes the provider variables and restores the prior image; retain the additive
 audit/draft tables.
 
+For Phase 11, apply `020_secure_exchange_connections` before deploying the
+matching API/web release. The runtime now includes `cryptography` for AES-256-GCM.
+Supply `EXCHANGE_CREDENTIAL_MASTER_KEY` and
+`EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` through deployment secrets. Optional
+provider base URL overrides must use HTTPS. Follow
+[the credential encryption and rotation runbook](credential-encryption.md).
+
+To roll back Phase 11, disable any saved connections, deploy the preceding
+application version, and retain both additive connection tables. Do not drop
+encrypted records or audit history. Provider-side keys remain independent and
+must be revoked at the exchange when no longer required.
+
 For the NSE daily swing worker, production must have all of the following:
 
 ```dotenv

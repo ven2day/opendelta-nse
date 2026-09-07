@@ -388,6 +388,48 @@ export type AIResearchDraft = {
   content: string; status: "DRAFT"; createdAt?: string;
 };
 
+export type ExchangePermissionReport = {
+  authenticated?: boolean;
+  read?: boolean;
+  trade?: boolean;
+  withdrawal?: boolean | null;
+  ipAllowlisted?: boolean | null;
+  environment?: "LIVE" | "DEMO";
+  accountStatus?: string;
+};
+
+export type ExchangeConnection = {
+  connectionId: string;
+  provider: "OKX" | "VALR";
+  label: string;
+  environment: "LIVE" | "DEMO";
+  configured: true;
+  maskedKeyIdentifier: string;
+  disabled: boolean;
+  status: "NOT_TESTED" | "CONNECTED" | "FAILED" | "WITHDRAWAL_PERMISSION" | "DISABLED";
+  permissions: ExchangePermissionReport;
+  lastTestSuccess: boolean | null;
+  lastTestMessage: string | null;
+  lastTestedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlatformConnection = {
+  provider: "DHAN";
+  managedBy: "deployment";
+  configured: boolean;
+  status: "CONFIGURED" | "NOT_CONFIGURED";
+  message: string;
+};
+
+export type ExchangeConnectionsResponse = {
+  encryptionConfigured: boolean;
+  connections: ExchangeConnection[];
+  platformConnections: PlatformConnection[];
+  publicMarketData: Record<string, { available: boolean; requiresPrivateConnection: boolean }>;
+};
+
 export type EngineStatus = {
   market?: PlatformMarket | string | null;
   status?: string | null;

@@ -154,6 +154,22 @@ There are no AI actions for approvals, deployments, credentials, paper/live
 activation, or orders. Requests are durably rate-limited and audited without
 storing prompts or provider responses. See [AI Research Copilot safety](ai-copilot.md).
 
+## Secure exchange connections
+
+- `GET /v2/connections` returns secret-free OKX/VALR status, Dhan deployment health, and the public/private market-data boundary.
+- `POST /v2/connections` encrypts one write-only OKX or VALR credential set.
+- `POST /v2/connections/{connectionId}/replace` replaces credentials after the exact provider confirmation phrase.
+- `POST /v2/connections/{connectionId}/test` performs a read-only authenticated permission test.
+- `GET /v2/connections/{connectionId}/permissions` returns normalized, secret-free permission status.
+- `POST /v2/connections/{connectionId}/disable` disables or re-enables a safe connection; withdrawal-capable connections cannot be enabled.
+- `POST /v2/connections/{connectionId}/rotate` re-encrypts with a fresh DEK/nonces and the current master-key version.
+- `POST /v2/connections/{connectionId}/delete` deletes encrypted material after the exact provider confirmation phrase.
+
+No endpoint returns plaintext credentials, ciphertext, encrypted DEKs, nonces,
+or provider response bodies. Public OKX/VALR market data does not require a
+private connection, and a successful connection test does not enable trading.
+See [credential encryption and rotation](credential-encryption.md).
+
 ## Signals
 
 | Method | Path | Notes |

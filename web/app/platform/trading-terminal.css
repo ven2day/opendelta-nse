@@ -1053,6 +1053,13 @@
 .ai-copilot-response { display: grid; gap: 7px; border: 1px solid var(--od-accent); border-radius: 7px; padding: 11px; background: var(--od-accent-soft); }
 .ai-copilot-response > small { color: var(--od-muted); }
 .ai-copilot-response pre { max-height: 420px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.exchange-connections-panel, .connection-list, .connection-card { display: grid; gap: 10px; min-width: 0; }
+.connection-safety-strip, .connection-card > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.connection-card > header span, .connection-platform-grid article { display: grid; gap: 3px; }
+.connection-platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 8px; }
+.connection-platform-grid article, .connection-card { padding: 11px; border: 1px solid var(--od-border); border-radius: 7px; background: var(--od-surface-raised); }
+.connection-card .quant-facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr)); }
+.connection-card input, .connection-card select, .connection-add input, .connection-add select { min-width: 0; max-width: 100%; }
 .research-parameter-scroll { max-width: 100%; }
 .research-parameter-table { min-width: 1180px; table-layout: fixed; }
 .research-parameter-table th:nth-child(1) { width: 105px; }
@@ -1117,6 +1124,7 @@
 @media (max-width: 640px) {
   .research-experiment-grid, .research-comparison-controls { grid-template-columns: 1fr; }
   .ai-copilot-grid, .ai-trade-context > div { grid-template-columns: 1fr; }
+  .connection-safety-strip, .connection-card > header { align-items: flex-start; flex-direction: column; }
   .research-variant header, .research-experiment-card > header { align-items: stretch; flex-direction: column; }
   .research-mode-control { width: 100%; }
   .research-mode-control button { flex: 1; }

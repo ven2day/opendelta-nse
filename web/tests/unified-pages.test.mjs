@@ -312,8 +312,9 @@ test("the six workspaces keep primary work visible and secondary detail collapse
 });
 
 test("settings is JSON-first and does not duplicate global or market controls", async () => {
-  const [source, proxy] = await Promise.all([
+  const [source, connections, proxy] = await Promise.all([
     readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/settings/exchange-connections-panel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/platform/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(source, /aria-label="Strategy and paper execution JSON"/);
@@ -323,7 +324,9 @@ test("settings is JSON-first and does not duplicate global or market controls", 
   assert.doesNotMatch(source, /GlobalPriceRangeForm/);
   assert.doesNotMatch(source, /MARKETS\.map/);
   assert.doesNotMatch(source, /VALR/);
-  assert.match(source, /OKX public feed/);
+  assert.match(source, /<ExchangeConnectionsPanel \/>/);
+  assert.match(connections, /publicMarketData/);
+  assert.match(connections, /No private key required/);
   assert.match(source, /aria-label="Strategy mode"/);
   assert.match(source, /\["OFF", "SIGNALS", "PAPER"\]/);
   assert.match(source, /strategies\/\$\{selectedStrategy\.strategyId\}\/deployment/);
@@ -486,6 +489,26 @@ test("AI Research Copilot is explicit, fail-closed, and draft-only in all three 
   assert.match(copilot, /Use in editor/);
   assert.match(copilot, /disabled=\{!status\.data\?\.configured/);
   assert.doesNotMatch(copilot, /Approve for|Deploy strategy|Enable live|Place order|API key/);
+});
+
+test("exchange credentials are write-only, encrypted, confirmation-gated, and never enable live trading", async () => {
+  const [source, routes, repository, migration] = await Promise.all([
+    readFile(new URL("../app/settings/exchange-connections-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/api/exchange_connection_routes.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/connections/repository.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/data/sql/020_secure_exchange_connections.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /type="password"/);
+  assert.match(source, /Live trading disabled/);
+  assert.match(source, /Withdrawal-capable keys are automatically held disabled/);
+  assert.match(source, /REPLACE \$\{connection\.provider\}/);
+  assert.match(source, /DELETE \$\{connection\.provider\}/);
+  assert.doesNotMatch(source, /enable live|approve|deploy strategy/i);
+  assert.match(routes, /Exchange credential encryption is not configured/);
+  assert.match(repository, /withdrawal permission cannot be enabled/i);
+  assert.doesNotMatch(routes, /return .*apiSecret|return .*passphrase/);
+  assert.match(migration, /credentials_ciphertext bytea/);
+  assert.doesNotMatch(migration, /api_secret\s+(?:text|varchar)|api_key\s+(?:text|varchar)/i);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

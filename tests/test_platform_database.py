@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import secrets
 import unittest
-from datetime import UTC, date, datetime
+import uuid
+from datetime import UTC, date, datetime, timedelta
 
+from backend.agent.repository import AgentRateLimit, AgentRequestConflict, AgentTokenRepository
+from backend.ai.repository import AICopilotRepository
 from backend.backtest.result_writer import DatabaseResultWriter
+from backend.connections.crypto import EnvelopeCipher, MasterKeyring
+from backend.connections.providers import ConnectionPermissionReport
+from backend.connections.repository import ExchangeConnectionRepository
 from backend.data.database import Database
 from backend.data.repositories import (
     BacktestRunRepository,
@@ -20,7 +28,8 @@ from backend.data.repositories import (
     StrategySourceRepository,
     WalkForwardValidationRepository,
 )
-from psycopg.errors import CheckViolation
+from backend.monitoring.repository import MonitoringRepository
+from psycopg.errors import CheckViolation, RaiseException
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 
@@ -78,6 +87,10 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "016_research_experiments",
                 "017_parameter_experiments",
                 "018_walk_forward_validations",
+                "019_ai_research_copilot",
+                "020_secure_exchange_connections",
+                "022_production_monitoring",
+                "023_agent_mcp_access",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -103,6 +116,18 @@ class PlatformDatabaseTests(unittest.TestCase):
             "walk_forward_validations",
             "walk_forward_folds",
             "walk_forward_training_runs",
+            "ai_copilot_requests",
+            "ai_research_drafts",
+            "exchange_connections",
+            "exchange_connection_events",
+            "worker_leases",
+            "operational_audit_events",
+            "operational_alerts",
+            "operational_alert_occurrences",
+            "notification_deliveries",
+            "agent_access_tokens",
+            "agent_rate_limit_windows",
+            "agent_tool_requests",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -161,15 +186,139 @@ class PlatformDatabaseTests(unittest.TestCase):
         }
         self.assertIn("walk_forward_validations_date_range", walk_forward_constraints)
         self.assertIn("walk_forward_validations_workload", walk_forward_constraints)
+        connection_columns = {
+            row["column_name"]
+            for row in self.database.fetch_all(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'exchange_connections'
+                """
+            )
+        }
+        self.assertNotIn("api_key", connection_columns)
+        self.assertNotIn("api_secret", connection_columns)
+        self.assertTrue(
+            {
+                "credentials_ciphertext",
+                "credentials_nonce",
+                "encrypted_data_key",
+                "data_key_nonce",
+                "master_key_version",
+            }
+            <= connection_columns
+        )
+    def test_monitoring_leases_are_compare_and_set_and_recover_after_expiry(self) -> None:
+        repository = MonitoringRepository(self.database)
+        first_time = datetime(2026, 9, 7, 10, 0, tzinfo=UTC)
+        owner_one, owner_two = str(uuid.uuid4()), str(uuid.uuid4())
+        first = repository.acquire_lease(
+            worker_type="BACKTEST", task_key="run-monitoring-test", worker_identity="worker-one",
+            host_identity="host-one", process_identity="1", owner_token=owner_one,
+            ttl_seconds=30, now=first_time,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(repository.acquire_lease(
+            worker_type="BACKTEST", task_key="run-monitoring-test", worker_identity="worker-two",
+            host_identity="host-two", process_identity="2", owner_token=owner_two,
+            ttl_seconds=30, now=datetime(2026, 9, 7, 10, 0, 10, tzinfo=UTC),
+        ))
+        recovered = repository.acquire_lease(
+            worker_type="BACKTEST", task_key="run-monitoring-test", worker_identity="worker-two",
+            host_identity="host-two", process_identity="2", owner_token=owner_two,
+            ttl_seconds=30, now=datetime(2026, 9, 7, 10, 0, 31, tzinfo=UTC),
+        )
+        self.assertEqual(recovered["workerIdentity"], "worker-two")
+        self.assertNotEqual(recovered["ownerFingerprint"], first["ownerFingerprint"])
+
+    def test_operational_audit_is_append_only_and_alerts_deduplicate_with_cooldown(self) -> None:
+        repository = MonitoringRepository(self.database)
+        audit = repository.append_audit(
+            request_id=str(uuid.uuid4()), action="BACKTEST_CREATED", actor_type="USER",
+            actor_id="database-test", success=True, details={"apiSecret": "omitted", "market": "NSE"},
+        )
+        self.assertNotIn("apiSecret", audit["details"])
+        with self.assertRaises(RaiseException):
+            self.database.execute(
+                "UPDATE operational_audit_events SET success = false WHERE audit_id = %s",
+                (uuid.UUID(audit["auditId"]),),
+            )
+        first_time = datetime(2026, 9, 7, 11, 0, tzinfo=UTC)
+        first = repository.raise_alert(
+            alert_type="STALE_NSE_DATA", severity="WARNING", source="market-data",
+            title="NSE stale", message="No settled candle", context={"market": "NSE"},
+            cooldown_seconds=300, now=first_time,
+        )
+        duplicate = repository.raise_alert(
+            alert_type="STALE_NSE_DATA", severity="WARNING", source="market-data",
+            title="NSE stale", message="Still stale", context={"market": "NSE"},
+            cooldown_seconds=300, now=datetime(2026, 9, 7, 11, 1, tzinfo=UTC),
+        )
+        self.assertEqual(duplicate["alertId"], first["alertId"])
+        self.assertEqual(duplicate["occurrenceCount"], 2)
+        self.assertTrue(first["notificationDue"])
+        self.assertFalse(duplicate["notificationDue"])
+        repository.resolve_alert(first["alertId"], actor="operator", resolution="Feed recovered")
+        next_incident = repository.raise_alert(
+            alert_type="STALE_NSE_DATA", severity="WARNING", source="market-data",
+            title="NSE stale", message="New incident", context={"market": "NSE"},
+            cooldown_seconds=300, now=datetime(2026, 9, 7, 12, 0, tzinfo=UTC),
+        )
+        self.assertNotEqual(next_incident["alertId"], first["alertId"])
+
+    def test_agent_tokens_are_hashed_scoped_rate_limited_revocable_and_idempotent(self) -> None:
+        now = datetime(2026, 9, 7, 13, 0, tzinfo=UTC)
+        repository = AgentTokenRepository(self.database, clock=lambda: now)
+        record, raw_token = repository.create(
+            name="Database agent",
+            scopes=["research:read", "backtests:submit"],
+            expires_at=now + timedelta(days=1),
+            created_by="database-test",
+            rate_limit_per_minute=1,
+        )
+        stored = self.database.fetch_one(
+            "SELECT token_hash, token_prefix FROM agent_access_tokens WHERE token_id = %s",
+            (uuid.UUID(record["tokenId"]),),
+        )
+        self.assertIsNotNone(stored)
+        self.assertNotEqual(stored["token_hash"], raw_token)
+        self.assertEqual(stored["token_hash"], hashlib.sha256(raw_token.encode()).hexdigest())
+        self.assertEqual(repository.authenticate(raw_token)["lastUsedAt"], now.isoformat())
+        with self.assertRaises(AgentRateLimit):
+            repository.authenticate(raw_token)
+
+        request, created = repository.begin_tool_request(
+            token_id=record["tokenId"], tool_name="opendelta_submit_backtest",
+            idempotency_key="database-agent-1", request_hash="a" * 64,
+        )
+        self.assertTrue(created)
+        repository.complete_tool_request(request["requestId"], {"runId": str(uuid.uuid4())})
+        duplicate, created = repository.begin_tool_request(
+            token_id=record["tokenId"], tool_name="opendelta_submit_backtest",
+            idempotency_key="database-agent-1", request_hash="a" * 64,
+        )
+        self.assertFalse(created)
+        self.assertEqual(duplicate["status"], "COMPLETE")
+        with self.assertRaises(AgentRequestConflict):
+            repository.begin_tool_request(
+                token_id=record["tokenId"], tool_name="opendelta_submit_backtest",
+                idempotency_key="database-agent-1", request_hash="b" * 64,
+            )
+        self.assertIsNotNone(repository.revoke(record["tokenId"])["revokedAt"])
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)
         manifest = {
-            "strategyId": "quality_breakout_v2", "name": "Quality Breakout", "version": "1.0.0",
-            "description": "Test source", "supportedMarkets": ["CRYPTO"],
-            "supportedTimeframes": ["5m"], "parameters": {},
+            "strategyId": "quality_breakout_v2",
+            "name": "Quality Breakout",
+            "version": "1.0.0",
+            "description": "Test source",
+            "supportedMarkets": ["CRYPTO"],
+            "supportedTimeframes": ["5m"],
+            "parameters": {},
         }
-        saved = repository.create(source_code="source", code_hash="a" * 64, manifest=manifest, validation={"valid": True})
+        saved = repository.create(
+            source_code="source", code_hash="a" * 64, manifest=manifest, validation={"valid": True}
+        )
         self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
         self.assertEqual(len(repository.list("CRYPTO")), 1)
         self.assertEqual(repository.list("NSE"), [])
@@ -177,11 +326,17 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_indicator_sources_are_immutable_and_archivable(self) -> None:
         repository = IndicatorSourceRepository(self.database)
         manifest = {
-            "indicatorId": "relative_volume", "name": "Relative Volume", "version": "1.0.0",
-            "description": "Test indicator", "parameters": {"length": 20}, "requiredHistory": 20,
+            "indicatorId": "relative_volume",
+            "name": "Relative Volume",
+            "version": "1.0.0",
+            "description": "Test indicator",
+            "parameters": {"length": 20},
+            "requiredHistory": 20,
             "outputs": [{"name": "rvol", "label": "RVOL", "display": "LINE", "pane": "PANEL"}],
         }
-        saved = repository.create(source_code="source", code_hash="b" * 64, manifest=manifest, validation={"valid": True})
+        saved = repository.create(
+            source_code="source", code_hash="b" * 64, manifest=manifest, validation={"valid": True}
+        )
         self.assertEqual(repository.get(saved["sourceId"])["sourceCode"], "source")
         self.assertEqual(repository.list(status="VALIDATED")[0]["indicatorId"], "relative_volume")
         archived = repository.archive(saved["sourceId"])
@@ -214,15 +369,46 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertIsNone(duplicate)
 
     def test_strategy_deployment_pins_the_active_configuration(self) -> None:
-        active = StrategyConfigRepository(self.database).save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", name="deployment-test", configuration={"target_pct": 1.0}, risk_settings={"priceModel": "NEXT_OPEN"}, activate=True)
-        universe = SavedUniverseRepository(self.database).save(market="CRYPTO", name="majors", symbols=["BTC-USDT"], manual_includes=["ETH-USDT"], activate=True)
+        active = StrategyConfigRepository(self.database).save(
+            market="CRYPTO",
+            strategy_id="ema_vwap_strong_buy",
+            strategy_version="1.0.0",
+            name="deployment-test",
+            configuration={"target_pct": 1.0},
+            risk_settings={"priceModel": "NEXT_OPEN"},
+            activate=True,
+        )
+        universe = SavedUniverseRepository(self.database).save(
+            market="CRYPTO", name="majors", symbols=["BTC-USDT"], manual_includes=["ETH-USDT"], activate=True
+        )
         deployments = StrategyDeploymentRepository(self.database)
-        paper = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], universe_id=universe["universeId"], timeframe="5m", mode="PAPER", signal_source="TRADINGVIEW")
+        paper = deployments.save(
+            market="CRYPTO",
+            strategy_id="ema_vwap_strong_buy",
+            strategy_version="1.0.0",
+            config_id=active["configId"],
+            universe_id=universe["universeId"],
+            timeframe="5m",
+            mode="PAPER",
+            signal_source="TRADINGVIEW",
+        )
         self.assertEqual((paper["mode"], paper["configId"]), ("PAPER", active["configId"]))
         self.assertEqual(paper["signalSource"], "TRADINGVIEW")
         self.assertEqual(paper["universeId"], universe["universeId"])
-        self.assertEqual(SavedUniverseRepository(self.database).symbols(universe["universeId"], market="CRYPTO"), ["BTC-USDT", "ETH-USDT"])
-        stopped = deployments.save(market="CRYPTO", strategy_id="ema_vwap_strong_buy", strategy_version="1.0.0", config_id=active["configId"], universe_id=universe["universeId"], timeframe="5m", mode="OFF", signal_source="TRADINGVIEW")
+        self.assertEqual(
+            SavedUniverseRepository(self.database).symbols(universe["universeId"], market="CRYPTO"),
+            ["BTC-USDT", "ETH-USDT"],
+        )
+        stopped = deployments.save(
+            market="CRYPTO",
+            strategy_id="ema_vwap_strong_buy",
+            strategy_version="1.0.0",
+            config_id=active["configId"],
+            universe_id=universe["universeId"],
+            timeframe="5m",
+            mode="OFF",
+            signal_source="TRADINGVIEW",
+        )
         self.assertEqual(stopped["deploymentId"], paper["deploymentId"])
         self.assertEqual(deployments.get("CRYPTO", "ema_vwap_strong_buy")["mode"], "OFF")
 
@@ -334,12 +520,21 @@ class PlatformDatabaseTests(unittest.TestCase):
     def test_walk_forward_graph_is_atomic_idempotent_and_pins_every_run(self) -> None:
         experiments = ResearchExperimentRepository(self.database)
         experiment, _ = experiments.create_generated(
-            name="Phase 8 candidates", generation_mode="MANUAL", sweep_definitions=[],
-            preview_hash="sha256:" + "c" * 64, idempotency_key="database:phase8:candidates",
-            market="CRYPTO", strategy_id="crypto_pullback_v1", strategy_version="1.0.0",
-            strategy_source_id=None, timeframe="5m", symbols=["BTC-USDT"],
-            start_date=date(2026, 1, 1), end_date=date(2026, 1, 31),
-            universe_id=None, universe_name="Crypto snapshot",
+            name="Phase 8 candidates",
+            generation_mode="MANUAL",
+            sweep_definitions=[],
+            preview_hash="sha256:" + "c" * 64,
+            idempotency_key="database:phase8:candidates",
+            market="CRYPTO",
+            strategy_id="crypto_pullback_v1",
+            strategy_version="1.0.0",
+            strategy_source_id=None,
+            timeframe="5m",
+            symbols=["BTC-USDT"],
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            universe_id=None,
+            universe_name="Crypto snapshot",
             variants=[
                 {"name": "candidate-a", "configuration": {}, "execution": {}},
                 {"name": "candidate-b", "configuration": {}, "execution": {}},
@@ -347,29 +542,55 @@ class PlatformDatabaseTests(unittest.TestCase):
         )
         repository = WalkForwardValidationRepository(self.database)
         common = {
-            "name": "Phase 8 database contract", "mode": "ROLLING", "market": "CRYPTO",
-            "strategy_id": "crypto_pullback_v1", "strategy_version": "1.0.0",
-            "strategy_source_id": None, "timeframe": "5m", "symbols": ["BTC-USDT"],
-            "universe_id": None, "universe_name": "Crypto snapshot",
-            "overall_start_date": date(2026, 1, 1), "overall_end_date": date(2026, 1, 31),
-            "training_window": 5, "testing_window": 2, "step_length": 2, "maximum_folds": 2,
-            "candidate_experiment_id": experiment["experimentId"], "ranking_objective": "NET_PNL",
-            "minimum_required_trades": 1, "transaction_cost_bps": 8, "slippage_bps": 2,
-            "preview_hash": "sha256:" + "d" * 64, "idempotency_key": "database:phase8:validation",
+            "name": "Phase 8 database contract",
+            "mode": "ROLLING",
+            "market": "CRYPTO",
+            "strategy_id": "crypto_pullback_v1",
+            "strategy_version": "1.0.0",
+            "strategy_source_id": None,
+            "timeframe": "5m",
+            "symbols": ["BTC-USDT"],
+            "universe_id": None,
+            "universe_name": "Crypto snapshot",
+            "overall_start_date": date(2026, 1, 1),
+            "overall_end_date": date(2026, 1, 31),
+            "training_window": 5,
+            "testing_window": 2,
+            "step_length": 2,
+            "maximum_folds": 2,
+            "candidate_experiment_id": experiment["experimentId"],
+            "ranking_objective": "NET_PNL",
+            "minimum_required_trades": 1,
+            "transaction_cost_bps": 8,
+            "slippage_bps": 2,
+            "preview_hash": "sha256:" + "d" * 64,
+            "idempotency_key": "database:phase8:validation",
             "workload": {
-                "foldCount": 2, "candidateCount": 2, "childRunCount": 6,
-                "symbolCount": 1, "estimatedSymbolRuns": 6, "estimatedCandleWorkload": 3168,
+                "foldCount": 2,
+                "candidateCount": 2,
+                "childRunCount": 6,
+                "symbolCount": 1,
+                "estimatedSymbolRuns": 6,
+                "estimatedCandleWorkload": 3168,
             },
             "folds": [
                 {
-                    "position": 1, "trainingStart": "2026-01-01", "trainingEnd": "2026-01-05",
-                    "testingStart": "2026-01-06", "testingEnd": "2026-01-07",
-                    "trainingSessions": 5, "testingSessions": 2,
+                    "position": 1,
+                    "trainingStart": "2026-01-01",
+                    "trainingEnd": "2026-01-05",
+                    "testingStart": "2026-01-06",
+                    "testingEnd": "2026-01-07",
+                    "trainingSessions": 5,
+                    "testingSessions": 2,
                 },
                 {
-                    "position": 2, "trainingStart": "2026-01-03", "trainingEnd": "2026-01-07",
-                    "testingStart": "2026-01-08", "testingEnd": "2026-01-09",
-                    "trainingSessions": 5, "testingSessions": 2,
+                    "position": 2,
+                    "trainingStart": "2026-01-03",
+                    "trainingEnd": "2026-01-07",
+                    "testingStart": "2026-01-08",
+                    "testingEnd": "2026-01-09",
+                    "trainingSessions": 5,
+                    "testingSessions": 2,
                 },
             ],
             "candidates": experiment["variants"],
@@ -391,6 +612,82 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertEqual(test_run["runId"], same_test_run["runId"])
         cancelled = repository.request_cancel(created["validationId"])
         self.assertTrue(cancelled["cancelRequested"])
+
+    def test_ai_copilot_audit_omits_responses_and_requires_explicit_exact_draft(self) -> None:
+        repository = AICopilotRepository(self.database)
+        request_id = uuid.uuid4()
+        content = "AI-generated source draft"
+        repository.start_request(
+            request_id=request_id,
+            actor=f"database-test-{request_id}",
+            action="DRAFT_STRATEGY",
+            categories=["STRATEGY_SOURCE"],
+            provider="test-provider",
+            model="test-model",
+            input_bytes=120,
+            rate_limit=10,
+        )
+        repository.finish_request(
+            request_id,
+            status="SUCCEEDED",
+            duration_ms=5,
+            output_bytes=len(content.encode()),
+            output_sha256=hashlib.sha256(content.encode()).hexdigest(),
+            usage={"total_tokens": 4},
+        )
+        request = repository.get_request(request_id)
+        self.assertEqual(request["status"], "SUCCEEDED")
+        self.assertNotIn("content", request)
+        with self.assertRaises(ValueError):
+            repository.create_draft(request_id=request_id, draft_type="STRATEGY", content="modified")
+        draft = repository.create_draft(request_id=request_id, draft_type="STRATEGY", content=content)
+        repeated = repository.create_draft(request_id=request_id, draft_type="STRATEGY", content=content)
+        self.assertEqual(draft["status"], "DRAFT")
+        self.assertEqual(repeated["draftId"], draft["draftId"])
+        self.assertEqual(repository.get_request(request_id)["draftIds"], [draft["draftId"]])
+
+    def test_exchange_credentials_are_encrypted_rotatable_and_never_returned(self) -> None:
+        repository = ExchangeConnectionRepository(self.database)
+        connection_id = uuid.uuid4()
+        private = {
+            "apiKey": secrets.token_hex(32),
+            "apiSecret": secrets.token_hex(32),
+            "passphrase": secrets.token_urlsafe(20),
+            "environment": "LIVE",
+        }
+        cipher = EnvelopeCipher(MasterKeyring("database-test", {"database-test": secrets.token_bytes(32)}))
+        encrypted = cipher.encrypt(str(connection_id), private)
+        public = repository.create(
+            connection_id=connection_id,
+            provider="OKX",
+            label="Database test",
+            environment="LIVE",
+            masked_key_identifier=f"••••{private['apiKey'][-4:]}",
+            encrypted=encrypted,
+            actor="database-test",
+        )
+        self.assertNotIn(private["apiKey"], str(public))
+        self.assertNotIn(private["apiSecret"], str(public))
+        row, stored = repository.encrypted(connection_id)
+        self.assertNotIn(private["apiSecret"].encode(), bytes(row["credentials_ciphertext"]))
+        self.assertEqual(cipher.decrypt(str(connection_id), stored), private)
+        report = ConnectionPermissionReport(
+            True, True, True, False, True, "LIVE", "AVAILABLE", "Connection test succeeded"
+        )
+        tested = repository.record_test(connection_id, report=report, actor="database-test")
+        self.assertEqual(tested["status"], "WITHDRAWAL_PERMISSION")
+        rotated = cipher.rotate(str(connection_id), stored)
+        repository.update_encryption(connection_id, encrypted=rotated, actor="database-test")
+        self.assertEqual(cipher.decrypt(str(connection_id), repository.encrypted(connection_id)[1]), private)
+        repository.delete(connection_id, actor="database-test")
+        events = self.database.fetch_all(
+            "SELECT action FROM exchange_connection_events WHERE connection_id = %s ORDER BY event_id",
+            (connection_id,),
+        )
+        self.assertEqual(
+            [event["action"] for event in events],
+            ["ADDED", "WITHDRAWAL_PERMISSION", "ROTATED", "DELETED"],
+        )
 
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()

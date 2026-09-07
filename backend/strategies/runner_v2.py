@@ -1,4 +1,4 @@
-"""Secret-free Strategy V2 execution service over a Unix domain socket.
+"""Secret-free strategy execution service over a Unix domain socket.
 
 Production runs this module in its own read-only, networkless container. Every
 request is evaluated in a short-lived child process with CPU/file/process
@@ -72,7 +72,7 @@ def _normalise_decision(value: Any, close: float, params: dict[str, Any]) -> dic
     if decision == "HOLD":
         decision = "NONE"
     if decision not in {"BUY", "SELL", "NONE"}:
-        raise ValueError(f"Unsupported Strategy V2 decision {decision!r}")
+        raise ValueError(f"Unsupported strategy decision {decision!r}")
     signal_price = float(payload.get("signal_price", close)) if decision != "NONE" else None
     target_price = payload.get("target_price")
     if decision == "BUY" and target_price is None:
@@ -212,11 +212,11 @@ def evaluate_isolated(payload: dict[str, Any], *, timeout_seconds: int = DEFAULT
     if not parent.poll(timeout_seconds):
         process.kill()
         process.join(timeout=2)
-        raise TimeoutError(f"Strategy V2 exceeded the {timeout_seconds}s execution limit")
+        raise TimeoutError(f"Strategy exceeded the {timeout_seconds}s execution limit")
     message = parent.recv()
     process.join(timeout=2)
     if not message.get("ok"):
-        raise RuntimeError(message.get("error", "Strategy V2 worker failed"))
+        raise RuntimeError(message.get("error", "Strategy worker failed"))
     return dict(message["result"])
 
 
@@ -253,7 +253,7 @@ else:
 
     class _ThreadingUnixStreamServer:
         def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-            raise RuntimeError("The Strategy V2 service requires Unix-domain sockets")
+            raise RuntimeError("The strategy service requires Unix-domain sockets")
 
 
 def serve(socket_path: str) -> None:

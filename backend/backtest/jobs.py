@@ -60,6 +60,7 @@ class BacktestJobRunner:
         *,
         max_workers: int = 1,
         max_pending: int = 200,
+        lease_factory: Callable[[str], AbstractContextManager] | None = None,
     ) -> None:
         if max_workers < 1:
             raise ValueError("max_workers must be positive")
@@ -68,6 +69,7 @@ class BacktestJobRunner:
         self.runs = runs
         self.engine_factory = engine_factory
         self.max_pending = max_pending
+        self.lease_factory = lease_factory
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="backtest-run")
         self._cancel_events: dict[str, threading.Event] = {}
         self._futures: dict[str, Future] = {}
@@ -118,18 +120,27 @@ class BacktestJobRunner:
             return len(self._futures) + self._reserved
 
     def _execute(self, request: BacktestRequest, event: threading.Event) -> None:
+        lease = self.lease_factory(request.run_id) if self.lease_factory else None
         try:
-            if self.runs.cancel_requested(request.run_id):
-                self.runs.finish(request.run_id, status="CANCELLED", metrics=None)
-                return
-            engine = self.engine_factory(request, event)
-            engine.run(request)
+            if lease is None:
+                self._execute_owned(request, event)
+            else:
+                with lease as ownership:
+                    if getattr(ownership, "acquired", True):
+                        self._execute_owned(request, event)
         except Exception:  # the engine already recorded FAILED; keep the worker alive
             logger.exception("Backtest run %s failed", request.run_id)
         finally:
             with self._lock:
                 self._cancel_events.pop(request.run_id, None)
                 self._futures.pop(request.run_id, None)
+
+    def _execute_owned(self, request: BacktestRequest, event: threading.Event) -> None:
+        if self.runs.cancel_requested(request.run_id):
+            self.runs.finish(request.run_id, status="CANCELLED", metrics=None)
+            return
+        engine = self.engine_factory(request, event)
+        engine.run(request)
 
     def cancel(self, run_id: str) -> dict:
         record = self.runs.request_cancel(run_id)

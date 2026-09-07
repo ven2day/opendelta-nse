@@ -126,31 +126,57 @@ backtest pool; it does not create a worker or engine per variant. Preview is
 read-only, submission revalidates a deterministic hash, and all related initial
 rows are inserted in one transaction.
 
-## Runtime flags (all default off / safe)
+The comparison workspace reads those same immutable runs. It shows performance,
+cost, outcome, holding, exposure, and operational-failure metrics without
+hiding non-terminal variants. Walk-forward training and unseen-test rows are
+kept visually and semantically separate. Equity curves are cumulative sums of
+recorded closed-trade P&L and remain user-selectable with stable colours.
+
+The optional AI Research Copilot sits outside execution and governance. Its
+provider-neutral backend resolves only user-selected immutable records, enforces
+size/timeout/rate limits, and writes metadata-only request audits. Provider
+responses stay ephemeral unless the user explicitly saves the exact response as
+a research draft. Drafts still pass through the existing V2 validation and
+immutable-version workflow; the Copilot cannot approve or deploy them.
+
+Private OKX and VALR connections are isolated from public market-data adapters
+and governance. Each credential document is encrypted by a random per-record
+DEK; AES-256-GCM wraps that DEK with a versioned deployment master key.
+Read-only provider testers retain normalized permission booleans only. Dhan
+remains deployment-managed through the existing collector.
+
+## Runtime configuration (safe defaults)
 
 | Variable | Effect |
 |---|---|
 | `MARKET_DATA_DATABASE_URL` | PostgreSQL URL; without it every `/v2/*` route answers 503 |
-| `PLATFORM_CANDLE_READ_MODE` | shared engine source: `legacy` (default), `timescale-fallback`, or strict `timescale` |
+| `PLATFORM_CANDLE_READ_MODE` | shared engine source: strict `timescale` (default), or explicit rollback modes `timescale-fallback` / `legacy` |
 | `SCREENER_CANDLE_BATCH_SIZE` | symbols read per TimescaleDB screener batch (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup (otherwise explicit) |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start all configured NSE live-signal workers (session-aware polling) |
-| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start all configured Crypto live-signal workers (24/7) |
-| `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default true when the worker runs) |
-| `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
-| `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | backwards-compatible single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 | `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded validation coordinators and durable-run polling cadence |
+| `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | backend-only envelope-encryption key and version; connection mutation fails closed if absent |
+| `EXCHANGE_CREDENTIAL_PREVIOUS_KEYS` | temporary previous-version keyring for controlled re-encryption |
+| `LIVE_TRADING_ENABLED` | global order/cancel mutation gate; default `false` |
+| `LIVE_TRADING_DEPLOYMENT_ALLOWED` | independent deployment-level authority gate; default `false` |
+| `DEPLOYMENT_ENVIRONMENT`, `LIVE_TRADING_ALLOWED_ENVIRONMENTS` | exact environment identity and allowlist; empty means blocked |
+| `LIVE_CONNECTION_MAX_AGE_SECONDS` | freshness limit for private permission tests (default `900`) |
 
-Example with the daily swing strategy plus a future scalping strategy:
+## Live execution boundary
 
-```dotenv
-NSE_LIVE_STRATEGIES=[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"},{"strategyId":"scalping_v1","timeframe":"5m","enabled":false}]
-```
+`backend/live` is a separate, fail-closed boundary around the Dhan, OKX and
+VALR order APIs. It does not replace the paper broker or signal engine. The
+service resolves an exact persisted signal and Paper approval, evaluates
+deployment and risk gates, commits an idempotent intent, and only then obtains a
+credential-backed adapter. Provider uncertainty enters reconciliation instead
+of being treated as a failed order. Emergency stops and the explicit state
+machine are persisted by migration `021_live_execution_foundation`.
 
-Each binding has an independent worker, completed-candle history, health row,
-deduplication identity and paper-lot grouping. Enable the second entry only
-after `scalping_v1` is registered.
+Each durable deployment has an independent worker, completed-candle history,
+health row, deduplication identity and paper-lot grouping. Create it through
+the authenticated V2 Settings workflow only after pinning an exact validated
+source/version, configuration, watchlist and supported timeframe. Environment
+variables cannot create or promote a deployment.
 
 Daily strategies use two clocks. The strategy evaluates the completed `1d`
 candle once after the NSE close. Its paper instruction is stored durably and
@@ -163,10 +189,11 @@ cannot replay a candle whose open predates creation of the pending instruction.
 rejected as a live binding until the shortened 13:15–15:30 closing bar is
 aggregated and completed with exchange-session semantics.
 
-The legacy NSE live-signal engine and legacy pages keep running unchanged
-until the v2 workers are switched on and the legacy routes are retired.
+The unified V2 workspaces and durable deployment records are the default. Safe
+legacy URL redirects and explicit candle fallback readers remain available for
+rollback; they cannot approve or activate a strategy.
 
-## API (all JSON, all paper-only)
+## API (all JSON; live mutation disabled by default)
 
 - `GET /v2/dashboard?market=` — everything the Dashboard shows, per section
 - `GET /v2/strategies?market=`, `GET|POST /v2/strategies/{id}/config`
@@ -181,6 +208,17 @@ until the v2 workers are switched on and the legacy routes are retired.
 Long backtests and screener runs execute as background jobs; the HTTP request
 returns 202 with an id to poll. Run state is durable: runs left QUEUED or
 RUNNING by a previous process are marked INTERRUPTED on startup.
+
+Phase 13 adds the Operations workspace, database-backed worker ownership,
+durable alert lifecycle, provider-neutral notifications, and append-only
+operational audit history. Monitoring observes the existing platform; it does
+not grant approval or execution authority.
+
+Phase 14 adds a scoped MCP adapter over the same V2 route workflows. It does
+not create a second backtest, experiment, walk-forward, AI, or monitoring
+engine. Hashed expiring credentials, per-token scopes, durable rate limits,
+bounded output, strict tool schemas, at-most-once submissions, and append-only
+audits keep agent authority narrower than authenticated user authority.
 
 ## Tests
 

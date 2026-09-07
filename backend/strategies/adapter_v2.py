@@ -1,4 +1,4 @@
-"""Isolated adapter for an immutable Strategy V2 source snapshot."""
+"""Isolated adapter for an immutable strategy source snapshot."""
 
 from __future__ import annotations
 
@@ -43,17 +43,17 @@ class StrategyRunnerClient:
                     break
                 response += chunk
                 if len(response) > MAX_RESPONSE_BYTES:
-                    raise RuntimeError("Strategy V2 runner response is too large")
+                    raise RuntimeError("Strategy runner response is too large")
         if not response:
-            raise RuntimeError("Strategy V2 runner closed without a response")
+            raise RuntimeError("Strategy runner closed without a response")
         message = json.loads(response)
         if not message.get("ok"):
-            raise RuntimeError(str(message.get("error") or "Strategy V2 runner failed"))
+            raise RuntimeError(str(message.get("error") or "Strategy runner failed"))
         return dict(message["result"])
 
 
 class StrategyV2BacktestAdapter:
-    """Shared V2 strategy contract; all submitted source executes in the isolated runner."""
+    """Shared strategy contract; all submitted source executes in the isolated runner."""
 
     def __init__(self, source: Mapping[str, Any], client: StrategyRunnerClient) -> None:
         manifest = dict(source["manifest"])
@@ -82,7 +82,7 @@ class StrategyV2BacktestAdapter:
     def _evaluate_rows(self, candles: pd.DataFrame, context: MarketContext, config: Mapping[str, Any]) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
         data = normalize_candles(candles, context.timezone)
         if data.empty:
-            raise ValueError("Strategy V2 requires at least one completed candle")
+            raise ValueError("Strategy requires at least one completed candle")
         payload = {
             "sourceCode": self.source_code,
             "market": context.market,
@@ -98,7 +98,7 @@ class StrategyV2BacktestAdapter:
         }
         rows = self.client.evaluate(payload).get("rows", [])
         if len(rows) != len(data):
-            raise RuntimeError("Strategy V2 runner returned the wrong number of decisions")
+            raise RuntimeError("Strategy runner returned the wrong number of decisions")
         return data, rows
 
     def evaluate(self, candles: pd.DataFrame, context: MarketContext, config: Mapping[str, Any]) -> SignalDecision:

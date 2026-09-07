@@ -312,16 +312,16 @@ def _strategy_for_request(
 ) -> Any:
     if request.strategySourceId:
         if services.sources is None:
-            raise HTTPException(status_code=503, detail="Strategy V2 source storage is not configured")
+            raise HTTPException(status_code=503, detail="Strategy source storage is not configured")
         try:
             source = guarded(services.sources).get(request.strategySourceId)
         except (KeyError, ValueError) as error:
-            raise HTTPException(status_code=422, detail="Strategy V2 source was not found") from error
+            raise HTTPException(status_code=422, detail="Strategy source was not found") from error
         if source["status"] != "VALIDATED":
-            raise HTTPException(status_code=409, detail="Archived Strategy V2 sources cannot be used in research")
+            raise HTTPException(status_code=409, detail="Archived strategy sources cannot be used in research")
         manifest = source["manifest"]
         if source["strategyId"] != manifest["strategyId"] or source["strategyVersion"] != manifest["version"]:
-            raise ValueError("Stored Strategy V2 identity does not match its immutable manifest")
+            raise ValueError("Stored strategy identity does not match its immutable manifest")
         strategy = StrategyV2BacktestAdapter(source, StrategyRunnerClient("/not-used-during-validation"))
     else:
         try:

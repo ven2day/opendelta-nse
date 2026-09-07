@@ -1,4 +1,4 @@
-"""Static validation for user-authored Strategy V2 Python source.
+"""Static validation for user-authored Strategy Studio Python source.
 
 Validation deliberately never imports or executes the submitted module. Runtime
 execution belongs in a separate, resource-limited worker added in a later phase.
@@ -62,11 +62,11 @@ class SourceValidation:
 
 
 def starter_source() -> str:
-    return '''"""OpenDelta Strategy V2 example."""
+    return '''"""OpenDelta Strategy Studio example."""
 
 STRATEGY = {
     "id": "my_strategy_v2",
-    "name": "My Strategy V2",
+    "name": "My Strategy",
     "version": "1.0.0",
     "markets": ["NSE", "CRYPTO"],
     "timeframes": ["5m", "15m"],

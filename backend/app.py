@@ -11,14 +11,15 @@ Route surface (legacy research endpoints were retired with their engines):
 * ``/application-settings``, ``/market-data/symbols`` (GET) settings (``api.application_settings_routes``)
 * ``/nifty-oi/history/status``            OI coverage status (``api.oi_routes``)
 * ``/market-symbols/*`` and crypto routes (``markets.crypto.api``)
-* ``/v2/*``                               unified NSE+Crypto platform (``platform_runtime.install_platform``)
+* ``/v2/*``                               unified NSE+Crypto platform and Operations monitoring
 
-The service is paper-only: it has no broker client and cannot place real orders.
+The service remains paper-only by default. Live adapters are present behind
+deployment, environment, governance, risk and emergency-stop gates; provider
+mutation is disabled unless every independent server-side control is enabled.
 """
 
 from __future__ import annotations
 
-import os
 import time
 from contextlib import asynccontextmanager
 
@@ -34,18 +35,12 @@ from backend.platform_runtime import install_platform
 from backend.runtime import get_crypto_market_service, get_platform_runtime, shutdown_runtime
 
 
-def _truthy(value: str | None) -> bool:
-    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
-
-
 @asynccontextmanager
 async def application_lifespan(_: FastAPI):
     configure_logging()
     app_logger = get_logger("opendelta.app")
     app_logger.info("startup_begin")
     get_platform_runtime().start()
-    if _truthy(os.environ.get("CRYPTO_SIGNAL_ENGINE_ENABLED")):
-        get_crypto_market_service().start()
     try:
         yield
     finally:

@@ -1,6 +1,6 @@
 # 📈 OpenDelta — NSE & Crypto Trading Research Platform
 
-> One application for screening, backtesting, live signals and paper trading across NSE and Crypto, built on a single shared strategy evaluator. Paper trading only — no broker or exchange order path exists.
+> One application for screening, backtesting, research, governed signals, paper trading and disabled-by-default live execution across NSE and Crypto, built on a single shared strategy evaluator.
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
@@ -84,9 +84,8 @@ graph TB
     API --> UI["Dashboard · Screener · Backtest · Signals · Paper Trading · Settings"]
 ```
 
-`PLATFORM_CANDLE_READ_MODE` controls the migration: `legacy` is the safe
-default, `timescale-fallback` reads TimescaleDB first and logs every fallback,
-and strict `timescale` makes the diagram above the active production path.
+`PLATFORM_CANDLE_READ_MODE` controls the reader: strict `timescale` is the V2
+default, while `timescale-fallback` and `legacy` are explicit rollback modes.
 Ambiguous provider streams fail closed instead of mixing OKX and VALR candles.
 
 The evaluator contract is `Strategy.evaluate(candles, market_context, config) → SignalDecision`
@@ -138,14 +137,14 @@ cd web && npm run test:browser                                               # P
 python scripts/security_scan.py                                              # secret scan
 ```
 
-The suites prove, among other things: backtest and live evaluation agree bar
+The suites prove, among other things: backtest and signal evaluation agree bar
 for bar; an incomplete candle never produces a signal; entries use the next
 candle open; a different future never changes earlier trades; duplicate
 signals and duplicate paper orders are rejected by the database; NSE and
 Crypto balances stay separate; the paper portfolio survives a restart; fees
 and slippage reconcile exactly; a 100-symbol one-year backtest writes
 incrementally and stays under 256 MB; each Strong Buy lot closes
-independently; and no order-placement code exists.
+independently; and no broker or exchange order-submission implementation is present.
 
 ## 📁 Project Structure
 
@@ -162,22 +161,23 @@ opendelta-nse/
 │   ├── data/                     # database.py, repositories.py, migrate.py, sql/001_platform.sql
 │   ├── api/                      # screener, backtest, signal, paper_trading, settings, dashboard routes
 │   ├── config/                   # application and strategy configuration
-│   ├── compat/                   # supported historical API implementations
-│   ├── app.py                    # FastAPI entry point (compatibility routes + /v2)
+│   ├── research/                 # immutable experiments, comparison and walk-forward
+│   ├── monitoring/               # leases, audit, alerts and notification adapters
+│   ├── agent/                    # scoped research-only MCP gateway
+│   ├── app.py                    # FastAPI composition root
 │   ├── collector.py              # Dhan client and NSE data collector
 │   ├── paths.py                  # stable repository data paths
 │   └── platform_runtime.py       # wires the platform into the FastAPI app
 ├── data/                         # symbols, generated market CSV and strategy parameter definitions
 ├── web/
-│   ├── app/                      # pages: / screener backtest signals paper-trading settings, legacy/*
+│   ├── app/                      # unified workspaces and authenticated API proxies
 │   │   ├── api/                  # authenticated proxies (api/v2/[...path] for the platform)
 │   │   └── platform/             # chrome, market switch, schema-driven forms, v2 client
 │   ├── deploy/                   # Dockerfiles, systemd units, install/promote/verify scripts
 │   └── tests/                    # rendered/proxy tests and Playwright spec
 ├── tests/                        # pytest suites
 ├── docs/                         # unified-platform.md, API.md, DEPLOYMENT.md, TROUBLESHOOTING.md,
-│   ├── adr/                      #   market-data-operations.md, timescaledb-production-bootstrap.md
-│   └── legacy/                   #   retired-strategy reports
+│   └── adr/                      #   market-data-operations.md, timescaledb-production-bootstrap.md
 ├── scripts/                      # security_scan.py, regression_existing_strategies.py
 ├── benchmarks/                   # legacy engine benchmarks and baselines
 ├── PROJECT_OVERVIEW.md · CONTRIBUTING.md · SECURITY.md
@@ -189,30 +189,38 @@ opendelta-nse/
 | Variable | Purpose |
 | --- | --- |
 | `MARKET_DATA_DATABASE_URL` | PostgreSQL/TimescaleDB for candles and the platform tables |
-| `PLATFORM_CANDLE_READ_MODE` | Shared engine reader: `legacy`, `timescale-fallback`, or strict `timescale` |
+| `PLATFORM_CANDLE_READ_MODE` | Shared engine reader: strict `timescale` (default), or explicit rollback modes `timescale-fallback` / `legacy` |
 | `SCREENER_CANDLE_BATCH_SIZE` | Bounded TimescaleDB screener batch size (default `50`, allowed `1`–`250`) |
 | `PLATFORM_AUTO_MIGRATE` | `true` to migrate at startup; otherwise `python -m backend.data.migrate` |
 | `TRADINGVIEW_WEBHOOK_KEY` | revocable key for TradingView JSON alerts; enables external signal ingestion |
 | `TRADINGVIEW_MAX_ALERT_AGE_SECONDS` | maximum accepted alert delivery age (default `900`) |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED`, `CRYPTO_SIGNAL_ENGINE_V2_ENABLED` | start the v2 live-signal workers |
-| `NSE_PAPER_TRADING_V2_ENABLED`, `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default on with the worker) |
-| `NSE_LIVE_STRATEGIES`, `CRYPTO_LIVE_STRATEGIES` | JSON array of live `strategyId` + `timeframe` bindings; NSE defaults to `rsi_dip_ladder_v1` on `1d` |
-| `NSE_LIVE_STRATEGY`, `NSE_LIVE_TIMEFRAME` | legacy single-binding variables, used only when the plural JSON variable is absent |
+| Durable strategy deployments | exact source/version, config, watchlist, timeframe and OFF/SIGNALS/PAPER mode saved through the authenticated V2 workflow; environment variables cannot create deployments |
 | `DHAN_*` | Dhan credentials, read only by `backend/collector.py` |
 | `BACKTEST_WORKERS`, `BACKTEST_QUEUE_LIMIT`, `BACKTEST_CACHE_DIR` | bounded backtest worker/queue tuning (queue default `200`) and candle cache |
 | `WALK_FORWARD_QUEUE_LIMIT`, `WALK_FORWARD_POLL_SECONDS` | bounded walk-forward coordinators (default `10`) and child-run polling cadence |
+| `AI_PROVIDER`, `AI_PROVIDER_ENDPOINT`, `AI_MODEL`, `AI_PROVIDER_API_KEY` | optional backend-only AI Research Copilot provider; incomplete/unset configuration fails closed |
+| `EXCHANGE_CREDENTIAL_MASTER_KEY`, `EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` | versioned backend-only AES-256-GCM key for encrypted OKX/VALR connections |
+| `EXCHANGE_CREDENTIAL_PREVIOUS_KEYS` | optional secret-manager JSON keyring used only while rotating old encrypted records |
+| `MONITORING_INTERVAL_SECONDS`, `MONITORING_WEBHOOK_URL` | monitoring cadence and optional backend-only HTTPS alert receiver |
+| `MCP_ALLOWED_ORIGINS` | optional comma-separated browser origins allowed to call the scoped MCP endpoint; server clients normally omit `Origin` |
 | `OPENDELTA_LOG_LEVEL` | structured-logging threshold (`INFO`, `DEBUG`, …; default `INFO`) |
 | `OPENDELTA_SERVICE_NAME` | service name embedded in every structured log event (default `opendelta`) |
 
-All v2 features default to off; production behaviour is unchanged until they
-are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+OpenDelta is the default UI/API platform. Signal and paper activity still requires an
+operator-reviewed durable deployment. Paper trading is the only execution mode. See
+[docs/v2-cutover.md](docs/v2-cutover.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## 📚 Documentation
 
 - [Architecture and how to add a strategy](docs/unified-platform.md)
 - [API reference](docs/API.md)
+- [Production monitoring and operations](docs/operations-monitoring.md)
+- [Scoped agent and MCP access](docs/agent-mcp.md)
+- [AI Research Copilot safety](docs/ai-copilot.md)
+- [Exchange credential encryption and rotation](docs/credential-encryption.md)
+- [Live execution safety](docs/live-execution.md) · [Emergency stop](docs/emergency-stop.md) · [Reconciliation](docs/reconciliation.md)
 - [TradingView signal integration](docs/tradingview-integration.md)
-- [Deployment](docs/DEPLOYMENT.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [V2 cutover and rollback](docs/v2-cutover.md) · [Deployment](docs/DEPLOYMENT.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Market-data operations](docs/market-data-operations.md) · [TimescaleDB bootstrap](docs/timescaledb-production-bootstrap.md)
 - [Architecture decision records](docs/adr) · [Legacy strategy reports](docs/legacy)
 - [Project overview](PROJECT_OVERVIEW.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
@@ -225,8 +233,10 @@ are enabled. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## 🔒 Security
 
-No live order execution exists and tests enforce it. Credentials stay in
-`/etc/opendelta-dhan.env` on the host and are never committed; see
+Live adapters exist behind deployment, governance, credential, risk,
+idempotency and emergency-stop gates; provider mutation is disabled by default
+and automated tests never place a production order. Credentials stay in
+backend-only deployment secrets and are never committed or returned; see
 [SECURITY.md](SECURITY.md). No strategy in this repository is represented as
 guaranteed profitable.
 

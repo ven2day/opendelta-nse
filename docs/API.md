@@ -85,7 +85,7 @@ Filters (camelCase): `lookbackDays, minimumPrice, maximumPrice, minimumAverageTr
 
 `execution`: `targetPct?, stopLossPct?, maximumHoldingBars?, initialQuantity, allowAdditionalBuys, additionalQuantityPct, additionalSizingMode (REDUCE_EVERY_NEW_LOT|FIXED_PERCENTAGE_OF_FIRST_LOT), minimumQuantity, maximumEntriesPerCycle, batchSize, transactionCostBps?, slippageBps?`. The two optional basis-point overrides are research-only and must be supplied together.
 
-`metrics`: `totalSignals, completedTrades, targetHits, stoppedTrades, expiredTrades, openTrades, realizedPnl, unrealizedPnl, fees, slippage, winRate, averageMaePct, averageMfePct, averageHoldingMinutes, medianHoldingMinutes, maximumDrawdown, symbolsProcessed, symbolsFailed`.
+`metrics`: `totalSignals, completedTrades, targetHits, stoppedTrades, expiredTrades, openTrades, realizedPnl, unrealizedPnl, fees, slippage, winRate, averageMaePct, averageMfePct, averageHoldingMinutes, medianHoldingMinutes, exposureMinutes, maximumDrawdown, symbolsProcessed, symbolsFailed`.
 
 ## Research Lab parameter experiments
 
@@ -132,9 +132,93 @@ test results to select a candidate.
 
 Comparison uses recorded metrics and trades. The optional Return / drawdown
 score is `netPnl / max(abs(maximumDrawdown), 1)` and is not a Sharpe ratio.
+The workspace sorts every persisted performance, outcome, holding-time,
+exposure, and failure metric; inspects one exact immutable configuration at a
+time; and pairs each walk-forward training winner with its unseen test result.
 Failed symbols remain a separate operational metric. Rejected-trade analytics
 are unavailable because the engine does not yet persist decision-event
 candidates; a strategy emitting no BUY is not counted as a rejection.
+
+## AI Research Copilot
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/ai/copilot/status` | Reports configured/unconfigured, provider/model identifiers, and `RESEARCH_DRAFT_ONLY`; never returns a provider key. |
+| POST | `/v2/ai/copilot/requests` | Executes one allowlisted research action using only explicitly selected server-resolved context. Returns an ephemeral labelled draft and request ID. |
+| POST | `/v2/ai/copilot/drafts` | Explicitly stores the exact reviewed response as `DRAFT`; response-hash and draft-type checks prevent substitution or promotion. |
+| GET | `/v2/ai/copilot/drafts/{id}` | Reads one saved research draft. It is not an immutable strategy/indicator source. |
+
+Allowed actions explain stored strategy/indicator code and results, suggest
+improvements/experiments, or draft strategy, indicator, and configuration text.
+There are no AI actions for approvals, deployments, credentials, paper/live
+activation, or orders. Requests are durably rate-limited and audited without
+storing prompts or provider responses. See [AI Research Copilot safety](ai-copilot.md).
+
+## Secure exchange connections
+
+- `GET /v2/connections` returns secret-free OKX/VALR status, Dhan deployment health, and the public/private market-data boundary.
+- `POST /v2/connections` encrypts one write-only OKX or VALR credential set.
+- `POST /v2/connections/{connectionId}/replace` replaces credentials after the exact provider confirmation phrase.
+- `POST /v2/connections/{connectionId}/test` performs a read-only authenticated permission test.
+- `GET /v2/connections/{connectionId}/permissions` returns normalized, secret-free permission status.
+- `POST /v2/connections/{connectionId}/disable` disables or re-enables a safe connection; withdrawal-capable connections cannot be enabled.
+- `POST /v2/connections/{connectionId}/rotate` re-encrypts with a fresh DEK/nonces and the current master-key version.
+- `POST /v2/connections/{connectionId}/delete` deletes encrypted material after the exact provider confirmation phrase.
+
+No endpoint returns plaintext credentials, ciphertext, encrypted DEKs, nonces,
+or provider response bodies. Public OKX/VALR market data does not require a
+private connection, and a successful connection test does not enable trading.
+See [credential encryption and rotation](credential-encryption.md).
+
+## Live execution foundation
+
+All endpoints are authenticated V2 routes. There is deliberately no API that
+changes deployment environment variables or bypasses an approval, policy, or
+emergency stop.
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/live-execution/status` | Secret-free feature flags, deployment gates, pinned drafts, policies, stops, and the bounded intent ledger. |
+| POST | `/v2/live-execution/risk-policies` | Creates a bounded policy containing every mandatory order, exposure, loss, allowlist, deviation, and freshness limit. |
+| POST | `/v2/live-execution/deployments` | Creates an inactive deployment from an exact Paper approval, risk policy, pinned config/universe/timeframe, and provider connection. |
+| POST | `/v2/live-execution/deployments/{id}/activate` | Requires `ENABLE LIVE <strategyId>` and rechecks all backend gates. |
+| POST | `/v2/live-execution/deployments/{id}/disable` | Requires `DISABLE LIVE`; blocks future intents without cancelling provider orders. |
+| POST | `/v2/live-execution/orders` | Accepts an exact persisted signal and pinned deployment. The server derives the idempotency key, persists the intent first, and either blocks it audibly or submits through the provider adapter. |
+| GET | `/v2/live-execution/orders?limit=` | Bounded intent ledger including blocked, incomplete, unknown, and terminal states. |
+| GET | `/v2/live-execution/orders/{id}` | Exact pinned order intent and reconciliation state. No credentials. |
+| POST | `/v2/live-execution/orders/{id}/cancel` | Exact client-order confirmation; provider mutation remains impossible while server gates are off. |
+| POST | `/v2/live-execution/emergency-stops` | Activates or clears a global/provider/market/strategy stop with an exact confirmation phrase. |
+| POST | `/v2/live-execution/reconciliation/run` | Bounded reconciliation cycle; idle while the global live flag is off. |
+
+The order state machine is `CREATED → BLOCKED | SUBMITTED | ACKNOWLEDGED |
+REJECTED | UNKNOWN`, then explicit partial-fill, fill, cancel-request and cancel
+transitions. A network timeout becomes `UNKNOWN`/`REQUIRED`, never an assumed
+failure. See [live execution safety](live-execution.md).
+
+## Operations and monitoring
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/operations/health` | Aggregate market-data, worker, queue, runner, exchange, reconciliation, emergency-stop, and alert state. |
+| GET | `/v2/operations/leases?limit=&workerType=` | Bounded, secret-free worker leases. |
+| GET | `/v2/operations/alerts?status=&limit=` | Durable operational alerts. |
+| POST | `/v2/operations/alerts/{alertId}/acknowledge` | Acknowledge an active alert. |
+| POST | `/v2/operations/alerts/{alertId}/resolve` | Resolve an alert without deleting its history. |
+| GET | `/v2/operations/audit?limit=&action=` | Append-only important-action history. |
+
+Lease owner tokens, credentials, request bodies, and provider secrets are never returned.
+
+## Agent and MCP access
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/agent/tokens` | Administrator-only secret-free token metadata and available scopes. |
+| POST | `/v2/agent/tokens` | Administrator-only token creation; the raw token is shown once. |
+| DELETE | `/v2/agent/tokens/{tokenId}` | Administrator-only, idempotent revocation. |
+| POST | `/mcp` | Bearer-authenticated, scoped, rate-limited Streamable HTTP JSON-RPC endpoint. |
+| GET | `/mcp` | Returns 405 because this server does not use SSE or server-initiated messages. |
+
+The public frontend maps `/api/mcp` to backend `/mcp` and forwards only the Bearer credential and bounded JSON body. See [Agent and MCP access](agent-mcp.md) for scopes, tools, stable errors, and Codex configuration.
 
 ## Signals
 
@@ -170,7 +254,9 @@ contract and production setup.
 | GET | `/v2/paper/lots?market=&status=` | Lot history. |
 | POST | `/v2/paper/lots/{id}/close?market=` | Body `{price}` — manual close at a price. |
 
-A signal can open at most one filled paper order per account (database unique index). There is no order-placement client anywhere in the codebase.
+A signal can open at most one filled paper order per account (database unique
+index). Live provider adapters are isolated behind the `/v2/live-execution/*`
+gate service and default to mutation-disabled; paper routes never call them.
 
 ## Operational (non-v2) routes
 

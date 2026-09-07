@@ -1157,7 +1157,7 @@ def _public_config(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 class StrategySourceRepository:
-    """Immutable validated Strategy V2 source snapshots."""
+    """Immutable validated strategy source snapshots."""
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -1212,7 +1212,7 @@ def _public_strategy_source(row: Mapping[str, Any], *, include_source: bool) -> 
 
 
 class IndicatorSourceRepository:
-    """Immutable validated Indicator V2 source snapshots."""
+    """Immutable validated indicator source snapshots."""
 
     def __init__(self, database: Database) -> None:
         self.database = database

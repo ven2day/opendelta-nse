@@ -197,7 +197,12 @@ function ValidationCard({ validation, market, cancel }: {
       <div><dt>Maximum drawdown</dt><dd>{formatMoney(aggregate.maximumDrawdown ?? 0, market)}</dd></div>
       <div><dt>Win rate</dt><dd>{aggregate.winRate == null ? "—" : formatPercent(aggregate.winRate, 1)}</dd></div>
       <div><dt>Completed trades</dt><dd>{formatInteger(aggregate.completedTrades ?? 0)}</dd></div>
+      <div><dt>Open trades</dt><dd>{formatInteger(aggregate.openTrades ?? 0)}</dd></div>
+      <div><dt>Costs</dt><dd>{formatMoney((aggregate.fees ?? 0) + (aggregate.slippage ?? 0), market)}</dd></div>
+      <div><dt>Targets / stops / expiries</dt><dd>{formatInteger(aggregate.targetHits ?? 0)} / {formatInteger(aggregate.stoppedTrades ?? 0)} / {formatInteger(aggregate.expiredTrades ?? 0)}</dd></div>
       <div><dt>Average holding</dt><dd>{formatMinutes(aggregate.averageHoldingMinutes ?? 0)}</dd></div>
+      <div><dt>Exposure</dt><dd>{formatMinutes(aggregate.exposureMinutes ?? 0)}</dd></div>
+      <div><dt>Failed symbols</dt><dd>{formatInteger(aggregate.failedSymbols ?? 0)}</dd></div>
       <div><dt>Return / drawdown</dt><dd>{(aggregate.returnDrawdownScore ?? 0).toFixed(3)}</dd></div>
     </dl>}
     <div className="research-fold-details">{validation.folds.map((fold) => {

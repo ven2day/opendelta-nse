@@ -16,9 +16,20 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from backend.agent.repository import AgentTokenRepository
+from backend.ai.repository import AICopilotRepository
+from backend.api.agent_routes import create_agent_router
+from backend.api.ai_copilot_routes import CopilotServices, configured_ai_provider, create_ai_copilot_router
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
+from backend.api.exchange_connection_routes import (
+    ExchangeConnectionServices,
+    create_exchange_connection_router,
+    dhan_connection_status,
+    install_exchange_connection_validation_handler,
+)
 from backend.api.indicator_studio_routes import create_indicator_studio_router
+from backend.api.monitoring_routes import create_monitoring_router
 from backend.api.paper_trading_routes import create_paper_trading_router
 from backend.api.research_routes import ResearchServices, create_research_router
 from backend.api.screener_routes import ScreenerServices, create_screener_router
@@ -30,6 +41,9 @@ from backend.api.walk_forward_routes import WalkForwardServices, create_walk_for
 from backend.backtest.engine import BacktestEngine, BacktestRequest
 from backend.backtest.jobs import BacktestJobRunner
 from backend.backtest.result_writer import DatabaseResultWriter
+from backend.connections.crypto import EnvelopeCipher, MasterKeyring
+from backend.connections.providers import connection_testers
+from backend.connections.repository import ExchangeConnectionRepository
 from backend.data.database import Database, DatabaseUnavailable
 from backend.data.repositories import (
     BacktestRunRepository,
@@ -56,12 +70,20 @@ from backend.data.repositories import (
 )
 from backend.integrations.tradingview import TradingViewIngestionService
 from backend.markets.base import CandleSource, market_spec
+from backend.monitoring.audit import install_audit_middleware
+from backend.monitoring.leases import WorkerLeaseGroup, WorkerLeaseGuard
+from backend.monitoring.repository import MonitoringRepository
+from backend.monitoring.service import (
+    MonitoringService,
+    MonitoringWorker,
+    strategy_runner_health,
+)
 from backend.observability import get_logger
 from backend.paper_trading.broker import PaperBroker, PaperRepositories
 from backend.paper_trading.execution import ExecutionPolicy
 from backend.research.walk_forward_jobs import WalkForwardJobRunner
 from backend.screener.engine import ScreenerEngine
-from backend.signals.configuration import LiveStrategyBinding, live_strategy_bindings
+from backend.signals.configuration import LiveStrategyBinding
 from backend.signals.engine import RiskSettings, SignalEngine
 from backend.signals.workers import MarketSignalWorker
 from backend.strategies import STRATEGIES
@@ -92,6 +114,8 @@ class PlatformRuntime:
         self.clock = clock or (lambda: datetime.now(UTC))
         self._runner: BacktestJobRunner | None = None
         self._walk_forward_runner: WalkForwardJobRunner | None = None
+        self._monitoring_service: MonitoringService | None = None
+        self._monitoring_worker: MonitoringWorker | None = None
         self._workers: dict[str, MarketSignalWorker] = {}
         self._worker_signatures: dict[str, tuple[str, str | None, str | None, str, str | None, str]] = {}
         self._brokers: dict[str, PaperBroker] = {}
@@ -130,6 +154,8 @@ class PlatformRuntime:
             if stale_screens:
                 logger.warning("marked_stale_screener_runs_failed", count=stale_screens)
             self._start_signal_workers()
+            if self._monitoring_worker is not None:
+                self._monitoring_worker.start()
         except Exception as error:  # noqa: BLE001 - the platform must degrade to disabled, never crash at startup
             logger.error("platform_database_unavailable", reason=str(error))
             self.disabled_reason = str(error)
@@ -142,6 +168,7 @@ class PlatformRuntime:
         with self._lock:
             runner, self._runner = self._runner, None
             walk_forward, self._walk_forward_runner = self._walk_forward_runner, None
+            monitoring, self._monitoring_worker = self._monitoring_worker, None
             workers, self._workers = dict(self._workers), {}
             self._worker_signatures = {}
         for worker in workers.values():
@@ -150,6 +177,8 @@ class PlatformRuntime:
             runner.shutdown()
         if walk_forward is not None:
             walk_forward.shutdown()
+        if monitoring is not None:
+            monitoring.stop()
         if self._screener is not None:
             self._screener.shutdown()
         if self.database is not None:
@@ -162,20 +191,9 @@ class PlatformRuntime:
             self.reconcile_signal_workers(market)
 
     def configured_deployments(self, market: str) -> list[dict[str, Any]]:
-        """Database selections win; environment bindings remain a migration fallback."""
+        """Return only durable, operator-reviewed deployment records."""
         key = market.strip().upper()
-        saved = self.strategy_deployments().list(key) if self.database is not None else []
-        if saved:
-            return saved
-        if not _truthy(os.environ.get(f"{key}_SIGNAL_ENGINE_V2_ENABLED")):
-            return []
-        mode = "PAPER" if _truthy(os.environ.get(f"{key}_PAPER_TRADING_V2_ENABLED", "true")) else "SIGNALS"
-        rows: list[dict[str, Any]] = []
-        for binding in self.live_bindings(key):
-            active = self.strategy_configs().active(key, binding.strategy_id) if self.database is not None else None
-            strategy = STRATEGIES.get(binding.strategy_id)
-            rows.append({"deploymentId": None, "market": key, "strategyId": binding.strategy_id, "strategyVersion": strategy.version, "configId": (active or {}).get("configId"), "universeId": None, "timeframe": binding.timeframe, "mode": mode, "signalSource": "OPENDELTA", "source": "ENVIRONMENT", "createdAt": None, "updatedAt": None})
-        return rows
+        return self.strategy_deployments().list(key) if self.database is not None else []
 
     def deployment_status(self, market: str, strategy_id: str) -> dict[str, Any]:
         key = market.strip().upper()
@@ -187,14 +205,14 @@ class PlatformRuntime:
         return {"deploymentId": None, "market": key, "strategyId": strategy_id, "strategyVersion": strategy.version, "configId": None, "universeId": None, "timeframe": "5m" if "5m" in timeframes else timeframes[0], "mode": "OFF", "signalSource": "OPENDELTA", "source": "DEFAULT", "createdAt": None, "updatedAt": None}
 
     def strategy_for_deployment(self, deployment: Mapping[str, Any]):
-        """Resolve exactly the built-in version or immutable V2 source named by a deployment."""
+        """Resolve exactly the built-in version or immutable source named by a deployment."""
         source_id = deployment.get("strategySourceId")
         if not source_id:
             strategy = STRATEGIES.get(str(deployment["strategyId"]))
         else:
             source = self.strategy_sources().get(str(source_id))
             if source.get("status", "VALIDATED") != "VALIDATED":
-                raise ValueError("Deployment Strategy V2 source is archived")
+                raise ValueError("Deployment strategy source is archived")
             socket_path = os.environ.get("STRATEGY_V2_RUNNER_SOCKET", "/run/opendelta-strategy/runner.sock")
             strategy = StrategyV2BacktestAdapter(
                 source,
@@ -355,21 +373,6 @@ class PlatformRuntime:
             self._brokers.setdefault(key, broker)
             return self._brokers[key]
 
-    def live_bindings(self, market: str) -> tuple[LiveStrategyBinding, ...]:
-        bindings = live_strategy_bindings(market)
-        spec = market_spec(market)
-        for binding in bindings:
-            strategy = STRATEGIES.get(binding.strategy_id)
-            if spec.market not in strategy.supported_markets:
-                raise ValueError(f"{binding.strategy_id} does not support {spec.market}")
-            if binding.timeframe not in strategy.supported_timeframes:
-                raise ValueError(f"{binding.strategy_id} does not support the {binding.timeframe} timeframe")
-            if spec.market == "NSE" and binding.timeframe == "4h":
-                raise ValueError(
-                    "NSE 4h is currently backtest-only; live use requires session-aligned handling of the shortened closing bar"
-                )
-        return bindings
-
     @staticmethod
     def _worker_key(market: str, binding: LiveStrategyBinding) -> str:
         return f"{market.strip().upper()}:{binding.worker_key}"
@@ -378,9 +381,7 @@ class PlatformRuntime:
         self,
         market: str,
         *,
-        strategy_id: str | None = None,
-        timeframe: str | None = None,
-        binding: LiveStrategyBinding | None = None,
+        binding: LiveStrategyBinding,
         generation_enabled: bool = True,
         universe_id: str | None = None,
         automation_mode: str = "SIGNALS",
@@ -390,11 +391,7 @@ class PlatformRuntime:
         config_id: str | None = None,
     ) -> MarketSignalWorker:
         spec = market_spec(market)
-        selected = binding or (
-            LiveStrategyBinding(strategy_id, timeframe or LIVE_TIMEFRAME)
-            if strategy_id is not None
-            else self.live_bindings(spec.market)[0]
-        )
+        selected = binding
         strategy = self.strategy_for_deployment({
             "strategyId": selected.strategy_id,
             "strategyVersion": strategy_version or STRATEGIES.get(selected.strategy_id).version,
@@ -445,7 +442,23 @@ class PlatformRuntime:
             ),
             automation_mode=automation_mode,
             signal_source=signal_source,
+            lease_factories=self._signal_lease_factories(spec.market, selected.worker_key, automation_mode),
         )
+
+    def _signal_lease_factories(
+        self, market: str, worker_key: str, automation_mode: str
+    ) -> list[Callable[[], WorkerLeaseGuard]]:
+        types = ["SIGNAL"] + (["PAPER_EXECUTION"] if automation_mode == "PAPER" else [])
+        return [
+            lambda worker_type=worker_type: WorkerLeaseGuard(
+                self.monitoring_repository(),
+                worker_type=worker_type,
+                task_key=f"{market}:{worker_key}",
+                worker_identity=f"{market.lower()}-{worker_type.lower()}-worker",
+                current_task={"market": market, "workerKey": worker_key},
+            )
+            for worker_type in types
+        ]
 
     def worker_status(self, market: str) -> dict[str, Any] | None:
         statuses = self.worker_statuses(market)
@@ -568,6 +581,15 @@ class PlatformRuntime:
     def walk_forward_validations(self) -> WalkForwardValidationRepository:
         return WalkForwardValidationRepository(self.require_database())
 
+    def ai_copilot_audit(self) -> AICopilotRepository:
+        return AICopilotRepository(self.require_database())
+
+    def agent_tokens(self) -> AgentTokenRepository:
+        return AgentTokenRepository(self.require_database(), clock=self.clock)
+
+    def exchange_connections(self) -> ExchangeConnectionRepository:
+        return ExchangeConnectionRepository(self.require_database())
+
     def walk_forward_runner(self) -> WalkForwardJobRunner:
         backtests = self.runner()
         with self._lock:
@@ -576,6 +598,13 @@ class PlatformRuntime:
                     self.walk_forward_validations(), backtests,
                     poll_seconds=float(os.environ.get("WALK_FORWARD_POLL_SECONDS", "1")),
                     max_pending=int(os.environ.get("WALK_FORWARD_QUEUE_LIMIT", "20")),
+                    lease_factory=lambda validation_id: WorkerLeaseGuard(
+                        self.monitoring_repository(),
+                        worker_type="WALK_FORWARD",
+                        task_key=validation_id,
+                        worker_identity="walk-forward-coordinator",
+                        current_task={"validationId": validation_id},
+                    ),
                 )
             return self._walk_forward_runner
 
@@ -631,8 +660,33 @@ class PlatformRuntime:
                 self._runner = BacktestJobRunner(
                     self.runs(), self._engine,
                     max_workers=_backtest_workers(), max_pending=_backtest_queue_limit(),
+                    lease_factory=self._backtest_lease,
                 )
             return self._runner
+
+    def _backtest_lease(self, run_id: str) -> WorkerLeaseGroup:
+        monitoring = self.monitoring_repository()
+        guards = [
+            WorkerLeaseGuard(
+                monitoring,
+                worker_type="BACKTEST",
+                task_key=run_id,
+                worker_identity="bounded-backtest-worker",
+                current_task={"runId": run_id},
+            )
+        ]
+        experiment_id = monitoring.research_experiment_for_run(run_id)
+        if experiment_id:
+            guards.append(
+                WorkerLeaseGuard(
+                    monitoring,
+                    worker_type="RESEARCH_EXPERIMENT",
+                    task_key=run_id,
+                    worker_identity="research-experiment-worker",
+                    current_task={"runId": run_id, "experimentId": experiment_id},
+                )
+            )
+        return WorkerLeaseGroup(guards)
 
     def _engine(self, request: BacktestRequest, cancel_event: threading.Event) -> BacktestEngine:
         spec = market_spec(request.market)
@@ -665,6 +719,47 @@ class PlatformRuntime:
             ),
             "signalWorkers": workers,
             "strategies": STRATEGIES.ids(),
+        }
+
+    # ---- durable operational monitoring -----------------------------------------
+
+    def monitoring_repository(self) -> MonitoringRepository:
+        return MonitoringRepository(self.require_database())
+
+    def configure_monitoring(self, overview: Callable[[str], dict[str, Any]]) -> MonitoringService:
+        if self._monitoring_service is not None:
+            return self._monitoring_service
+        repository = self.monitoring_repository()
+        service = MonitoringService(
+            repository,
+            platform_status=self.status,
+            market_overview=overview,
+            connection_status=lambda: {
+                "connections": self.exchange_connections().list(),
+                "dhan": dhan_connection_status(),
+            },
+            strategy_runner_status=strategy_runner_health,
+            queue_capacity=self.queue_capacity,
+            clock=self.clock,
+        )
+        self._monitoring_service = service
+        self._monitoring_worker = MonitoringWorker(
+            service,
+            interval_seconds=float(os.environ.get("MONITORING_INTERVAL_SECONDS", "30")),
+        )
+        return service
+
+    def queue_capacity(self) -> dict[str, Any]:
+        runner = self.runner()
+        walk = self.walk_forward_runner()
+        counts = self.monitoring_repository().queue_counts()
+        return {
+            "backtests": {"pending": runner.pending_count(), "limit": runner.max_pending},
+            "research": {
+                "pending": counts["research"]["queued"] + counts["research"]["running"],
+                "limit": runner.max_pending,
+            },
+            "walkForward": {"pending": len(walk.active_validation_ids()), "limit": walk.max_pending},
         }
 
 
@@ -700,6 +795,7 @@ def _backtest_queue_limit() -> int:
 def install_platform(
     app: FastAPI, runtime: PlatformRuntime, *, overview: Callable[[str], dict[str, Any]] | None = None
 ) -> None:
+    overview_service = overview or (lambda _market: {})
     services = BacktestServices(
         registry=STRATEGIES, runs=runtime.runs, trades=runtime.trades, runner=runtime.runner,
         configs=runtime.strategy_configs, deployments=runtime.strategy_deployments,
@@ -708,6 +804,7 @@ def install_platform(
         indicator_sources=runtime.indicator_sources,
         candle_source=lambda market: runtime.candle_sources[market](),
         deployment_changed=runtime.reconcile_signal_workers,
+        audit=runtime.monitoring_repository,
     )
     backtest_router = create_backtest_router(services)
     app.router.routes.extend(backtest_router.routes)
@@ -734,9 +831,35 @@ def install_platform(
         candle_source=lambda market: runtime.candle_sources[market](),
         clock=runtime.clock,
     ).routes)
+    install_exchange_connection_validation_handler(app)
+    app.router.routes.extend(create_ai_copilot_router(CopilotServices(
+        audit=runtime.ai_copilot_audit,
+        strategy_sources=runtime.strategy_sources,
+        indicator_sources=runtime.indicator_sources,
+        runs=runtime.runs,
+        trades=runtime.trades,
+        experiments=runtime.research_experiments,
+        walk_forward=runtime.walk_forward_validations,
+        provider=configured_ai_provider,
+    )).routes)
+    app.router.routes.extend(create_exchange_connection_router(ExchangeConnectionServices(
+        repository=runtime.exchange_connections,
+        cipher=lambda: (
+            EnvelopeCipher(keyring)
+            if (keyring := MasterKeyring.from_environment()) is not None
+            else None
+        ),
+        testers=connection_testers,
+        dhan_status=dhan_connection_status,
+    )).routes)
+    if runtime.database is not None:
+        runtime.configure_monitoring(overview_service)
+    app.router.routes.extend(create_monitoring_router(lambda: runtime.configure_monitoring(overview_service)).routes)
+    app.router.routes.extend(create_agent_router(runtime.agent_tokens, runtime.monitoring_repository).routes)
+    install_audit_middleware(app, runtime.monitoring_repository)
     app.router.routes.extend(
         create_dashboard_router(
-            overview=overview or (lambda _market: {}),
+            overview=overview_service,
             screener_runs=lambda market: ScreenerRunRepository(runtime.require_database()).list(market, limit=1),
             backtest_runs=lambda market: runtime.runs().list(market, limit=5),
             engine_health=lambda market: {

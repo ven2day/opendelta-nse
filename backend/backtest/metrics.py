@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import statistics
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 
 def _round(value: float | None, digits: int = 4) -> float | None:
@@ -24,6 +25,7 @@ class MetricsAccumulator:
         self.unrealized_pnl = 0.0
         self.fees = 0.0
         self.slippage = 0.0
+        self.exposure_minutes = 0.0
         self.winners = 0
         self._holding_minutes: list[float] = []
         self._mae: list[float] = []
@@ -43,6 +45,8 @@ class MetricsAccumulator:
             self._mae.append(float(trade["mae_pct"]))
         if trade.get("mfe_pct") is not None:
             self._mfe.append(float(trade["mfe_pct"]))
+        if trade.get("holding_minutes") is not None:
+            self.exposure_minutes += float(trade["holding_minutes"])
         if status == "OPEN":
             self.open_trades += 1
             self.unrealized_pnl += float(trade.get("unrealized_pnl") or 0.0)
@@ -84,6 +88,7 @@ class MetricsAccumulator:
             "unrealizedPnl": _round(self.unrealized_pnl, 2),
             "fees": _round(self.fees, 2),
             "slippage": _round(self.slippage, 2),
+            "exposureMinutes": _round(self.exposure_minutes, 2),
             "winRate": _round(self.winners / self.completed_trades * 100.0, 2) if self.completed_trades else None,
             "averageMaePct": _round(statistics.fmean(self._mae)) if self._mae else None,
             "averageMfePct": _round(statistics.fmean(self._mfe)) if self._mfe else None,

@@ -16,19 +16,17 @@ from backend.collector import DhanConfig
 from backend.config.application_settings import ApplicationSettingsRepository
 from backend.data.candle_repository import CanonicalCandleRepository
 from backend.data.database import Database
+from backend.data.refresh import MarketDataRefreshService
 from backend.data.store import HistoricalDataStore
 from backend.data.timescale import TimescaleDualWriter, dual_writer_from_environment
 from backend.markets.base import CandleSource
-from backend.markets.crypto.engine import (
-    CryptoMarketService,
-    service_from_environment as crypto_service_from_environment,
-)
+from backend.markets.crypto.engine import CryptoMarketService
+from backend.markets.crypto.engine import service_from_environment as crypto_service_from_environment
 from backend.markets.crypto.exchange_adapter import CryptoCandleSource
 from backend.markets.nse.dhan_adapter import DhanCandleSource
 from backend.markets.nse.oi_regime import OiRegimeRepository
 from backend.markets.timescale_source import READ_MODES, TimescaleCandleSource, select_candle_source
 from backend.platform_runtime import PlatformRuntime
-from backend.data.refresh import MarketDataRefreshService
 
 _store: HistoricalDataStore | None = None
 _canonical_market_data_writer: TimescaleDualWriter | None = None
@@ -38,6 +36,7 @@ _oi_repository: OiRegimeRepository | None = None
 _market_data_refresh_service: MarketDataRefreshService | None = None
 _platform_runtime_instance: PlatformRuntime | None = None
 _platform_runtime_lock = threading.Lock()
+DEFAULT_CANDLE_READ_MODE = "timescale"
 
 
 def get_canonical_market_data_writer() -> TimescaleDualWriter:
@@ -137,7 +136,7 @@ def get_platform_runtime() -> PlatformRuntime:
     with _platform_runtime_lock:
         if _platform_runtime_instance is None:
             database = Database.from_environment()
-            read_mode = os.environ.get("PLATFORM_CANDLE_READ_MODE", "legacy").strip().lower()
+            read_mode = os.environ.get("PLATFORM_CANDLE_READ_MODE", DEFAULT_CANDLE_READ_MODE).strip().lower()
             if read_mode not in READ_MODES:
                 raise RuntimeError(
                     "PLATFORM_CANDLE_READ_MODE must be legacy, timescale, or timescale-fallback"

@@ -67,7 +67,7 @@ python -m backend.data.migrate           # apply
 
 Run this inside the backtest container (or any environment with the same
 `MARKET_DATA_DATABASE_URL`). Until it has run, every `/v2/*` route answers 503
-with the pending versions and the legacy routes are unaffected.
+with the pending versions; operational health routes remain available.
 
 ## Dashboard cutover and rollback
 
@@ -83,10 +83,11 @@ release symlink/image tags with the same scripts, start those two units, and
 run the authenticated smoke tests. Do not restart the unrelated market-data
 collector.
 
-## Enabling the unified platform
+## V2 default platform
 
-Everything is opt-in and defaults to off; production behaviour is unchanged
-until these are set on `opendelta-backtest.service`:
+The V2 UI/API and strict Timescale reader are the defaults. Signals and paper
+execution still require durable, operator-reviewed deployment records; live
+mutations remain independently disabled:
 
 | Variable | Effect |
 | --- | --- |
@@ -94,20 +95,19 @@ until these are set on `opendelta-backtest.service`:
 | `PLATFORM_AUTO_MIGRATE=true` | apply migrations at startup instead of explicitly |
 | `TRADINGVIEW_WEBHOOK_KEY` | random, revocable key placed only in TradingView alert JSON |
 | `TRADINGVIEW_MAX_ALERT_AGE_SECONDS` | delivery freshness window; default `900` seconds |
-| `NSE_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured NSE v2 live-signal worker |
-| `CRYPTO_SIGNAL_ENGINE_V2_ENABLED=true` | start every configured Crypto v2 live-signal worker |
-| `NSE_PAPER_TRADING_V2_ENABLED` / `CRYPTO_PAPER_TRADING_V2_ENABLED` | paper broker per market (default `true` with the worker) |
-| `NSE_LIVE_STRATEGIES` / `CRYPTO_LIVE_STRATEGIES` | JSON array of `{strategyId,timeframe}` bindings; NSE defaults to daily `rsi_dip_ladder_v1` |
-| `NSE_LIVE_STRATEGY` / `NSE_LIVE_TIMEFRAME` | legacy single binding, used only if the plural setting is absent |
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 | `WALK_FORWARD_QUEUE_LIMIT` | bounded queued/running walk-forward coordinators (default `10`) |
 | `WALK_FORWARD_POLL_SECONDS` | durable child-run polling cadence (default `0.5`) |
+| `AI_PROVIDER` | optional adapter; currently `openai-compatible`; unset fails closed |
+| `AI_PROVIDER_ENDPOINT`, `AI_MODEL` | deployment-controlled completion endpoint and model |
+| `AI_PROVIDER_API_KEY` | provider secret; backend-only and never returned to the browser |
+| `AI_PROVIDER_TIMEOUT_SECONDS` | request timeout, clamped to 1–60 seconds (default `30`) |
+| `AI_COPILOT_REQUESTS_PER_MINUTE` | durable per-actor request limit (default `10`, maximum `60`) |
 
-Suggested order: apply migrations → restart the service → verify
-`GET /v2/dashboard?market=NSE` answers 200 → run a screener and save a universe
-→ enable the Crypto worker (24/7, public data) → enable the NSE worker →
-retire the legacy live-signal engine (`LIVE_SIGNAL_ENGINE_ENABLED`) and the
-`/legacy/*` pages.
+Use the complete [V2 cutover and rollback runbook](v2-cutover.md). Apply
+migrations, verify strict canonical data, restart the backend, validate both
+market dashboards and previews, confirm exact durable deployments, then
+promote the web image. Environment feature flags cannot create workers.
 
 For Phase 7 specifically, build the application images without promoting
 traffic, apply `017_parameter_experiments`, restart and verify the backtest API,
@@ -120,16 +120,74 @@ endpoint before promoting the web image. A rollback uses the previous backend
 and web images while retaining the additive tables; do not delete completed
 training or unseen-test child runs.
 
-For the NSE daily swing worker, production must have all of the following:
+For Phase 10, apply `019_ai_research_copilot` before configuring a provider.
+Deploy with no `AI_PROVIDER*` variables first and verify the Copilot reports
+`AI provider not configured` while all research screens remain operational.
+Then supply provider settings through deployment secrets and restart. Rollback
+removes the provider variables and restores the prior image; retain the additive
+audit/draft tables.
+
+For Phase 11, apply `020_secure_exchange_connections` before deploying the
+matching API/web release. The runtime now includes `cryptography` for AES-256-GCM.
+Supply `EXCHANGE_CREDENTIAL_MASTER_KEY` and
+`EXCHANGE_CREDENTIAL_MASTER_KEY_VERSION` through deployment secrets. Optional
+provider base URL overrides must use HTTPS. Follow
+[the credential encryption and rotation runbook](credential-encryption.md).
+
+To roll back Phase 11, disable any saved connections, deploy the preceding
+application version, and retain both additive connection tables. Do not drop
+encrypted records or audit history. Provider-side keys remain independent and
+must be revoked at the exchange when no longer required.
+
+For Phase 12, apply `021_live_execution_foundation` and deploy with all live
+variables absent or explicitly false. Verify Settings says `Live trading
+disabled`, paper workflows still operate, and a test intent is stored as
+`BLOCKED` without any provider request. Only an owner-controlled deployment may
+set all of the following:
 
 ```dotenv
-PLATFORM_CANDLE_READ_MODE=timescale-fallback
-NSE_SIGNAL_ENGINE_V2_ENABLED=true
-NSE_PAPER_TRADING_V2_ENABLED=true
-NSE_LIVE_STRATEGIES=[{"strategyId":"rsi_dip_ladder_v1","timeframe":"1d"}]
+LIVE_TRADING_ENABLED=false
+LIVE_TRADING_DEPLOYMENT_ALLOWED=false
+DEPLOYMENT_ENVIRONMENT=production
+LIVE_TRADING_ALLOWED_ENVIRONMENTS=
+LIVE_CONNECTION_MAX_AGE_SECONDS=900
 ```
 
-After restart, verify the signal-health response reports the daily worker and
+No production order is part of deployment verification. Follow the
+[live execution](live-execution.md), [emergency-stop](emergency-stop.md), and
+[reconciliation](reconciliation.md) runbooks. To roll back, activate the global
+emergency stop, set both flags false, disable live deployments, restore the
+Phase 11 images, and retain all additive Phase 12 tables for audit/recovery.
+
+For Phase 13, apply `022_production_monitoring` before starting the new image.
+Verify `/operations` and `GET /v2/operations/health`, confirm active workers
+hold current leases, and investigate unexpected critical alerts before
+promotion. `MONITORING_WEBHOOK_URL` is optional and must be HTTPS. Roll back the
+application image without dropping worker lease, alert, notification, or audit
+history tables.
+
+For Phase 14, apply `023_agent_mcp_access` before deploying the agent routes.
+Keep token administration behind the existing authenticated proxy, leave
+`MCP_ALLOWED_ORIGINS` blank unless a known browser client is required, and test
+that anonymous `/api/mcp` requests return 401. Create the first least-privilege
+token through the authenticated application, capture it once into a secret
+manager, and verify tool discovery before granting submit scopes. Roll back the
+application image without dropping hashed tokens, rate-limit windows, tool
+request records, or operational audit history; revoke any issued tokens if the
+endpoint must be disabled immediately.
+
+For the NSE daily swing worker, production must use strict canonical reads and
+an approved durable deployment:
+
+```dotenv
+PLATFORM_CANDLE_READ_MODE=timescale
+LIVE_TRADING_ENABLED=false
+LIVE_TRADING_DEPLOYMENT_ALLOWED=false
+```
+
+Save the exact `rsi_dip_ladder_v1` version, config, NSE watchlist, `1d`
+timeframe and approved mode through V2 Settings. After restart, verify the
+signal-health response reports the daily worker and
 that the paper account's execution policy is `NEXT_OPEN`. Daily signals are
 created only after 15:30 IST; the independent 5-minute tracking feed supplies
 the next-session paper fill and in-session marks. Do not certify the service for

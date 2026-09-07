@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -72,6 +74,7 @@ class BacktestServices:
         indicator_sources: Callable[[], IndicatorSourceRepository] | None = None,
         candle_source: Callable[[str], CandleSource] | None = None,
         deployment_changed: Callable[[str], None] | None = None,
+        audit: Callable[[], Any] | None = None,
     ) -> None:
         self.registry = registry
         self._runs = runs
@@ -85,6 +88,7 @@ class BacktestServices:
         self.indicator_sources = indicator_sources
         self.candle_source = candle_source
         self.deployment_changed = deployment_changed
+        self.audit = audit
 
     def runs(self) -> BacktestRunRepository:
         return self._runs()
@@ -112,16 +116,16 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         strategy_source = None
         if request.strategySourceId:
             if services.sources is None:
-                raise HTTPException(status_code=503, detail="Strategy V2 source storage is not configured")
+                raise HTTPException(status_code=503, detail="Strategy source storage is not configured")
             try:
                 strategy_source = _guard(services.sources).get(request.strategySourceId)
             except (KeyError, ValueError) as error:
-                raise HTTPException(status_code=422, detail="Strategy V2 source was not found") from error
+                raise HTTPException(status_code=422, detail="Strategy source was not found") from error
             if strategy_source["status"] != "VALIDATED":
-                raise HTTPException(status_code=409, detail="Archived Strategy V2 sources cannot be backtested")
+                raise HTTPException(status_code=409, detail="Archived strategy sources cannot be backtested")
             strategy = StrategyV2BacktestAdapter(strategy_source, StrategyRunnerClient("/not-used-during-validation"))
             if strategy.strategy_id != request.strategyId:
-                raise HTTPException(status_code=422, detail="strategyId does not match the selected Strategy V2 source")
+                raise HTTPException(status_code=422, detail="strategyId does not match the selected strategy source")
         else:
             try:
                 strategy = services.registry.get(request.strategyId)
@@ -228,20 +232,20 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=409, detail="Only a completed backtest can be approved")
         if run.get("strategySourceId"):
             if services.sources is None:
-                raise HTTPException(status_code=503, detail="Strategy V2 source storage is not configured")
+                raise HTTPException(status_code=503, detail="Strategy source storage is not configured")
             if request.signalSource != "OPENDELTA":
-                raise HTTPException(status_code=409, detail="Strategy V2 signals must use the isolated OpenDelta runner")
+                raise HTTPException(status_code=409, detail="Strategy signals must use the isolated OpenDelta runner")
             try:
                 source = _guard(services.sources).get(run["strategySourceId"])
             except (KeyError, ValueError) as error:
-                raise HTTPException(status_code=409, detail="The pinned Strategy V2 source is unavailable") from error
+                raise HTTPException(status_code=409, detail="The pinned strategy source is unavailable") from error
             if source.get("status", "VALIDATED") != "VALIDATED":
-                raise HTTPException(status_code=409, detail="The pinned Strategy V2 source is archived")
+                raise HTTPException(status_code=409, detail="The pinned strategy source is archived")
             if run["strategyId"] in services.registry.ids():
-                raise HTTPException(status_code=409, detail="Strategy V2 cannot reuse a built-in strategy ID")
+                raise HTTPException(status_code=409, detail="Strategy Studio cannot reuse a built-in strategy ID")
             strategy = StrategyV2BacktestAdapter(source, StrategyRunnerClient("/not-used-during-validation"))
             if (strategy.strategy_id, strategy.version) != (run["strategyId"], run["strategyVersion"]):
-                raise HTTPException(status_code=409, detail="The pinned Strategy V2 identity no longer matches this backtest")
+                raise HTTPException(status_code=409, detail="The pinned strategy identity no longer matches this backtest")
         else:
             try:
                 strategy = services.registry.get(run["strategyId"])
@@ -307,6 +311,18 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         )
         if services.deployment_changed:
             services.deployment_changed(run["market"])
+        if services.audit is not None:
+            with suppress(Exception):
+                services.audit().append_audit(
+                    request_id=str(uuid.uuid4()),
+                    action="SIGNALS_APPROVAL" if request.mode == "SIGNALS" else "PAPER_APPROVAL",
+                    actor_type="USER",
+                    actor_id="platform-user",
+                    success=True,
+                    subject_type="BACKTEST_RUN",
+                    subject_id=run_id,
+                    details={"mode": request.mode, "market": run["market"]},
+                )
         return {"approval": approval, "configuration": config, "deployment": deployment}
 
     @router.get("/{run_id}/approvals")

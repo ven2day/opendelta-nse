@@ -110,13 +110,24 @@ def test_ranking_excludes_incomplete_and_minimum_trade_failures_with_stable_ties
 
 def test_unseen_aggregation_uses_only_supplied_test_metrics() -> None:
     aggregate = aggregate_unseen_metrics([
-        {"realizedPnl": 10, "maximumDrawdown": 4, "completedTrades": 2, "winRate": 50, "fees": 1},
-        {"realizedPnl": -2, "maximumDrawdown": 6, "completedTrades": 1, "winRate": 100, "fees": 0.5},
+        {
+            "realizedPnl": 10, "maximumDrawdown": 4, "completedTrades": 2, "winRate": 50,
+            "fees": 1, "targetHits": 1, "openTrades": 1, "exposureMinutes": 40,
+        },
+        {
+            "realizedPnl": -2, "maximumDrawdown": 6, "completedTrades": 1, "winRate": 100,
+            "fees": 0.5, "stoppedTrades": 1, "expiredTrades": 1, "averageHoldingMinutes": 12,
+        },
     ])
     assert aggregate["netPnl"] == 8
     assert aggregate["maximumDrawdown"] == 6
     assert aggregate["completedTrades"] == 3
     assert aggregate["winRate"] == pytest.approx(66.67)
+    assert aggregate["targetHits"] == 1
+    assert aggregate["stoppedTrades"] == 1
+    assert aggregate["expiredTrades"] == 1
+    assert aggregate["openTrades"] == 1
+    assert aggregate["exposureMinutes"] == 52
     assert aggregate["returnDrawdownScore"] == pytest.approx(8 / 6, abs=1e-6)
 
 

@@ -232,6 +232,7 @@ export type BacktestMetrics = {
   unrealizedPnl?: number | null;
   fees?: number | null;
   slippage?: number | null;
+  exposureMinutes?: number | null;
   winRate?: number | null;
   averageMaePct?: number | null;
   averageMfePct?: number | null;
@@ -368,6 +369,66 @@ export type WalkForwardValidation = Omit<WalkForwardPreview, "folds" | "candidat
   folds: WalkForwardFold[]; createdAt: string; completedAt?: string | null;
 };
 export type WalkForwardValidationsResponse = { validations: WalkForwardValidation[] };
+
+export type AICopilotStatus = {
+  configured: boolean; message: string; provider?: string | null; model?: string | null;
+  safetyMode: "RESEARCH_DRAFT_ONLY";
+};
+export type AICopilotAction =
+  | "EXPLAIN_STRATEGY" | "EXPLAIN_INDICATOR" | "EXPLAIN_BACKTEST" | "SUGGEST_IMPROVEMENTS"
+  | "SUGGEST_EXPERIMENT" | "EXPLAIN_COMPARISON" | "EXPLAIN_WALK_FORWARD"
+  | "DRAFT_STRATEGY" | "DRAFT_INDICATOR" | "DRAFT_CONFIGURATION";
+export type AICopilotResponse = {
+  requestId: string; label: string; action: AICopilotAction; content: string;
+  provider: string; model: string; usage: Record<string, number>; contextCategories: string[];
+  suggestedDraftType: "STRATEGY" | "INDICATOR" | "CONFIGURATION" | "NOTE";
+};
+export type AIResearchDraft = {
+  draftId: string; requestId: string; draftType: AICopilotResponse["suggestedDraftType"];
+  content: string; status: "DRAFT"; createdAt?: string;
+};
+
+export type ExchangePermissionReport = {
+  authenticated?: boolean;
+  read?: boolean;
+  trade?: boolean;
+  withdrawal?: boolean | null;
+  ipAllowlisted?: boolean | null;
+  environment?: "LIVE" | "DEMO";
+  accountStatus?: string;
+};
+
+export type ExchangeConnection = {
+  connectionId: string;
+  provider: "OKX" | "VALR";
+  label: string;
+  environment: "LIVE" | "DEMO";
+  configured: true;
+  maskedKeyIdentifier: string;
+  disabled: boolean;
+  status: "NOT_TESTED" | "CONNECTED" | "FAILED" | "WITHDRAWAL_PERMISSION" | "DISABLED";
+  permissions: ExchangePermissionReport;
+  lastTestSuccess: boolean | null;
+  lastTestMessage: string | null;
+  lastTestedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlatformConnection = {
+  provider: "DHAN";
+  managedBy: "deployment";
+  configured: boolean;
+  status: "CONFIGURED" | "NOT_CONFIGURED";
+  message: string;
+};
+
+export type ExchangeConnectionsResponse = {
+  encryptionConfigured: boolean;
+  connections: ExchangeConnection[];
+  platformConnections: PlatformConnection[];
+  publicMarketData: Record<string, { available: boolean; requiresPrivateConnection: boolean }>;
+};
 
 export type EngineStatus = {
   market?: PlatformMarket | string | null;

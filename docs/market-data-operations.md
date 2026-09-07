@@ -5,15 +5,15 @@
 TimescaleDB receives completed candles from Dhan and OKX. The shared v2
 Screener, Backtest and Signal engines can read those candles through
 `TimescaleCandleSource`; the existing Dhan file/cache and crypto SQLite readers
-remain the default during reconciliation.
+remain explicit rollback sources during reconciliation.
 
 Reader selection is explicit:
 
-- `PLATFORM_CANDLE_READ_MODE=legacy` — current safe default;
+- `PLATFORM_CANDLE_READ_MODE=timescale` — strict V2 default; no provider/cache
+  fallback;
 - `PLATFORM_CANDLE_READ_MODE=timescale-fallback` — TimescaleDB first, with a
   warning and legacy fallback when the canonical range is unavailable;
-- `PLATFORM_CANDLE_READ_MODE=timescale` — strict final state; no provider/cache
-  candle fallback.
+- `PLATFORM_CANDLE_READ_MODE=legacy` — explicit emergency rollback reader.
 
 Use the same mode for Screener, Backtest and Signals so every engine evaluates
 the same candle history. Never use fallback mode to certify backtest

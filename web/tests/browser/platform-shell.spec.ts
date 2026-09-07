@@ -38,7 +38,7 @@ test.beforeEach(async ({ page }) => {
 test("route-aware shell has no duplicate navigation or viewport overflow", async ({ page }) => {
   test.setTimeout(240_000);
   const authenticatedRoutes = [
-    "/", "/screener", "/backtest", "/research", "/indicators", "/signals", "/paper-trading", "/settings",
+    "/", "/screener", "/backtest", "/research", "/indicators", "/signals", "/paper-trading", "/operations", "/settings",
     "/?market=CRYPTO", "/screener?market=CRYPTO", "/backtest?market=CRYPTO", "/research?market=CRYPTO", "/indicators?market=CRYPTO", "/signals?market=CRYPTO", "/paper-trading?market=CRYPTO",
     "/admin",
   ];
@@ -57,11 +57,11 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       await expect(page.locator(".platform-topnav")).toHaveCount(1);
       await expect(page.locator(".platform-sidebar, .platform-menu, .platform-backdrop")).toHaveCount(0);
       await expect(page.locator('.platform-frame[data-ui-version="unified-v2"]')).toHaveCount(1);
-      await expect(page.locator(".platform-topnav a")).toHaveCount(8);
-      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Strategies"]);
+      await expect(page.locator(".platform-topnav a")).toHaveCount(9);
+      expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Operations", "Strategies"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
-        await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
+        await expect(page.getByText("Platform database not configured").first()).toBeVisible({ timeout: 15_000 });
       }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);
@@ -114,6 +114,8 @@ test("the market switcher keeps the current page and carries the market into nav
 test("research parameter sweeps preview safely and reuse comparison and chart workspaces", async ({ page }) => {
   await page.unroute("**/api/v2/**");
   let previewAttempts = 0;
+  let aiRequest: Record<string, unknown> | null = null;
+  let aiDraft: Record<string, unknown> | null = null;
   const runs = [
     "71111111-1111-4111-8111-111111111111",
     "72222222-2222-4222-8222-222222222222",
@@ -144,6 +146,13 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
         winRate: index ? 0.5 : 0.75,
         fees: 4,
         slippage: 2,
+        completedTrades: 2,
+        openTrades: index,
+        targetHits: 1,
+        stoppedTrades: index,
+        expiredTrades: 0,
+        averageHoldingMinutes: 25,
+        exposureMinutes: 50,
       },
       createdAt: "2026-09-05T09:00:00Z",
     },
@@ -187,6 +196,15 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
       executionSchema: { targetPct: { type: "number", default: null, minimum: 0.00000001, label: "Target %" } },
     } });
     if (path.endsWith("/strategy-studio/sources")) return route.fulfill({ json: { sources: [] } });
+    if (path.endsWith("/ai/copilot/status")) return route.fulfill({ json: { configured: true, message: "AI research provider configured", provider: "test-provider", model: "research-model", safetyMode: "RESEARCH_DRAFT_ONLY" } });
+    if (path.endsWith("/ai/copilot/requests") && request.method() === "POST") {
+      aiRequest = request.postDataJSON();
+      return route.fulfill({ json: { requestId: "76666666-6666-4666-8666-666666666666", label: "AI-generated research draft — review and validate", action: "EXPLAIN_BACKTEST", content: "Research explanation only", provider: "test-provider", model: "research-model", usage: { total_tokens: 12 }, contextCategories: ["BACKTEST_SUMMARY", "SELECTED_TRADES"], suggestedDraftType: "NOTE" } });
+    }
+    if (path.endsWith("/ai/copilot/drafts") && request.method() === "POST") {
+      aiDraft = request.postDataJSON();
+      return route.fulfill({ status: 201, json: { draftId: "77777777-7777-4777-8777-777777777777", requestId: "76666666-6666-4666-8666-666666666666", draftType: "NOTE", content: "Research explanation only", status: "DRAFT" } });
+    }
     if (path.endsWith("/screener/universes")) return route.fulfill({ json: {
       active: { NSE: { universeId: "60000000-0000-4000-8000-000000000001", market: "NSE", name: "Active NSE", symbols: ["INFY", "TCS"], active: true } },
       universes: [],
@@ -224,8 +242,29 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
         warnings: [],
       } });
     }
-    if (path.endsWith("/research/walk-forward")) return route.fulfill({ json: { validations: [] } });
+    if (path.endsWith("/research/walk-forward")) return route.fulfill({ json: { validations: [{
+      validationId: "73333333-3333-4333-8333-333333333333", previewHash: `sha256:${"c".repeat(64)}`,
+      name: "Completed walk-forward", mode: "ROLLING", market: "NSE", strategyId: "rsi_dip_ladder_v1",
+      strategyVersion: "1.0.0", strategySourceId: null, timeframe: "5m", universeName: "Active NSE",
+      symbols: ["INFY", "TCS"], overallStartDate: "2026-03-01", overallEndDate: "2026-09-01",
+      trainingWindow: 20, testingWindow: 5, step: 5, maximumFolds: 6,
+      candidateExperimentId: experiment.experimentId, rankingObjective: "RETURN_DRAWDOWN",
+      minimumRequiredTrades: 3, transactionCostBps: 11.1, slippageBps: 5,
+      foldCount: 1, candidateCount: 2, childRunCount: 3, symbolCount: 2,
+      estimatedSymbolRuns: 6, estimatedCandleWorkload: 15000, cancelRequested: false, status: "COMPLETE",
+      foldStatusCounts: { COMPLETE: 1 }, childRunStatusCounts: { COMPLETE: 3 }, createdAt: "2026-09-05T09:00:00Z",
+      aggregateUnseenMetrics: { realizedPnl: 35, maximumDrawdown: 8, winRate: 60, completedTrades: 2, openTrades: 0, targetHits: 1, stoppedTrades: 1, expiredTrades: 0, averageHoldingMinutes: 20, exposureMinutes: 40 },
+      folds: [{
+        foldId: "74444444-4444-4444-8444-444444444444", position: 1, status: "COMPLETE",
+        trainingStart: "2026-03-02", trainingEnd: "2026-03-27", testingStart: "2026-03-30", testingEnd: "2026-04-03",
+        trainingSessions: 20, testingSessions: 5, selectedVariantId: variants[0].variantId,
+        selectedCandidateName: variants[0].name, selectedConfiguration: variants[0].configuration,
+        selectedExecution: variants[0].execution, trainingRank: 1, trainingCandidates: variants,
+        testRun: { ...variants[0].run, runId: "75555555-5555-4555-8555-555555555555", startDate: "2026-03-30", endDate: "2026-04-03", metrics: { ...variants[0].run.metrics, realizedPnl: 35, maximumDrawdown: 8 } },
+      }],
+    }] } });
     if (path.endsWith("/research/experiments")) return route.fulfill({ json: { experiments: [experiment] } });
+    if (path.endsWith("/backtests")) return route.fulfill({ json: { runs: variants.map((item) => item.run) } });
     const runIndex = runs.findIndex((runId) => path.endsWith(`/backtests/${runId}/trades`));
     if (runIndex >= 0) return route.fulfill({ json: {
       runId: runs[runIndex], total: 2, limit: 5000, offset: 0,
@@ -239,6 +278,16 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/research");
+  const aiPanel = page.getByRole("heading", { name: "AI Research Copilot" }).locator("xpath=ancestor::section[1]");
+  await aiPanel.getByLabel("Backtest summary context").selectOption(runs[0]);
+  await aiPanel.getByText(/Selected trades/).click();
+  await aiPanel.getByRole("checkbox").first().check();
+  await aiPanel.getByRole("button", { name: "Generate research draft" }).click();
+  await expect(aiPanel.getByText("AI-generated research draft — review and validate")).toBeVisible();
+  expect(aiRequest).toMatchObject({ context: { backtestRunId: runs[0], selectedTradeLotIds: ["lot-0-1"] } });
+  await aiPanel.getByRole("button", { name: "Save research draft" }).click();
+  await expect(aiPanel.getByText(/Saved as DRAFT/)).toBeVisible();
+  expect(aiDraft).toMatchObject({ draftType: "NOTE", content: "Research explanation only" });
   const runButton = page.getByRole("button", { name: "Run experiment" });
   await expect(runButton).toBeDisabled();
   await page.getByRole("button", { name: "Grid sweep" }).click();
@@ -255,8 +304,16 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   await page.getByLabel("Ranking", { exact: true }).selectOption("RETURN_DRAWDOWN");
   await expect(page.getByText("Leader", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Net P&L" }).click();
-  await expect(page.getByRole("columnheader", { name: "Net P&L" })).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.getByRole("columnheader", { name: "Net P&L" }).first()).toHaveAttribute("aria-sort", "ascending");
+  const strategyComparison = page.getByRole("heading", { name: "Strategy comparison" }).locator("xpath=ancestor::section[1]");
+  await strategyComparison.getByRole("button", { name: "JSON" }).first().click();
+  await expect(strategyComparison.getByText(/Exact immutable configuration/)).toBeVisible();
   await expect(page.getByRole("group", { name: "Equity curve selection" }).getByRole("checkbox")).toHaveCount(2);
+  await expect(page.getByRole("heading", { name: "Training versus unseen comparison" })).toBeVisible();
+  const foldComparison = page.getByRole("heading", { name: "Training versus unseen comparison" }).locator("xpath=ancestor::section[1]");
+  await expect(foldComparison.getByText("TRAINING", { exact: true })).toBeVisible();
+  await expect(foldComparison.getByText("UNSEEN TEST", { exact: true })).toBeVisible();
+  await expect(foldComparison.getByRole("link", { name: "Chart" }).last()).toHaveAttribute("href", "/backtest?market=NSE&runId=75555555-5555-4555-8555-555555555555");
 
   await page.getByLabel("rsi_low values").fill("[20, 25, 30]");
   await expect(page.getByText(/Preview stale/)).toBeVisible();
@@ -285,10 +342,52 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test("operations shows durable health, leases, alerts, audit, and exact timestamps", async ({ page }) => {
+  await page.unroute("**/api/v2/**");
+  let acknowledged = false;
+  await page.route("**/api/v2/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/operations/audit")) return route.fulfill({ json: { items: [{
+      auditId: "audit-1", requestId: "request-1", action: "BACKTEST_CREATED", actorType: "USER",
+      actorId: "researcher", subjectType: "HTTP_RESOURCE", subjectId: "backtests", success: true,
+      details: {}, createdAt: "2026-09-07T12:00:00+00:00",
+    }] } });
+    if (url.pathname.endsWith("/operations/health")) return route.fulfill({ json: {
+      overall: "DEGRADED", generatedAt: "2026-09-07T12:00:00+00:00",
+      marketData: {
+        NSE: { dataFreshness: { status: "FRESH", reason: "MARKET_OPEN" } },
+        CRYPTO: { dataFreshness: { status: "STALE", reason: "MARKET_24_7_DATA_LAGGING" } },
+      },
+      workerLeases: [{ leaseId: "lease-1", workerType: "BACKTEST", taskKey: "run-1", workerIdentity: "bounded-backtest-worker", hostIdentity: "host", processIdentity: "7", ownerFingerprint: "12345678", heartbeatAt: "2026-09-07T11:59:55+00:00", expiresAt: "2026-09-07T12:01:00+00:00", status: "ACTIVE" }],
+      queues: { backtests: { pending: 1, limit: 200 }, research: { pending: 0, limit: 200 }, walkForward: { pending: 0, limit: 20 } },
+      strategyRunner: { available: true, networkless: true, transport: "unix-socket" },
+      exchangeConnections: { dhan: { configured: true, status: "CONNECTED" }, connections: [{ connectionId: "okx", provider: "OKX", status: "CONNECTED", lastTestSuccess: true }] },
+      activeAlerts: [{ alertId: "alert-1", alertType: "STALE_CRYPTO_DATA", severity: "WARNING", source: "market-data", title: "Crypto market data is stale", message: "Freshness lag", status: "OPEN", occurrenceCount: 2, lastSeenAt: "2026-09-07T12:00:00+00:00" }],
+    } });
+    if (url.pathname.endsWith("/operations/alerts/alert-1/acknowledge") && route.request().method() === "POST") {
+      acknowledged = true;
+      return route.fulfill({ json: { alertId: "alert-1", status: "ACKNOWLEDGED" } });
+    }
+    return route.fulfill({ status: 404, json: { detail: "Unexpected operations route" } });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/operations");
+  await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Worker leases" })).toBeVisible();
+  await expect(page.getByText("Crypto market data is stale")).toBeVisible();
+  await expect(page.getByText(/07 Sept? 2026|07 Sep 2026/).first()).toBeVisible();
+  await page.getByRole("button", { name: "Acknowledge" }).click();
+  expect(acknowledged).toBe(true);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test("strategies adds a configured instrument with one compact control", async ({ page }) => {
   await page.unroute("**/api/platform?**");
   await page.unroute("**/api/v2/**");
   let added: unknown;
+  let credentialRequest: Record<string, unknown> | null = null;
+  let connection: Record<string, unknown> | null = null;
   await page.route("**/api/platform?**", async (route) => {
     const request = route.request();
     const parameters = new URL(request.url()).searchParams;
@@ -302,7 +401,18 @@ test("strategies adds a configured instrument with one compact control", async (
   });
   await page.route("**/api/v2/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
     const strategy = { strategyId: "rsi_dip_ladder", name: "RSI Dip Ladder", version: "1.0.0", supportedMarkets: ["CRYPTO"], supportedTimeframes: ["5m"], configSchema: {}, defaults: {} };
+    if (path.endsWith("/connections") && method === "GET") return route.fulfill({ json: { encryptionConfigured: true, connections: connection ? [connection] : [], platformConnections: [{ provider: "DHAN", managedBy: "deployment", configured: true, status: "CONFIGURED", message: "Dhan authentication remains deployment managed" }], publicMarketData: { OKX: { available: true, requiresPrivateConnection: false }, VALR: { available: true, requiresPrivateConnection: false } } } });
+    if (path.endsWith("/connections") && method === "POST") {
+      credentialRequest = route.request().postDataJSON();
+      connection = { connectionId: "44444444-4444-4444-8444-444444444444", provider: "OKX", label: "OpenDelta account", environment: "DEMO", configured: true, maskedKeyIdentifier: "••••wxyz", disabled: true, status: "NOT_TESTED", permissions: {}, lastTestSuccess: null, lastTestMessage: null, lastTestedAt: null, createdAt: "2026-09-07T01:00:00Z", updatedAt: "2026-09-07T01:00:00Z" };
+      return route.fulfill({ status: 201, json: connection });
+    }
+    if (path.endsWith("/connections/44444444-4444-4444-8444-444444444444/test")) {
+      connection = { ...connection, status: "CONNECTED", permissions: { authenticated: true, read: true, trade: false, withdrawal: false, ipAllowlisted: true }, lastTestSuccess: true, lastTestMessage: "OKX connection test succeeded", lastTestedAt: "2026-09-07T01:01:00Z" };
+      return route.fulfill({ json: connection });
+    }
     if (path.endsWith("/strategies")) return route.fulfill({ json: { strategies: [strategy], markets: ["NSE", "CRYPTO"], riskDefaults: {}, riskSchema: {} } });
     if (path.endsWith("/strategy-deployments")) return route.fulfill({ json: { deployments: [] } });
     if (path.endsWith("/screener/universes")) return route.fulfill({ json: { active: {}, universes: [] } });
@@ -325,6 +435,24 @@ test("strategies adds a configured instrument with one compact control", async (
   await button.click();
   await expect(page.getByText("BTC-USDT is now available to watchlists, backtests and strategies.")).toBeVisible();
   expect(added).toEqual({ market: "CRYPTO", symbol: "BTC-USDT" });
+
+  await page.getByText("Add encrypted connection", { exact: true }).click();
+  await page.getByLabel("Environment").selectOption("DEMO");
+  await page.getByLabel("Exchange API key").fill("browser-dummy-key-wxyz");
+  await page.getByLabel("Exchange API secret").fill("browser-dummy-secret-value");
+  await page.getByLabel("OKX passphrase").fill("browser-dummy-passphrase");
+  await page.getByRole("button", { name: "Encrypt and save" }).click();
+  await expect(page.getByText("••••wxyz")).toBeVisible();
+  await expect(page.getByText("browser-dummy-secret-value")).toHaveCount(0);
+  expect(credentialRequest).toEqual({ provider: "OKX", label: "OpenDelta account", environment: "DEMO", apiKey: "browser-dummy-key-wxyz", apiSecret: "browser-dummy-secret-value", passphrase: "browser-dummy-passphrase" });
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await expect(page.getByText("OKX connection test succeeded")).toBeVisible();
+  await expect(page.getByText("None (safe)", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "API connections" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Place|Submit order/ })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const connectionOverflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(connectionOverflow).toBeLessThanOrEqual(1);
 });
 
 test("backtest ticket is compact and trade controls filter and sort the full result", async ({ page }) => {
@@ -437,9 +565,9 @@ test("desktop navigation stays on one row and the workspace uses the viewport", 
     linkWidths: Array.from(nav.querySelectorAll("a"), (link) => link.getBoundingClientRect().width),
     flexGrow: getComputedStyle(nav).flexGrow,
   }));
-  expect(compactNavigation.width).toBeLessThanOrEqual(350);
+  expect(compactNavigation.width).toBeLessThanOrEqual(390);
   expect(compactNavigation.flexGrow).toBe("0");
-  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40, 40]);
+  expect(compactNavigation.linkWidths).toEqual([40, 40, 40, 40, 40, 40, 40, 40, 40]);
   const settingsLink = page.getByRole("link", { name: "Strategies", exact: true });
   const collapsedWidth = await settingsLink.evaluate((link) => link.getBoundingClientRect().width);
   await settingsLink.hover();

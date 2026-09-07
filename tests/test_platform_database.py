@@ -7,8 +7,9 @@ import os
 import secrets
 import unittest
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
+from backend.agent.repository import AgentRateLimit, AgentRequestConflict, AgentTokenRepository
 from backend.ai.repository import AICopilotRepository
 from backend.backtest.result_writer import DatabaseResultWriter
 from backend.connections.crypto import EnvelopeCipher, MasterKeyring
@@ -90,6 +91,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "020_secure_exchange_connections",
                 "021_live_execution_foundation",
                 "022_production_monitoring",
+                "023_agent_mcp_access",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -132,6 +134,9 @@ class PlatformDatabaseTests(unittest.TestCase):
             "operational_alerts",
             "operational_alert_occurrences",
             "notification_deliveries",
+            "agent_access_tokens",
+            "agent_rate_limit_windows",
+            "agent_tool_requests",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -319,6 +324,46 @@ class PlatformDatabaseTests(unittest.TestCase):
             cooldown_seconds=300, now=datetime(2026, 9, 7, 12, 0, tzinfo=UTC),
         )
         self.assertNotEqual(next_incident["alertId"], first["alertId"])
+
+    def test_agent_tokens_are_hashed_scoped_rate_limited_revocable_and_idempotent(self) -> None:
+        now = datetime(2026, 9, 7, 13, 0, tzinfo=UTC)
+        repository = AgentTokenRepository(self.database, clock=lambda: now)
+        record, raw_token = repository.create(
+            name="Database agent",
+            scopes=["research:read", "backtests:submit"],
+            expires_at=now + timedelta(days=1),
+            created_by="database-test",
+            rate_limit_per_minute=1,
+        )
+        stored = self.database.fetch_one(
+            "SELECT token_hash, token_prefix FROM agent_access_tokens WHERE token_id = %s",
+            (uuid.UUID(record["tokenId"]),),
+        )
+        self.assertIsNotNone(stored)
+        self.assertNotEqual(stored["token_hash"], raw_token)
+        self.assertEqual(stored["token_hash"], hashlib.sha256(raw_token.encode()).hexdigest())
+        self.assertEqual(repository.authenticate(raw_token)["lastUsedAt"], now.isoformat())
+        with self.assertRaises(AgentRateLimit):
+            repository.authenticate(raw_token)
+
+        request, created = repository.begin_tool_request(
+            token_id=record["tokenId"], tool_name="opendelta_submit_backtest",
+            idempotency_key="database-agent-1", request_hash="a" * 64,
+        )
+        self.assertTrue(created)
+        repository.complete_tool_request(request["requestId"], {"runId": str(uuid.uuid4())})
+        duplicate, created = repository.begin_tool_request(
+            token_id=record["tokenId"], tool_name="opendelta_submit_backtest",
+            idempotency_key="database-agent-1", request_hash="a" * 64,
+        )
+        self.assertFalse(created)
+        self.assertEqual(duplicate["status"], "COMPLETE")
+        with self.assertRaises(AgentRequestConflict):
+            repository.begin_tool_request(
+                token_id=record["tokenId"], tool_name="opendelta_submit_backtest",
+                idempotency_key="database-agent-1", request_hash="b" * 64,
+            )
+        self.assertIsNotNone(repository.revoke(record["tokenId"])["revokedAt"])
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)

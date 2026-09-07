@@ -451,6 +451,29 @@ test("Research Lab completes strategy and walk-forward comparisons", async () =>
   assert.match(backtest, /useState<string \| null>\(initialRunId \?\? null\)/);
 });
 
+test("MCP proxy accepts only bounded bearer-authenticated JSON", async () => {
+  const worker = await loadWorker();
+  const request = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+  const anonymous = await fetchFromWorker(worker, "/api/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: request,
+  });
+  assert.equal(anonymous.status, 401);
+  const wrongType = await fetchFromWorker(worker, "/api/mcp", {
+    method: "POST",
+    headers: { authorization: "Bearer odt_example", "content-type": "text/plain" },
+    body: request,
+  });
+  assert.equal(wrongType.status, 415);
+  const unconfigured = await fetchFromWorker(worker, "/api/mcp", {
+    method: "POST",
+    headers: { authorization: "Bearer odt_example", "content-type": "application/json" },
+    body: request,
+  });
+  assert.equal(unconfigured.status, 503);
+});
+
 test("Research Lab walk-forward validation separates training from unseen tests and stays research-only", async () => {
   const [workspace, walkForward, types, css] = await Promise.all([
     readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8"),
@@ -566,6 +589,29 @@ test("production monitoring uses durable leases, append-only audits, and dedupli
   assert.match(migration, /operational_audit_append_only/);
   assert.match(migration, /operational_alerts_active_fingerprint_uq/);
   assert.doesNotMatch(workspace, /apiSecret|passphrase|credentials_ciphertext/);
+});
+
+test("agent MCP access is scoped, hashed, bounded, audited, and research-only", async () => {
+  const [proxy, routes, gateway, repository, migration] = await Promise.all([
+    readFile(new URL("../app/api/mcp/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/api/agent_routes.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/agent/mcp.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/agent/repository.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/data/sql/023_agent_mcp_access.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(proxy, /authorization/);
+  assert.match(proxy, /MAX_BODY_BYTES = 65_536/);
+  assert.match(routes, /@router\.post\("\/mcp"\)/);
+  assert.match(routes, /MCP_ALLOWED_ORIGINS/);
+  assert.match(gateway, /MAX_MCP_OUTPUT_BYTES = 524_288/);
+  assert.match(gateway, /SCOPE_DENIED/);
+  assert.match(gateway, /MCP_AGENT_ACTION/);
+  assert.match(repository, /hashlib\.sha256/);
+  assert.match(migration, /token_hash char\(64\)/);
+  assert.match(migration, /agent_rate_limit_windows/);
+  for (const forbidden of ["place_order", "cancel_live_order", "approve_signals", "approve_paper", "read_credentials", "execute_shell"]) {
+    assert.doesNotMatch(gateway.match(/TOOLS: tuple[\s\S]*?TOOL_BY_NAME/)?.[0] ?? "", new RegExp(`ToolSpec\\(\\"${forbidden}\\"`));
+  }
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

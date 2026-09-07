@@ -16,7 +16,9 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from backend.agent.repository import AgentTokenRepository
 from backend.ai.repository import AICopilotRepository
+from backend.api.agent_routes import create_agent_router
 from backend.api.ai_copilot_routes import CopilotServices, configured_ai_provider, create_ai_copilot_router
 from backend.api.backtest_routes import BacktestServices, create_backtest_router
 from backend.api.dashboard_routes import create_dashboard_router
@@ -625,6 +627,9 @@ class PlatformRuntime:
     def ai_copilot_audit(self) -> AICopilotRepository:
         return AICopilotRepository(self.require_database())
 
+    def agent_tokens(self) -> AgentTokenRepository:
+        return AgentTokenRepository(self.require_database(), clock=self.clock)
+
     def exchange_connections(self) -> ExchangeConnectionRepository:
         return ExchangeConnectionRepository(self.require_database())
 
@@ -861,6 +866,7 @@ def install_platform(
         indicator_sources=runtime.indicator_sources,
         candle_source=lambda market: runtime.candle_sources[market](),
         deployment_changed=runtime.reconcile_signal_workers,
+        audit=runtime.monitoring_repository,
     )
     backtest_router = create_backtest_router(services)
     app.router.routes.extend(backtest_router.routes)
@@ -912,6 +918,7 @@ def install_platform(
     if runtime.database is not None:
         runtime.configure_monitoring(overview_service)
     app.router.routes.extend(create_monitoring_router(lambda: runtime.configure_monitoring(overview_service)).routes)
+    app.router.routes.extend(create_agent_router(runtime.agent_tokens, runtime.monitoring_repository).routes)
     install_audit_middleware(app, runtime.monitoring_repository)
     app.router.routes.extend(
         create_dashboard_router(

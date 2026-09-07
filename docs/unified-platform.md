@@ -222,6 +222,12 @@ durable alert lifecycle, provider-neutral notifications, and append-only
 operational audit history. Monitoring observes the existing platform; it does
 not grant approval or execution authority.
 
+Phase 14 adds a scoped MCP adapter over the same V2 route workflows. It does
+not create a second backtest, experiment, walk-forward, AI, or monitoring
+engine. Hashed expiring credentials, per-token scopes, durable rate limits,
+bounded output, strict tool schemas, at-most-once submissions, and append-only
+audits keep agent authority narrower than authenticated user authority.
+
 ## Tests
 
 `PYTHONPATH=. pytest -q` runs everything; set

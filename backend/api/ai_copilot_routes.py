@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.ai.copilot import AIProvider, CopilotProviderError, HTTPChatProvider
 from backend.ai.repository import AICopilotRateLimit, AICopilotRepository
@@ -39,6 +39,8 @@ CopilotAction = Literal[
 
 
 class CopilotContextRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     strategySourceId: str | None = None
     indicatorSourceId: str | None = None
     backtestRunId: str | None = None
@@ -56,6 +58,8 @@ class CopilotContextRequest(BaseModel):
 
 
 class CopilotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     action: CopilotAction
     instruction: str = Field(min_length=1, max_length=MAX_AI_INSTRUCTION_CHARS)
     context: CopilotContextRequest = Field(default_factory=CopilotContextRequest)

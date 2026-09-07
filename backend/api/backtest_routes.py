@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -72,6 +74,7 @@ class BacktestServices:
         indicator_sources: Callable[[], IndicatorSourceRepository] | None = None,
         candle_source: Callable[[str], CandleSource] | None = None,
         deployment_changed: Callable[[str], None] | None = None,
+        audit: Callable[[], Any] | None = None,
     ) -> None:
         self.registry = registry
         self._runs = runs
@@ -85,6 +88,7 @@ class BacktestServices:
         self.indicator_sources = indicator_sources
         self.candle_source = candle_source
         self.deployment_changed = deployment_changed
+        self.audit = audit
 
     def runs(self) -> BacktestRunRepository:
         return self._runs()
@@ -307,6 +311,18 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         )
         if services.deployment_changed:
             services.deployment_changed(run["market"])
+        if services.audit is not None:
+            with suppress(Exception):
+                services.audit().append_audit(
+                    request_id=str(uuid.uuid4()),
+                    action="SIGNALS_APPROVAL" if request.mode == "SIGNALS" else "PAPER_APPROVAL",
+                    actor_type="USER",
+                    actor_id="platform-user",
+                    success=True,
+                    subject_type="BACKTEST_RUN",
+                    subject_id=run_id,
+                    details={"mode": request.mode, "market": run["market"]},
+                )
         return {"approval": approval, "configuration": config, "deployment": deployment}
 
     @router.get("/{run_id}/approvals")

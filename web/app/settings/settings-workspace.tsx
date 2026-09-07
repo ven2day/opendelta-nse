@@ -2,6 +2,7 @@
 
 import { Braces, Code2, Copy, Plus, Save, Settings2, ShieldCheck } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { AICopilotPanel } from "../ai/ai-copilot-panel";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
 import { platformGet, platformPost, type PlatformMarket } from "../platform/platform-client";
 import { compactValues, schemaDefaults, schemaFromValues, validateConfigValues, type ConfigSchema, type ConfigValues } from "../platform/schema-form";
@@ -240,6 +241,8 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
         <div className={styles.sourceHistory}><strong>Saved V2 sources</strong>{strategySources.loading ? <small>Loading…</small> : strategySources.error ? <small>Unavailable until migration 012 is applied</small> : strategySources.data?.sources.length ? strategySources.data.sources.map((item) => <div key={item.sourceId} className={styles.sourceRow}><span><strong>{item.name}</strong><small>{item.strategyId}</small></span><code>v{item.strategyVersion}</code><span>{item.manifest.supportedMarkets.join(" + ")}</span><StatusBadge tone="good">Validated</StatusBadge></div>) : <small>No V2 source versions saved for {marketLabel(market)}.</small>}</div>
       </div>
     </details>
+
+    <AICopilotPanel surface="strategy" market={market} onUseDraft={(content) => { setStrategySource(content); setSourceValidation(null); setSourceNotice({ kind: "success", text: "AI draft loaded into the editor. Review it, then run normal V2 validation before saving." }); }} />
 
     <Panel icon={<Settings2 size={17} />} title="Strategy control" description="Select a strategy, assign its timeframe and watchlist, then run signals or paper trading." aside={active ? <StatusBadge tone="good">Active: {active.name}</StatusBadge> : <StatusBadge tone="warn">No active config</StatusBadge>}>
       {strategies.loading ? <LoadingState label="Loading strategies" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !selectedStrategy ? <EmptyState title="No strategies registered" description={`No strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={save} noValidate>

@@ -370,6 +370,24 @@ export type WalkForwardValidation = Omit<WalkForwardPreview, "folds" | "candidat
 };
 export type WalkForwardValidationsResponse = { validations: WalkForwardValidation[] };
 
+export type AICopilotStatus = {
+  configured: boolean; message: string; provider?: string | null; model?: string | null;
+  safetyMode: "RESEARCH_DRAFT_ONLY";
+};
+export type AICopilotAction =
+  | "EXPLAIN_STRATEGY" | "EXPLAIN_INDICATOR" | "EXPLAIN_BACKTEST" | "SUGGEST_IMPROVEMENTS"
+  | "SUGGEST_EXPERIMENT" | "EXPLAIN_COMPARISON" | "EXPLAIN_WALK_FORWARD"
+  | "DRAFT_STRATEGY" | "DRAFT_INDICATOR" | "DRAFT_CONFIGURATION";
+export type AICopilotResponse = {
+  requestId: string; label: string; action: AICopilotAction; content: string;
+  provider: string; model: string; usage: Record<string, number>; contextCategories: string[];
+  suggestedDraftType: "STRATEGY" | "INDICATOR" | "CONFIGURATION" | "NOTE";
+};
+export type AIResearchDraft = {
+  draftId: string; requestId: string; draftType: AICopilotResponse["suggestedDraftType"];
+  content: string; status: "DRAFT"; createdAt?: string;
+};
+
 export type EngineStatus = {
   market?: PlatformMarket | string | null;
   status?: string | null;

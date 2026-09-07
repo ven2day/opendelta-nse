@@ -132,6 +132,13 @@ hiding non-terminal variants. Walk-forward training and unseen-test rows are
 kept visually and semantically separate. Equity curves are cumulative sums of
 recorded closed-trade P&L and remain user-selectable with stable colours.
 
+The optional AI Research Copilot sits outside execution and governance. Its
+provider-neutral backend resolves only user-selected immutable records, enforces
+size/timeout/rate limits, and writes metadata-only request audits. Provider
+responses stay ephemeral unless the user explicitly saves the exact response as
+a research draft. Drafts still pass through the existing V2 validation and
+immutable-version workflow; the Copilot cannot approve or deploy them.
+
 ## Runtime flags (all default off / safe)
 
 | Variable | Effect |

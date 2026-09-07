@@ -2,6 +2,7 @@
 
 import { Archive, Beaker, Code2, Copy, RotateCcw, Save } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { AICopilotPanel } from "../ai/ai-copilot-panel";
 import { formatDateTime, marketLabel } from "../platform/format";
 import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
@@ -122,6 +123,8 @@ export function IndicatorStudioWorkspace({ initialMarket }: { initialMarket: Pla
         {validation && <div className={styles.validation} data-valid={validation.valid}>{validation.errors.map((item) => <span key={item}>{item}</span>)}{validation.warnings.map((item) => <span key={item}>{item}</span>)}</div>}
       </div>}
     </Panel>
+
+    <AICopilotPanel surface="indicator" market={market} onUseDraft={(content) => { setSourceCode(content); setValidation(null); setPreview(null); setNotice({ kind: "success", text: "AI draft loaded into the editor. Review it, then run normal V2 validation before saving." }); }} />
 
     <Panel icon={<Archive size={17} />} title="Version history" description="Saved versions never change. Load one to create its next draft, or archive it without deleting history.">
       {sources.loading ? <LoadingState label="Loading indicator versions" /> : sources.error ? <RequestErrorState error={sources.error} retry={sources.reload} /> : !sources.data?.sources.length ? <EmptyState title="No indicators saved" description="Validate the starter template and save version 1.0.0." /> : <div className={styles.history} role="table" aria-label="Indicator versions">

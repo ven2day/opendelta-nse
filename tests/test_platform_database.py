@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import unittest
+import uuid
 from datetime import UTC, date, datetime
 
+from backend.ai.repository import AICopilotRepository
 from backend.backtest.result_writer import DatabaseResultWriter
 from backend.data.database import Database
 from backend.data.repositories import (
@@ -78,6 +81,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "016_research_experiments",
                 "017_parameter_experiments",
                 "018_walk_forward_validations",
+                "019_ai_research_copilot",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -103,6 +107,8 @@ class PlatformDatabaseTests(unittest.TestCase):
             "walk_forward_validations",
             "walk_forward_folds",
             "walk_forward_training_runs",
+            "ai_copilot_requests",
+            "ai_research_drafts",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -391,6 +397,30 @@ class PlatformDatabaseTests(unittest.TestCase):
         self.assertEqual(test_run["runId"], same_test_run["runId"])
         cancelled = repository.request_cancel(created["validationId"])
         self.assertTrue(cancelled["cancelRequested"])
+
+    def test_ai_copilot_audit_omits_responses_and_requires_explicit_exact_draft(self) -> None:
+        repository = AICopilotRepository(self.database)
+        request_id = uuid.uuid4()
+        content = "AI-generated source draft"
+        repository.start_request(
+            request_id=request_id, actor=f"database-test-{request_id}", action="DRAFT_STRATEGY",
+            categories=["STRATEGY_SOURCE"], provider="test-provider", model="test-model",
+            input_bytes=120, rate_limit=10,
+        )
+        repository.finish_request(
+            request_id, status="SUCCEEDED", duration_ms=5, output_bytes=len(content.encode()),
+            output_sha256=hashlib.sha256(content.encode()).hexdigest(), usage={"total_tokens": 4},
+        )
+        request = repository.get_request(request_id)
+        self.assertEqual(request["status"], "SUCCEEDED")
+        self.assertNotIn("content", request)
+        with self.assertRaises(ValueError):
+            repository.create_draft(request_id=request_id, draft_type="STRATEGY", content="modified")
+        draft = repository.create_draft(request_id=request_id, draft_type="STRATEGY", content=content)
+        repeated = repository.create_draft(request_id=request_id, draft_type="STRATEGY", content=content)
+        self.assertEqual(draft["status"], "DRAFT")
+        self.assertEqual(repeated["draftId"], draft["draftId"])
+        self.assertEqual(repository.get_request(request_id)["draftIds"], [draft["draftId"]])
 
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()

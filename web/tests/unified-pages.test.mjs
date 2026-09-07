@@ -469,6 +469,25 @@ test("Research Lab walk-forward validation separates training from unseen tests 
   assert.doesNotMatch(walkForward, /Approve for|Deploy strategy|Enable live|Place order/);
 });
 
+test("AI Research Copilot is explicit, fail-closed, and draft-only in all three studios", async () => {
+  const [copilot, strategies, indicators, research] = await Promise.all([
+    readFile(new URL("../app/ai/ai-copilot-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/settings/settings-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/indicators/indicator-studio-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/research/research-workspace.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(strategies, /<AICopilotPanel surface="strategy"/);
+  assert.match(indicators, /<AICopilotPanel surface="indicator"/);
+  assert.match(research, /<AICopilotPanel surface="research"/);
+  assert.match(copilot, /response\.label/);
+  assert.match(copilot, /Do not send/);
+  assert.match(copilot, /Selected trades · send none by default/);
+  assert.match(copilot, /Save research draft/);
+  assert.match(copilot, /Use in editor/);
+  assert.match(copilot, /disabled=\{!status\.data\?\.configured/);
+  assert.doesNotMatch(copilot, /Approve for|Deploy strategy|Enable live|Place order|API key/);
+});
+
 test("signal filters stay collapsed and reason codes are humanized", async () => {
   const source = await readFile(new URL("../app/signals/signals-workspace.tsx", import.meta.url), "utf8");
   assert.match(source, /<details className="quant-filter-menu">/);

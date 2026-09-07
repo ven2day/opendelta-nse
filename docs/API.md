@@ -139,6 +139,21 @@ Failed symbols remain a separate operational metric. Rejected-trade analytics
 are unavailable because the engine does not yet persist decision-event
 candidates; a strategy emitting no BUY is not counted as a rejection.
 
+## AI Research Copilot
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/ai/copilot/status` | Reports configured/unconfigured, provider/model identifiers, and `RESEARCH_DRAFT_ONLY`; never returns a provider key. |
+| POST | `/v2/ai/copilot/requests` | Executes one allowlisted research action using only explicitly selected server-resolved context. Returns an ephemeral labelled draft and request ID. |
+| POST | `/v2/ai/copilot/drafts` | Explicitly stores the exact reviewed response as `DRAFT`; response-hash and draft-type checks prevent substitution or promotion. |
+| GET | `/v2/ai/copilot/drafts/{id}` | Reads one saved research draft. It is not an immutable strategy/indicator source. |
+
+Allowed actions explain stored strategy/indicator code and results, suggest
+improvements/experiments, or draft strategy, indicator, and configuration text.
+There are no AI actions for approvals, deployments, credentials, paper/live
+activation, or orders. Requests are durably rate-limited and audited without
+storing prompts or provider responses. See [AI Research Copilot safety](ai-copilot.md).
+
 ## Signals
 
 | Method | Path | Notes |

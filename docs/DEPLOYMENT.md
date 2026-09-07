@@ -102,6 +102,11 @@ until these are set on `opendelta-backtest.service`:
 | `NSE_SIGNAL_POLL_SECONDS` / `CRYPTO_SIGNAL_POLL_SECONDS` | poll cadence (120 / 60) |
 | `WALK_FORWARD_QUEUE_LIMIT` | bounded queued/running walk-forward coordinators (default `10`) |
 | `WALK_FORWARD_POLL_SECONDS` | durable child-run polling cadence (default `0.5`) |
+| `AI_PROVIDER` | optional adapter; currently `openai-compatible`; unset fails closed |
+| `AI_PROVIDER_ENDPOINT`, `AI_MODEL` | deployment-controlled completion endpoint and model |
+| `AI_PROVIDER_API_KEY` | provider secret; backend-only and never returned to the browser |
+| `AI_PROVIDER_TIMEOUT_SECONDS` | request timeout, clamped to 1–60 seconds (default `30`) |
+| `AI_COPILOT_REQUESTS_PER_MINUTE` | durable per-actor request limit (default `10`, maximum `60`) |
 
 Suggested order: apply migrations → restart the service → verify
 `GET /v2/dashboard?market=NSE` answers 200 → run a screener and save a universe
@@ -119,6 +124,13 @@ For Phase 8, apply `018_walk_forward_validations` after
 endpoint before promoting the web image. A rollback uses the previous backend
 and web images while retaining the additive tables; do not delete completed
 training or unseen-test child runs.
+
+For Phase 10, apply `019_ai_research_copilot` before configuring a provider.
+Deploy with no `AI_PROVIDER*` variables first and verify the Copilot reports
+`AI provider not configured` while all research screens remain operational.
+Then supply provider settings through deployment secrets and restart. Rollback
+removes the provider variables and restores the prior image; retain the additive
+audit/draft tables.
 
 For the NSE daily swing worker, production must have all of the following:
 

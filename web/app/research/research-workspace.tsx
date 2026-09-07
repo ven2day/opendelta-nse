@@ -5,6 +5,7 @@ import {
   Plus, RefreshCw, RotateCcw, Square, Trash2,
 } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { AICopilotPanel } from "../ai/ai-copilot-panel";
 import {
   formatDateTime, formatInteger, formatMinutes, formatMoney, formatPercent,
   isoDate, marketLabel, shortId, tone,
@@ -424,6 +425,7 @@ export function ResearchWorkspace({ market }: { market: PlatformMarket }) {
 
   return <main className="quant-workspace research-lab">
     <WorkspaceHeader eyebrow={`${marketLabel(market)} research`} title="Research Lab" actions={<button type="button" onClick={experiments.refresh}><RefreshCw size={15} />Refresh</button>} />
+    <AICopilotPanel surface="research" market={market} />
     <Panel icon={<FlaskConical size={17} />} title="New controlled experiment" description="Preview every immutable backtest input before queueing. Research cannot approve or deploy strategies.">
       {strategies.loading || universes.loading || sources.loading || presets.loading ? <LoadingState label="Loading research inputs" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : <div className="quant-panel-body">
         <div className="quant-form-grid research-experiment-grid">

@@ -114,6 +114,8 @@ test("the market switcher keeps the current page and carries the market into nav
 test("research parameter sweeps preview safely and reuse comparison and chart workspaces", async ({ page }) => {
   await page.unroute("**/api/v2/**");
   let previewAttempts = 0;
+  let aiRequest: Record<string, unknown> | null = null;
+  let aiDraft: Record<string, unknown> | null = null;
   const runs = [
     "71111111-1111-4111-8111-111111111111",
     "72222222-2222-4222-8222-222222222222",
@@ -194,6 +196,15 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
       executionSchema: { targetPct: { type: "number", default: null, minimum: 0.00000001, label: "Target %" } },
     } });
     if (path.endsWith("/strategy-studio/sources")) return route.fulfill({ json: { sources: [] } });
+    if (path.endsWith("/ai/copilot/status")) return route.fulfill({ json: { configured: true, message: "AI research provider configured", provider: "test-provider", model: "research-model", safetyMode: "RESEARCH_DRAFT_ONLY" } });
+    if (path.endsWith("/ai/copilot/requests") && request.method() === "POST") {
+      aiRequest = request.postDataJSON();
+      return route.fulfill({ json: { requestId: "76666666-6666-4666-8666-666666666666", label: "AI-generated research draft — review and validate", action: "EXPLAIN_BACKTEST", content: "Research explanation only", provider: "test-provider", model: "research-model", usage: { total_tokens: 12 }, contextCategories: ["BACKTEST_SUMMARY", "SELECTED_TRADES"], suggestedDraftType: "NOTE" } });
+    }
+    if (path.endsWith("/ai/copilot/drafts") && request.method() === "POST") {
+      aiDraft = request.postDataJSON();
+      return route.fulfill({ status: 201, json: { draftId: "77777777-7777-4777-8777-777777777777", requestId: "76666666-6666-4666-8666-666666666666", draftType: "NOTE", content: "Research explanation only", status: "DRAFT" } });
+    }
     if (path.endsWith("/screener/universes")) return route.fulfill({ json: {
       active: { NSE: { universeId: "60000000-0000-4000-8000-000000000001", market: "NSE", name: "Active NSE", symbols: ["INFY", "TCS"], active: true } },
       universes: [],
@@ -253,6 +264,7 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
       }],
     }] } });
     if (path.endsWith("/research/experiments")) return route.fulfill({ json: { experiments: [experiment] } });
+    if (path.endsWith("/backtests")) return route.fulfill({ json: { runs: variants.map((item) => item.run) } });
     const runIndex = runs.findIndex((runId) => path.endsWith(`/backtests/${runId}/trades`));
     if (runIndex >= 0) return route.fulfill({ json: {
       runId: runs[runIndex], total: 2, limit: 5000, offset: 0,
@@ -266,6 +278,16 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/research");
+  const aiPanel = page.getByRole("heading", { name: "AI Research Copilot" }).locator("xpath=ancestor::section[1]");
+  await aiPanel.getByLabel("Backtest summary context").selectOption(runs[0]);
+  await aiPanel.getByText(/Selected trades/).click();
+  await aiPanel.getByRole("checkbox").first().check();
+  await aiPanel.getByRole("button", { name: "Generate research draft" }).click();
+  await expect(aiPanel.getByText("AI-generated research draft — review and validate")).toBeVisible();
+  expect(aiRequest).toMatchObject({ context: { backtestRunId: runs[0], selectedTradeLotIds: ["lot-0-1"] } });
+  await aiPanel.getByRole("button", { name: "Save research draft" }).click();
+  await expect(aiPanel.getByText(/Saved as DRAFT/)).toBeVisible();
+  expect(aiDraft).toMatchObject({ draftType: "NOTE", content: "Research explanation only" });
   const runButton = page.getByRole("button", { name: "Run experiment" });
   await expect(runButton).toBeDisabled();
   await page.getByRole("button", { name: "Grid sweep" }).click();

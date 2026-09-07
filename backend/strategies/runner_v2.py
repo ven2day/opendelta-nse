@@ -119,6 +119,12 @@ def evaluate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # comparisons of NSE session times against UTC.
     timezone = "Asia/Kolkata" if str(payload["market"]).upper() == "NSE" else "UTC"
     frame["timestamp"] = frame.index.tz_convert(timezone)
+    # Strategy Studio presents candles as an append-only row table. Keep the
+    # row labels positional so common lookbacks such as close[20] address the
+    # 21st completed candle instead of looking for an integer label inside a
+    # DatetimeIndex. The canonical timestamp remains available in the explicit
+    # timestamp column above.
+    frame.reset_index(drop=True, inplace=True)
     params = dict(payload.get("params") or {})
     namespace: dict[str, Any] = {"__builtins__": SAFE_BUILTINS, "pd": pd, "np": np, "math": math}
     exec(compile(source, "strategy_v2.py", "exec"), namespace, namespace)  # noqa: S102 - isolated worker purpose

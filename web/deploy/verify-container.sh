@@ -40,6 +40,11 @@ echo "verified unified pages HTML"
 
 v2_anonymous="$(curl -sS -o /dev/null -w '%{http_code}' "${base_url}/api/v2/dashboard?market=NSE")"
 [[ "${v2_anonymous}" == "401" ]]
+mcp_anonymous="$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  "${base_url}/api/mcp")"
+[[ "${mcp_anonymous}" == "401" ]]
 curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/dashboard?market=NSE" > "${dashboard_html}"
 jq -e '.market == "NSE" and .paperOnly == true and .liveOrdersEnabled == false and (.marketData | type == "object")' "${dashboard_html}" >/dev/null
 curl -fsS -b "${cookie_jar}" "${base_url}/api/v2/dashboard?market=CRYPTO" > "${dashboard_html}"

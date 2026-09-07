@@ -171,6 +171,16 @@ promotion. `MONITORING_WEBHOOK_URL` is optional and must be HTTPS. Roll back the
 application image without dropping worker lease, alert, notification, or audit
 history tables.
 
+For Phase 14, apply `023_agent_mcp_access` before deploying the agent routes.
+Keep token administration behind the existing authenticated proxy, leave
+`MCP_ALLOWED_ORIGINS` blank unless a known browser client is required, and test
+that anonymous `/api/mcp` requests return 401. Create the first least-privilege
+token through the authenticated application, capture it once into a secret
+manager, and verify tool discovery before granting submit scopes. Roll back the
+application image without dropping hashed tokens, rate-limit windows, tool
+request records, or operational audit history; revoke any issued tokens if the
+endpoint must be disabled immediately.
+
 For the NSE daily swing worker, production must have all of the following:
 
 ```dotenv

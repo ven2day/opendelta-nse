@@ -208,6 +208,18 @@ failure. See [live execution safety](live-execution.md).
 
 Lease owner tokens, credentials, request bodies, and provider secrets are never returned.
 
+## Agent and MCP access
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/agent/tokens` | Administrator-only secret-free token metadata and available scopes. |
+| POST | `/v2/agent/tokens` | Administrator-only token creation; the raw token is shown once. |
+| DELETE | `/v2/agent/tokens/{tokenId}` | Administrator-only, idempotent revocation. |
+| POST | `/mcp` | Bearer-authenticated, scoped, rate-limited Streamable HTTP JSON-RPC endpoint. |
+| GET | `/mcp` | Returns 405 because this server does not use SSE or server-initiated messages. |
+
+The public frontend maps `/api/mcp` to backend `/mcp` and forwards only the Bearer credential and bounded JSON body. See [Agent and MCP access](agent-mcp.md) for scopes, tools, stable errors, and Codex configuration.
+
 ## Signals
 
 | Method | Path | Notes |

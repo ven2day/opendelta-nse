@@ -112,6 +112,13 @@ def evaluate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("candles are missing required columns")
     frame.index = pd.to_datetime(frame.pop("timestamp"), utc=True)
     frame = frame[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="raise")
+    # User strategies need the completed candle timestamp for intraday rules.
+    # Keep it as an explicit, timezone-aware column as well as the frame index;
+    # NSE strategies receive exchange-local IST and Crypto remains UTC. This
+    # avoids requiring the forbidden datetime import and prevents accidental
+    # comparisons of NSE session times against UTC.
+    timezone = "Asia/Kolkata" if str(payload["market"]).upper() == "NSE" else "UTC"
+    frame["timestamp"] = frame.index.tz_convert(timezone)
     params = dict(payload.get("params") or {})
     namespace: dict[str, Any] = {"__builtins__": SAFE_BUILTINS, "pd": pd, "np": np, "math": math}
     exec(compile(source, "strategy_v2.py", "exec"), namespace, namespace)  # noqa: S102 - isolated worker purpose

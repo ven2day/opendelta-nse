@@ -45,6 +45,24 @@ class StrategyV2RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unsupported strategy decision"):
             evaluate_isolated(self.payload(source), timeout_seconds=10)
 
+    def test_nse_strategy_receives_completed_candle_timestamp_in_ist(self) -> None:
+        source = starter_source().replace(
+            'return "HOLD"',
+            'stamp = data.candles["timestamp"].iloc[-1]\n'
+            '    return {"decision": "BUY", "reasons": ["IST_SESSION"]} if stamp.hour == 9 and stamp.minute == 20 else "HOLD"',
+        )
+        payload = self.payload(source)
+        payload["market"] = "NSE"
+        payload["symbol"] = "ADANIENT"
+        payload["candles"]["timestamp"] = [
+            "2026-09-07T03:40:00Z", "2026-09-07T03:45:00Z", "2026-09-07T03:50:00Z",
+        ]
+
+        rows = evaluate_isolated(payload, timeout_seconds=10)["rows"]
+
+        self.assertEqual([row["decision"] for row in rows], ["NONE", "NONE", "BUY"])
+        self.assertEqual(rows[-1]["reasons"], ["IST_SESSION"])
+
     def test_adapter_exposes_the_live_signal_decision_contract(self) -> None:
         source_code = starter_source().replace(
             'return "HOLD"',

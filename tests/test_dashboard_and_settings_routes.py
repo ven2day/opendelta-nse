@@ -56,8 +56,11 @@ class FakeDeployments:
         row = self.rows.get((market, strategy_id))
         return dict(row) if row else None
 
-    def save(self, *, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode, signal_source="OPENDELTA"):
-        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "configId": config_id, "universeId": universe_id, "timeframe": timeframe, "mode": mode, "signalSource": signal_source, "source": "DATABASE"}
+    def list(self, market=None):
+        return [dict(row) for (row_market, _), row in self.rows.items() if market is None or row_market == market]
+
+    def save(self, *, market, strategy_id, strategy_version, config_id, universe_id, timeframe, mode, signal_source="OPENDELTA", strategy_source_id=None):
+        row = {"deploymentId": str(uuid.uuid4()), "market": market, "strategyId": strategy_id, "strategyVersion": strategy_version, "strategySourceId": strategy_source_id, "configId": config_id, "universeId": universe_id, "timeframe": timeframe, "mode": mode, "signalSource": signal_source, "source": "DATABASE"}
         self.rows[(market, strategy_id)] = row
         return dict(row)
 
@@ -187,6 +190,20 @@ class SettingsRouteTests(unittest.TestCase):
             self.api["POST /v2/strategies/{strategy_id}/deployment"]("ema_vwap_strong_buy", StrategyDeploymentRequest(market="CRYPTO", timeframe="1d", mode="SIGNALS"))
         self.assertEqual(timeframe.exception.status_code, 422)
 
+    def test_deployment_list_includes_approved_strategy_studio_sources(self) -> None:
+        self.deployments.save(
+            market="NSE", strategy_id="opening_range_retest_scalper", strategy_version="1.0.2",
+            strategy_source_id=str(uuid.uuid4()), config_id=str(uuid.uuid4()),
+            universe_id="nse-watchlist", timeframe="5m", mode="PAPER",
+        )
+
+        listed = self.api["GET /v2/strategy-deployments"](market="NSE")
+
+        custom = next(row for row in listed["deployments"] if row["strategyId"] == "opening_range_retest_scalper")
+        self.assertEqual(custom["strategyVersion"], "1.0.2")
+        self.assertEqual(custom["mode"], "PAPER")
+        self.assertIsNotNone(custom["strategySourceId"])
+
 
 class DashboardRouteTests(unittest.TestCase):
     def test_dashboard_aggregates_every_section_and_degrades_per_section(self) -> None:
@@ -196,21 +213,21 @@ class DashboardRouteTests(unittest.TestCase):
             overview_markets.append(market)
             return {"dataFreshness": {"status": "FRESH"}}
 
-        def broken(market: str):
+        def broken(_market: str):
             raise DatabaseUnavailable("no database")
 
         api = endpoints(
             create_dashboard_router(
                 overview=overview,
                 screener_runs=lambda market: [{"runId": "r1", "market": market, "status": "COMPLETE"}],
-                backtest_runs=lambda market: [],
-                engine_health=lambda market: {
+                backtest_runs=lambda _market: [],
+                engine_health=lambda _market: {
                     "stored": [],
                     "workers": [{"status": "READY", "strategyId": "rsi_dip_ladder_v1", "timeframe": "1d"}],
                 },
                 paper_summary=broken,
-                paper_positions=lambda market: [],
-                active_universe=lambda market: {"name": "Liquid", "symbols": ["TCS"]},
+                paper_positions=lambda _market: [],
+                active_universe=lambda _market: {"name": "Liquid", "symbols": ["TCS"]},
             )
         )
         payload = api["GET /v2/dashboard"](market="crypto")

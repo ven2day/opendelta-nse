@@ -1,6 +1,6 @@
 "use client";
 
-import { Beaker, Braces, Code2, Copy, Plus, RotateCcw, Save, Settings2 } from "lucide-react";
+import { Beaker, Braces, Code2, Copy, Pencil, Plus, RotateCcw, Save, Settings2 } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { AICopilotPanel } from "../ai/ai-copilot-panel";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
@@ -39,6 +39,14 @@ function parseSettingsDocument(text: string, strategySchema: ConfigSchema, riskS
   validateConfigValues(strategy, strategySchema, "strategy");
   validateConfigValues(paperExecution, riskSchema, "paperExecution");
   return { strategy, paperExecution };
+}
+
+function incrementPatchVersion(source: string): string {
+  return source.replace(
+    /(\[?['"]version['"]\]?\s*:\s*['"])(\d+)\.(\d+)\.(\d+)(['"])/,
+    (_match, prefix: string, major: string, minor: string, patch: string, suffix: string) =>
+      `${prefix}${major}.${minor}.${Number(patch) + 1}${suffix}`,
+  );
 }
 
 export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMarket }) {
@@ -98,6 +106,26 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
 
   const currentSource = strategySource || sourceTemplate.data?.sourceCode || "";
   const sourceIsTemplate = currentSource === (sourceTemplate.data?.sourceCode ?? "");
+
+  const editStrategySource = async (source: StrategySource) => {
+    if (!source.sourceId || sourceBusy !== null) return;
+    if (currentSource && !sourceIsTemplate && !window.confirm("Replace the current unsaved draft with a new version of this saved source?")) return;
+    setSourceBusy("validate");
+    setSourceNotice(null);
+    try {
+      const saved = await v2Get<StrategySource>(`strategy-studio/sources/${source.sourceId}`);
+      const nextSource = incrementPatchVersion(saved.sourceCode ?? "");
+      if (!nextSource) throw new Error("The saved source code is unavailable.");
+      setStrategySource(nextSource);
+      setSourceValidation(null);
+      setSourceNotice({ kind: "success", text: `${saved.name} v${saved.strategyVersion} loaded as a new draft. Review the automatically incremented version, then validate and save it.` });
+      document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Strategy Python source"]')?.focus();
+    } catch (reason) {
+      setSourceNotice({ kind: "error", text: errorMessage(reason, "The saved strategy source could not be opened") });
+    } finally {
+      setSourceBusy(null);
+    }
+  };
 
   const resetStrategySource = () => {
     if (!sourceIsTemplate && !window.confirm("Discard the current unsaved strategy draft and restore the starter template?")) return;
@@ -249,7 +277,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
         </>}
         {sourceNotice && <Message kind={sourceNotice.kind}>{sourceNotice.text}</Message>}
         {sourceValidation && (sourceValidation.errors.length > 0 || sourceValidation.warnings.length > 0) && <div className={styles.validationList}>{sourceValidation.errors.map((item) => <span key={item} className={styles.validationError}>{item}</span>)}{sourceValidation.warnings.map((item) => <span key={item}>{item}</span>)}</div>}
-        <div className={styles.sourceHistory}><strong>Saved sources</strong>{strategySources.loading ? <small>Loading…</small> : strategySources.error ? <small>Unavailable until migration 012 is applied</small> : strategySources.data?.sources.length ? strategySources.data.sources.map((item) => <div key={item.sourceId} className={styles.sourceRow}><span><strong>{item.name}</strong><small>{item.strategyId}</small></span><code>v{item.strategyVersion}</code><span>{item.manifest.supportedMarkets.join(" + ")}</span><StatusBadge tone="good">Validated</StatusBadge></div>) : <small>No source versions saved for {marketLabel(market)}.</small>}</div>
+        <div className={styles.sourceHistory}><strong>Saved sources</strong>{strategySources.loading ? <small>Loading…</small> : strategySources.error ? <small>Unavailable until migration 012 is applied</small> : strategySources.data?.sources.length ? strategySources.data.sources.map((item) => <div key={item.sourceId} className={styles.sourceRow}><span><strong>{item.name}</strong><small>{item.strategyId}</small></span><code>v{item.strategyVersion}</code><span>{item.manifest.supportedMarkets.join(" + ")}</span><StatusBadge tone="good">Validated</StatusBadge><button type="button" disabled={sourceBusy !== null} onClick={() => void editStrategySource(item)}><Pencil size={14} />Edit as new version</button></div>) : <small>No source versions saved for {marketLabel(market)}.</small>}</div>
       </div>
     </details>
 
@@ -267,6 +295,14 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
               return <div key={item.strategyId} role="row" className={`${styles.strategyRow} ${selected ? styles.selectedRow : ""}`}>
                 <button type="button" className={styles.strategySelect} aria-current={selected ? "true" : undefined} onClick={() => { setStrategyChoice(item.strategyId); setNotice(null); }}><strong>{item.name}</strong><small>v{item.version}</small></button>
                 <span>{row?.signalSource === "TRADINGVIEW" ? "TradingView" : "OpenDelta"}</span><span>{row?.timeframe ?? "—"}</span><span>{watchlist?.name ?? "Active market"}</span><span><StatusBadge tone={row?.mode === "PAPER" ? "good" : row?.mode === "SIGNALS" ? "neutral" : "warn"}>{row?.mode ?? "OFF"}</StatusBadge></span><span>{row?.configId ? "Configured" : row?.mode === "OFF" ? "Stopped" : "Needs config"}</span>
+              </div>;
+            })}
+            {(strategySources.data?.sources ?? []).filter((source) => !marketStrategies.some((item) => item.strategyId === source.strategyId)).map((source) => {
+              const row = deployments.data?.deployments.find((candidate) => candidate.strategySourceId === source.sourceId);
+              const watchlist = universes.data?.universes.find((candidate) => candidate.universeId === row?.universeId);
+              return <div key={source.sourceId} role="row" className={styles.strategyRow}>
+                <button type="button" className={styles.strategySelect} onClick={() => void editStrategySource(source)}><strong>{source.name}</strong><small>v{source.strategyVersion} · Edit as new</small></button>
+                <span>Strategy Studio</span><span>{row?.timeframe ?? source.manifest.supportedTimeframes.join(", ")}</span><span>{watchlist?.name ?? (row ? "Active market" : "—")}</span><span><StatusBadge tone={row?.mode === "PAPER" ? "good" : row?.mode === "SIGNALS" ? "neutral" : "warn"}>{row?.mode ?? "DRAFT"}</StatusBadge></span><span>{row ? "Backtest approved" : "Backtest required"}</span>
               </div>;
             })}
           </div>

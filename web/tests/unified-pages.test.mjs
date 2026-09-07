@@ -356,6 +356,9 @@ test("Strategy Studio is collapsed and promotion remains backtest-gated", async 
   assert.match(source, /Backtest-gated/);
   assert.match(source, /sourceValidation\?\.valid !== true/);
   assert.match(source, /Discard the current unsaved strategy draft/);
+  assert.match(source, /Edit as new version/);
+  assert.match(source, /incrementPatchVersion/);
+  assert.match(source, /Backtest required/);
   assert.match(source, /quant-editor-actions/);
   assert.match(schema, /Array\.isArray\(value\).*integer_array/);
   assert.doesNotMatch(source, /styles\.studio\}`\} open/);

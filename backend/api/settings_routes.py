@@ -242,11 +242,25 @@ def create_settings_router(
     def list_deployments(market: str = Query(...)) -> dict[str, Any]:
         key = _market(market)
         rows = []
+        registered_ids: set[str] = set()
         for strategy in registry.list(key):
+            registered_ids.add(strategy.strategy_id)
             if deployment_status is not None:
                 rows.append(deployment_status(key, strategy.strategy_id))
             else:
                 rows.append(_deployments().get(key, strategy.strategy_id) or _default_deployment(strategy, key))
+        # Strategy Studio deployments are created only by the backtest approval
+        # route, so they are deliberately absent from the built-in registry.
+        # Include them here so operators can still see the exact immutable
+        # source version currently approved for Signals or Paper.
+        for saved in _deployments().list(key):
+            if saved["strategyId"] in registered_ids:
+                continue
+            rows.append(
+                deployment_status(key, saved["strategyId"])
+                if deployment_status is not None
+                else saved
+            )
         return {"deployments": rows}
 
     @router.post("/strategies/{strategy_id}/deployment")

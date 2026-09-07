@@ -65,12 +65,12 @@ Validation-branch results on Windows/Python 3.12/Node 22:
 
 | Command | Result |
 | --- | --- |
-| `PYTHONPATH=. pytest -q` | 369 passed, 28 skipped in 19.02s |
-| `PYTHONPATH=. python -m scripts.validate_v2_cutover` | PASS, eight checks; no credentials/mutations |
+| `PYTHONPATH=. pytest -q` | 367 passed, 28 skipped in 19.04s |
+| `PYTHONPATH=. python -m scripts.validate_v2_cutover` | PASS, nine checks; no credentials/mutations |
 | `ruff check` on changed Python files | passed |
-| `ruff check .` | 216 pre-existing findings outside this change; no new finding |
+| `ruff check .` | 214 pre-existing findings outside this change; no new finding |
 | `python scripts/security_scan.py` | passed |
-| Git Bash `bash -n web/deploy/*.sh` | passed |
+| Git Bash `bash -n` across 20 deployment shell scripts | passed |
 | `npm ci` | completed; audit reported development dependency findings |
 | `npm run lint` | passed |
 | `npx tsc --noEmit` | passed |

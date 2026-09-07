@@ -134,6 +134,17 @@ if [[ "${backtest_healthy}" != true ]]; then
 fi
 log "backtest healthy"
 
+# Install the current collector units on every release. The timers may already
+# exist on older hosts, but refreshing them here prevents a new collector image
+# from being built without the corresponding service definition being active.
+"${REPO_DIR}/web/deploy/install-data-service.sh"
+"${REPO_DIR}/web/deploy/install-market-data-worker.sh"
+
+# The browser depends on both endpoints. Fail the deployment before dashboard
+# promotion if either the market overview or Operations aggregation regresses.
+curl -fsS "http://127.0.0.1:3200/platform/overview?market=NSE" >/dev/null
+curl -fsS "http://127.0.0.1:3200/v2/operations/health" >/dev/null
+
 log "cutting over dashboard (candidate -> verify -> promote)"
 docker rm -f opendelta-candidate >/dev/null 2>&1 || true
 

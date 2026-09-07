@@ -117,7 +117,7 @@ def _routes() -> str:
 
 
 def _v2_defaults() -> str:
-    assert DEFAULT_CANDLE_READ_MODE == "timescale"
+    assert DEFAULT_CANDLE_READ_MODE == "timescale-fallback"
     return "TimescaleDB is canonical and durable deployments are the signal/paper source of truth"
 
 

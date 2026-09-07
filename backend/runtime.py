@@ -36,7 +36,7 @@ _oi_repository: OiRegimeRepository | None = None
 _market_data_refresh_service: MarketDataRefreshService | None = None
 _platform_runtime_instance: PlatformRuntime | None = None
 _platform_runtime_lock = threading.Lock()
-DEFAULT_CANDLE_READ_MODE = "timescale"
+DEFAULT_CANDLE_READ_MODE = "timescale-fallback"
 
 
 def get_canonical_market_data_writer() -> TimescaleDualWriter:

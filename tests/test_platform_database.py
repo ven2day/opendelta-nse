@@ -675,7 +675,7 @@ class PlatformDatabaseTests(unittest.TestCase):
             True, True, True, False, True, "LIVE", "AVAILABLE", "Connection test succeeded"
         )
         tested = repository.record_test(connection_id, report=report, actor="database-test")
-        self.assertEqual(tested["status"], "CONNECTED")
+        self.assertEqual(tested["status"], "WITHDRAWAL_PERMISSION")
         rotated = cipher.rotate(str(connection_id), stored)
         repository.update_encryption(connection_id, encrypted=rotated, actor="database-test")
         self.assertEqual(cipher.decrypt(str(connection_id), repository.encrypted(connection_id)[1]), private)
@@ -684,7 +684,7 @@ class PlatformDatabaseTests(unittest.TestCase):
             "SELECT action FROM exchange_connection_events WHERE connection_id = %s ORDER BY event_id",
             (connection_id,),
         )
-        self.assertEqual([event["action"] for event in events], ["ADDED", "TEST_SUCCEEDED", "ROTATED", "DELETED"])
+        self.assertEqual([event["action"] for event in events], ["ADDED", "TEST_FAILED", "ROTATED", "DELETED"])
 
     def test_cancel_request_is_durable_and_stale_runs_are_interrupted_on_recovery(self) -> None:
         record = self._run()

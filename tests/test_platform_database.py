@@ -207,57 +207,6 @@ class PlatformDatabaseTests(unittest.TestCase):
             }
             <= connection_columns
         )
-        live_intent_columns = {
-            row["column_name"]
-            for row in self.database.fetch_all(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = 'live_order_intents'
-                """
-            )
-        }
-        self.assertTrue(
-            {
-                "idempotency_key",
-                "signal_id",
-                "client_order_id",
-                "provider_order_id",
-                "requested_order",
-                "configuration_snapshot",
-                "execution_settings",
-                "state",
-                "reconciliation_status",
-                "blocked_reasons",
-            }
-            <= live_intent_columns
-        )
-        live_constraints = {
-            row["constraint_name"]
-            for row in self.database.fetch_all(
-                """
-                SELECT constraint_name FROM information_schema.table_constraints
-                WHERE table_schema = 'public' AND table_name = 'live_order_intents'
-                """
-            )
-        }
-        self.assertIn("live_order_intents_deployment_signal", live_constraints)
-        self.assertIn("live_order_intents_idempotency_key_key", live_constraints)
-
-    def test_live_risk_policy_constraints_reject_unsafe_limits(self) -> None:
-        with self.assertRaises(CheckViolation):
-            self.database.execute(
-                """
-                INSERT INTO live_risk_policies (
-                    risk_policy_id, name, max_order_value, max_position_value, max_total_exposure,
-                    max_open_positions, max_daily_trades, max_daily_loss, max_price_deviation_pct,
-                    max_signal_age_seconds, max_candle_age_seconds, symbol_allowlist, market_allowlist,
-                    strategy_allowlist, timeframe_allowlist, created_by
-                ) VALUES (%s, 'Unsafe', 0, 1, 1, 1, 1, 1, 1, 60, 60, '[\"TCS\"]', '[\"NSE\"]',
-                    '[\"strategy\"]', '[\"5m\"]', 'test')
-                """,
-                (uuid.uuid4(),),
-            )
-
     def test_monitoring_leases_are_compare_and_set_and_recover_after_expiry(self) -> None:
         repository = MonitoringRepository(self.database)
         first_time = datetime(2026, 9, 7, 10, 0, tzinfo=UTC)

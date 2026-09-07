@@ -61,7 +61,7 @@ test("route-aware shell has no duplicate navigation or viewport overflow", async
       expect(await page.locator(".platform-topnav a").evaluateAll((links) => links.map((link) => link.getAttribute("aria-label")))).toEqual(["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Operations", "Strategies"]);
       await expect(page.locator(".platform-safety-chip")).toHaveCount(0);
       if (viewport.width === 1440) {
-        await expect(page.getByText("Unified platform database not configured").first()).toBeVisible({ timeout: 15_000 });
+        await expect(page.getByText("Platform database not configured").first()).toBeVisible({ timeout: 15_000 });
       }
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       expect(overflow, `${route} at ${viewport.width}px`).toBeLessThanOrEqual(1);

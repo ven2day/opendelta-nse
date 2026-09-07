@@ -109,6 +109,19 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
         except DatabaseUnavailable as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
+    def _stored_run_date(value: Any, field: str) -> date:
+        """Normalize repository/API run dates before constructing chart bounds."""
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if isinstance(value, str):
+            try:
+                return date.fromisoformat(value)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=f"Backtest {field} is invalid") from error
+        raise HTTPException(status_code=422, detail=f"Backtest {field} is unavailable")
+
     @router.post("", status_code=202)
     def create_backtest(request: BacktestCreateRequest) -> dict[str, Any]:
         if request.market not in MARKETS:
@@ -391,8 +404,10 @@ def create_backtest_router(services: BacktestServices) -> APIRouter:
             raise HTTPException(status_code=422, detail="Symbol was not part of this backtest")
         spec = market_spec(run["market"])
         timezone = ZoneInfo(spec.timezone)
-        start = datetime.combine(run["startDate"], time.min, tzinfo=timezone)
-        end = datetime.combine(run["endDate"] + timedelta(days=1), time.min, tzinfo=timezone)
+        start_date = _stored_run_date(run.get("startDate"), "start date")
+        end_date = _stored_run_date(run.get("endDate"), "end date")
+        start = datetime.combine(start_date, time.min, tzinfo=timezone)
+        end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone)
         try:
             frame = services.candle_source(run["market"]).candles(
                 symbol_key, run["timeframe"], start, end, warmup_bars=0,

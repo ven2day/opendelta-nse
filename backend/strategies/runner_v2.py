@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # Windows test/development hosts do not provide POS
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 90
+DEFAULT_STRATEGY_WINDOW_BARS = 512
 
 
 def _safe_import(name: str, globals_: Any = None, locals_: Any = None, fromlist: Any = (), level: int = 0) -> Any:
@@ -60,7 +61,7 @@ class _StrategyCandleFrame(pd.DataFrame):
     def __getitem__(self, key: Any) -> Any:
         result = super().__getitem__(key)
         if isinstance(key, str) and key != "timestamp" and isinstance(result, pd.Series):
-            return result.reset_index(drop=True)
+            return pd.Series(result.array, index=pd.RangeIndex(len(result)), name=result.name, copy=False)
         return result
 
 
@@ -148,12 +149,14 @@ def evaluate_strategy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     )
     initialize(context)
     warmup = max(1, int((validation.manifest or {}).get("requiredHistory", 1)))
+    window_bars = max(DEFAULT_STRATEGY_WINDOW_BARS, warmup + 1)
     rows: list[dict[str, Any]] = []
     for position in range(len(frame)):
         if position + 1 < warmup:
             rows.append(_normalise_decision(None, float(frame.iloc[position]["close"]), params))
             continue
-        data = SimpleNamespace(candles=frame.iloc[: position + 1], current=frame.iloc[position])
+        window_start = max(0, position + 1 - window_bars)
+        data = SimpleNamespace(candles=frame.iloc[window_start : position + 1], current=frame.iloc[position])
         try:
             decision = handle_data(context, data)
         except KeyError as error:
@@ -250,7 +253,14 @@ def evaluate_isolated(payload: dict[str, Any], *, timeout_seconds: int = DEFAULT
         process.kill()
         process.join(timeout=2)
         raise TimeoutError(f"Strategy exceeded the {timeout_seconds}s execution limit")
-    message = parent.recv()
+    try:
+        message = parent.recv()
+    except EOFError as error:
+        process.join(timeout=2)
+        raise RuntimeError(
+            f"Strategy worker exited unexpectedly (exit code {process.exitcode}); "
+            "the strategy likely exceeded an isolated resource limit"
+        ) from error
     process.join(timeout=2)
     if not message.get("ok"):
         raise RuntimeError(message.get("error", "Strategy worker failed"))

@@ -1,7 +1,7 @@
 # OpenDelta V2 roadmap implementation matrix
 
-Assessment date: 2026-09-07. Baseline: `origin/main` at `35e144a`; current
-validation stack through Phase 14 at `67e4cca`.
+Assessment date: 2026-09-07. Baseline: `origin/main` at `35e144a`; ordered
+delivery stack: PRs #92 through #101.
 
 This matrix is based on the checked-out repository, migrations, route graph,
 tests and GitHub pull-request state. It deliberately does not treat an earlier
@@ -31,9 +31,9 @@ summary as evidence.
 | 12 — Live execution foundation | Complete on review stack | migration 021, common adapter contract, order intents/state machine, risk gates, stops and reconciliation; real mutation defaults off; PR #96 |
 | 13 — Production monitoring | Complete on review stack | migration 022, leases, append-only audit, deduplicated alerts, notifications and Operations UI; PR #97 |
 | 14 — Agent/MCP access | Complete on review stack | migration 023, hashed scoped tokens, 19 strict research tools and audit/rate limits; PR #98 |
-| Full V2 validation | Complete in this change | executable structural/policy contract, lifecycle evidence report and fail-closed unknown-market fix |
-| V2 default cutover | Complete on review stack | strict Timescale default, durable deployment source of truth, updated release/rollback guidance and preserved safe redirects |
-| Obsolete V1 removal | Complete on review stack | removed only dead environment activation and duplicate scanner startup; historical tables and `UNCERTAIN` items remain |
+| Full V2 validation | Complete on review stack | executable structural/policy contract, lifecycle evidence report and fail-closed unknown-market fix; PR #99 |
+| V2 default cutover | Complete on review stack | strict Timescale default, durable deployment source of truth, updated release/rollback guidance and preserved safe redirects; PR #100 |
+| Obsolete V1 removal | Complete on review stack | removed only dead environment activation and duplicate scanner startup; historical tables and `UNCERTAIN` items remain; PR #101 |
 
 ## QuantDinger functional comparison
 

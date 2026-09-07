@@ -70,7 +70,7 @@ Validation-branch results on Windows/Python 3.12/Node 22:
 | `ruff check` on changed Python files | passed |
 | `ruff check .` | 214 pre-existing findings outside this change; no new finding |
 | `python scripts/security_scan.py` | passed |
-| Git Bash `bash -n web/deploy/*.sh` | passed |
+| Git Bash `bash -n` across 20 deployment shell scripts | passed |
 | `npm ci` | completed; audit reported development dependency findings |
 | `npm run lint` | passed |
 | `npx tsc --noEmit` | passed |

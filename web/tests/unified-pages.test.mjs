@@ -95,7 +95,8 @@ test("every unified route requires login and renders one topbar market selector"
   const settings = await fetchFromWorker(worker, "/settings", { headers: { accept: "text/html", cookie } });
   const settingsHtml = await settings.text();
   assert.match(settingsHtml, /Strategy control/);
-  assert.match(settingsHtml, /Connections and safety/);
+  assert.match(settingsHtml, /Secure exchange connections/);
+  assert.match(settingsHtml, /Live trading disabled/);
   assert.doesNotMatch(settingsHtml, /Global minimum price|Global maximum price/);
   assert.doesNotMatch(settingsHtml, /\/legacy\//, "settings no longer links to retired pages");
 

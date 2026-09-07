@@ -369,6 +369,55 @@
 .quant-toolbar button.primary:hover,
 .research-actions button.primary:hover { background: var(--od-accent-hover); }
 
+/* Editor action bars use an explicit hierarchy instead of inheriting bare
+ * browser-button styles through CSS-module class names. */
+.quant-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.quant-editor-actions button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--od-border-strong);
+  border-radius: 7px;
+  padding: 8px 13px;
+  color: var(--od-text);
+  background: var(--od-surface-raised);
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.quant-editor-actions button:hover:not(:disabled) {
+  border-color: var(--od-accent);
+  background: var(--od-surface-hover);
+}
+
+.quant-editor-actions button.primary {
+  border-color: var(--od-accent);
+  color: var(--od-accent-contrast);
+  background: var(--od-accent);
+}
+
+.quant-editor-actions button.primary:hover:not(:disabled) {
+  background: var(--od-accent-hover);
+}
+
+.quant-editor-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
 .quant-form-actions button.danger,
 .quant-table button.danger,
 .quant-modal-actions button.danger {

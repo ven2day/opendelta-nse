@@ -43,11 +43,21 @@ export function IndicatorStudioWorkspace({ initialMarket }: { initialMarket: Pla
   const loadSources = useCallback(() => v2Get<IndicatorSourcesResponse>("indicator-studio/sources"), []);
   const sources = useV2Resource(loadSources);
   const currentSource = sourceCode || template.data?.sourceCode || "";
+  const sourceIsTemplate = currentSource === (template.data?.sourceCode ?? "");
   const selected = sources.data?.sources.find((item) => item.sourceId === selectedId) ?? null;
   const previewRows = useMemo(() => {
     if (!preview) return [];
     return preview.rows.map((values, index) => ({ values, index })).slice(-40).reverse();
   }, [preview]);
+
+  const restoreTemplate = () => {
+    if (!sourceIsTemplate && !window.confirm("Discard the current unsaved indicator draft and restore the starter template?")) return;
+    setSourceCode(template.data?.sourceCode ?? "");
+    setValidation(null);
+    setSelectedId(null);
+    setPreview(null);
+    setNotice({ kind: "success", text: "Starter template restored. No saved indicator version was changed." });
+  };
 
   const editSource = async (item: IndicatorSource) => {
     setBusy("load"); setNotice(null); setPreview(null);
@@ -114,11 +124,11 @@ export function IndicatorStudioWorkspace({ initialMarket }: { initialMarket: Pla
     <Panel icon={<Code2 size={17} />} title="Python indicator editor" description="Validate and save a new immutable indicator version. Saving does not attach it to a strategy.">
       {template.loading ? <LoadingState label="Loading indicator template" /> : template.error ? <RequestErrorState error={template.error} retry={template.reload} /> : <div className="quant-panel-body">
         <textarea className={styles.editor} aria-label="Indicator Python source" spellCheck={false} value={currentSource} disabled={busy !== null} onChange={(event) => { setSourceCode(event.target.value); setValidation(null); setNotice(null); }} />
-        <div className={styles.actions}>
+        <div className={`${styles.actions} quant-editor-actions`}>
           <button type="button" onClick={() => navigator.clipboard.writeText(currentSource)}><Copy size={15} />Copy</button>
-          <button type="button" disabled={busy !== null} onClick={() => { setSourceCode(template.data?.sourceCode ?? ""); setValidation(null); setSelectedId(null); setPreview(null); }}><RotateCcw size={15} />New template</button>
-          <button type="button" disabled={busy !== null || !currentSource.trim()} onClick={() => void validate()}><Beaker size={15} />{busy === "validate" ? "Validating…" : "Validate"}</button>
-          <button type="button" className="primary" disabled={busy !== null || !currentSource.trim() || validation?.valid === false} onClick={() => void save()}><Save size={15} />{busy === "save" ? "Saving…" : "Save new version"}</button>
+          <button type="button" disabled={busy !== null || sourceIsTemplate} onClick={restoreTemplate}><RotateCcw size={15} />Restore template</button>
+          <button type="button" disabled={busy !== null || !currentSource.trim()} onClick={() => void validate()}><Beaker size={15} />{busy === "validate" ? "Validating…" : "Validate draft"}</button>
+          <button type="button" className="primary" disabled={busy !== null || !currentSource.trim() || validation?.valid !== true} title={validation?.valid === true ? "Save this validated source as an immutable version" : "Validate this draft successfully before saving"} onClick={() => void save()}><Save size={15} />{busy === "save" ? "Saving…" : "Save new version"}</button>
         </div>
         {validation && <div className={styles.validation} data-valid={validation.valid}>{validation.errors.map((item) => <span key={item}>{item}</span>)}{validation.warnings.map((item) => <span key={item}>{item}</span>)}</div>}
       </div>}

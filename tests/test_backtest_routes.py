@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import date
 from typing import Any
 
+import pandas as pd
 from backend.api.backtest_routes import (
     BacktestApprovalRequest,
     BacktestCreateRequest,
@@ -94,6 +95,22 @@ class FakeRunner:
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         return self.runs.request_cancel(run_id)
+
+
+class FakeCandleSource:
+    def candles(self, symbol, timeframe, start, end, *, warmup_bars):
+        del symbol, timeframe, end, warmup_bars
+        index = pd.DatetimeIndex([
+            start + pd.Timedelta(minutes=5),
+            start + pd.Timedelta(minutes=10),
+        ])
+        return pd.DataFrame({
+            "Open": [100.0, 101.0],
+            "High": [102.0, 103.0],
+            "Low": [99.0, 100.0],
+            "Close": [101.0, 102.0],
+            "Volume": [1000.0, 1200.0],
+        }, index=index)
 
 
 class FakeStrategySources:
@@ -352,6 +369,26 @@ class BacktestRouteTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as created:
             api["POST /v2/backtests"](BacktestCreateRequest(market="NSE", strategyId="ema_vwap_strong_buy", symbols=["TCS"], startDate=date(2026, 8, 1), endDate=date(2026, 8, 2)))
         self.assertEqual(created.exception.status_code, 503)
+
+    def test_chart_accepts_iso_dates_returned_by_the_database_repository(self) -> None:
+        run = self._create(symbols=["ADANIENT"])
+        self.runs.records[run["runId"]]["startDate"] = "2026-08-01"
+        self.runs.records[run["runId"]]["endDate"] = "2026-08-31"
+        api = endpoints(create_backtest_router(BacktestServices(
+            registry=STRATEGIES,
+            runs=lambda: self.runs,
+            trades=lambda: self.trades,
+            runner=lambda: self.runner,
+            candle_source=lambda _market: FakeCandleSource(),
+        )))
+
+        chart = api["GET /v2/backtests/{run_id}/chart"](
+            run["runId"], "ADANIENT", None,
+        )
+
+        self.assertEqual(chart["symbol"], "ADANIENT")
+        self.assertEqual(chart["candles"]["close"], [101.0, 102.0])
+        self.assertEqual(chart["trades"], [])
 
     def test_completed_run_requires_signals_approval_before_paper(self) -> None:
         run = self._create(symbols=["RELIANCE", "TCS"])

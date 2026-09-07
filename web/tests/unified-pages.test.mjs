@@ -354,6 +354,9 @@ test("Strategy Studio is collapsed and promotion remains backtest-gated", async 
   assert.match(source, /strategy-studio\/sources/);
   assert.match(source, /Backtest it, then approve that exact run for Signals or Paper/);
   assert.match(source, /Backtest-gated/);
+  assert.match(source, /sourceValidation\?\.valid !== true/);
+  assert.match(source, /Discard the current unsaved strategy draft/);
+  assert.match(source, /quant-editor-actions/);
   assert.match(schema, /Array\.isArray\(value\).*integer_array/);
   assert.doesNotMatch(source, /styles\.studio\}`\} open/);
 });
@@ -367,6 +370,9 @@ test("Indicator Studio is separate, immutable and preview-only", async () => {
   assert.match(source, /aria-label="Indicator Python source"/);
   assert.match(source, /indicator-studio\/validate/);
   assert.match(source, /Save new version/);
+  assert.match(source, /validation\?\.valid !== true/);
+  assert.match(source, /Discard the current unsaved indicator draft/);
+  assert.match(source, /quant-editor-actions/);
   assert.match(source, /Edit as new/);
   assert.match(source, /\/archive/);
   assert.match(source, /Stored-candle preview/);

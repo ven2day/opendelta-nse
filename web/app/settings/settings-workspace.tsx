@@ -1,6 +1,6 @@
 "use client";
 
-import { Braces, Code2, Copy, Plus, Save, Settings2 } from "lucide-react";
+import { Beaker, Braces, Code2, Copy, Plus, RotateCcw, Save, Settings2 } from "lucide-react";
 import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { AICopilotPanel } from "../ai/ai-copilot-panel";
 import { formatDateTime, marketLabel, shortId } from "../platform/format";
@@ -97,6 +97,14 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
   const active = config.data?.active ?? null;
 
   const currentSource = strategySource || sourceTemplate.data?.sourceCode || "";
+  const sourceIsTemplate = currentSource === (sourceTemplate.data?.sourceCode ?? "");
+
+  const resetStrategySource = () => {
+    if (!sourceIsTemplate && !window.confirm("Discard the current unsaved strategy draft and restore the starter template?")) return;
+    setStrategySource(sourceTemplate.data?.sourceCode ?? "");
+    setSourceValidation(null);
+    setSourceNotice({ kind: "success", text: "Starter template restored. No saved strategy version was changed." });
+  };
 
   const validateStrategySource = async () => {
     if (!currentSource.trim()) return;
@@ -237,7 +245,7 @@ export function SettingsWorkspace({ initialMarket }: { initialMarket: PlatformMa
         <div className={styles.studioIntro}><div><strong>Create a strategy</strong><small>Edit Python here. Saving never deploys code; a completed backtest must be approved before Signals or Paper.</small></div><StatusBadge tone="good">Backtest-gated</StatusBadge></div>
         {sourceTemplate.loading ? <LoadingState label="Loading strategy template" /> : sourceTemplate.error ? <Message kind="error">Strategy Studio is unavailable while the strategy service is offline. <button type="button" onClick={sourceTemplate.reload}>Retry</button></Message> : <>
           <textarea className={styles.codeEditor} aria-label="Strategy Python source" spellCheck={false} value={currentSource} disabled={sourceBusy !== null} onChange={(event) => { setStrategySource(event.target.value); setSourceValidation(null); setSourceNotice(null); }} />
-          <div className={styles.studioActions}><button type="button" disabled={sourceBusy !== null} onClick={() => { setStrategySource(sourceTemplate.data?.sourceCode ?? ""); setSourceValidation(null); setSourceNotice(null); }}>Reset template</button><button type="button" disabled={sourceBusy !== null || !currentSource.trim()} onClick={() => void validateStrategySource()}>{sourceBusy === "validate" ? "Validating…" : "Validate"}</button><button type="button" className="primary" disabled={sourceBusy !== null || !currentSource.trim() || sourceValidation?.valid === false} onClick={() => void saveStrategySource()}><Save size={15} />{sourceBusy === "save" ? "Saving…" : "Save new version"}</button></div>
+          <div className={`${styles.studioActions} quant-editor-actions`}><button type="button" disabled={sourceBusy !== null || sourceIsTemplate} onClick={resetStrategySource}><RotateCcw size={15} />Restore template</button><button type="button" disabled={sourceBusy !== null || !currentSource.trim()} onClick={() => void validateStrategySource()}><Beaker size={15} />{sourceBusy === "validate" ? "Validating…" : "Validate draft"}</button><button type="button" className="primary" disabled={sourceBusy !== null || !currentSource.trim() || sourceValidation?.valid !== true} title={sourceValidation?.valid === true ? "Save this validated source as an immutable version" : "Validate this draft successfully before saving"} onClick={() => void saveStrategySource()}><Save size={15} />{sourceBusy === "save" ? "Saving…" : "Save new version"}</button></div>
         </>}
         {sourceNotice && <Message kind={sourceNotice.kind}>{sourceNotice.text}</Message>}
         {sourceValidation && (sourceValidation.errors.length > 0 || sourceValidation.warnings.length > 0) && <div className={styles.validationList}>{sourceValidation.errors.map((item) => <span key={item} className={styles.validationError}>{item}</span>)}{sourceValidation.warnings.map((item) => <span key={item}>{item}</span>)}</div>}

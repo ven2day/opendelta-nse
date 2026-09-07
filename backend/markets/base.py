@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time
-from typing import Callable, Protocol, Sequence
+from typing import Protocol
 
 import pandas as pd
 
@@ -95,4 +96,6 @@ def market_spec(market: str) -> MarketSpec:
             {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 375},
             daily_session_close=MARKET_CLOSE,
         )
-    return MarketSpec("CRYPTO", timezone, "USDT", CryptoFeeModel(), crypto_session_is_open, {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440})
+    if key == "CRYPTO":
+        return MarketSpec("CRYPTO", timezone, "USDT", CryptoFeeModel(), crypto_session_is_open, {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440})
+    raise ValueError("market must be NSE or CRYPTO")

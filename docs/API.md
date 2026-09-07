@@ -195,6 +195,19 @@ REJECTED | UNKNOWN`, then explicit partial-fill, fill, cancel-request and cancel
 transitions. A network timeout becomes `UNKNOWN`/`REQUIRED`, never an assumed
 failure. See [live execution safety](live-execution.md).
 
+## Operations and monitoring
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/v2/operations/health` | Aggregate market-data, worker, queue, runner, exchange, reconciliation, emergency-stop, and alert state. |
+| GET | `/v2/operations/leases?limit=&workerType=` | Bounded, secret-free worker leases. |
+| GET | `/v2/operations/alerts?status=&limit=` | Durable operational alerts. |
+| POST | `/v2/operations/alerts/{alertId}/acknowledge` | Acknowledge an active alert. |
+| POST | `/v2/operations/alerts/{alertId}/resolve` | Resolve an alert without deleting its history. |
+| GET | `/v2/operations/audit?limit=&action=` | Append-only important-action history. |
+
+Lease owner tokens, credentials, request bodies, and provider secrets are never returned.
+
 ## Signals
 
 | Method | Path | Notes |

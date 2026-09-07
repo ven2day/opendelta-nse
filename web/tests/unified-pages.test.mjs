@@ -6,7 +6,7 @@ process.env.APP_USERNAME = "test-admin";
 process.env.APP_PASSWORD = "test-password-123";
 process.env.AUTH_SECRET = "test-secret-that-is-at-least-32-characters-long";
 
-const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Strategies"];
+const NAVIGATION = ["Dashboard", "Watchlist", "Backtest", "Research", "Indicators", "Signals", "Paper Trading", "Operations", "Strategies"];
 const ROUTES = [
   { path: "/", title: "Dashboard" },
   { path: "/screener", title: "Watchlist" },
@@ -15,6 +15,7 @@ const ROUTES = [
   { path: "/indicators", title: "Indicators" },
   { path: "/signals", title: "Signals" },
   { path: "/paper-trading", title: "Paper Trading" },
+  { path: "/operations", title: "Operations" },
   { path: "/settings", title: "Strategies" },
 ];
 
@@ -183,7 +184,7 @@ test("dashboard presents a compact live strategy lifecycle refreshed every ten s
 test("production verification follows the Strategies navigation label", async () => {
   const script = new URL("../deploy/verify-container.sh", import.meta.url);
   const verification = await readFile(script, "utf8");
-  assert.match(verification, /'Paper Trading' Strategies/);
+  assert.match(verification, /'Paper Trading' Operations Strategies/);
   assert.doesNotMatch(verification, /'Paper Trading' Settings/);
   if (process.platform !== "win32") {
     assert.notEqual((await stat(script)).mode & 0o111, 0, "deployment verification must remain executable");
@@ -541,6 +542,30 @@ test("live execution is server-gated, idempotent, emergency-stopped, and has no 
   assert.match(env, /LIVE_TRADING_ENABLED=false/);
   assert.match(env, /LIVE_TRADING_DEPLOYMENT_ALLOWED=false/);
   assert.doesNotMatch(routes, /approve|credential.*decrypt/i);
+});
+
+test("production monitoring uses durable leases, append-only audits, and deduplicated alerts", async () => {
+  const [workspace, routes, repository, leases, migration] = await Promise.all([
+    readFile(new URL("../app/operations/operations-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/api/monitoring_routes.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/monitoring/repository.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/monitoring/leases.py", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/data/sql/022_production_monitoring.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(workspace, /Production observability/);
+  assert.match(workspace, /Worker leases/);
+  assert.match(workspace, /Append-only audit history/);
+  assert.match(workspace, /Emergency-stop state/);
+  assert.match(routes, /prefix="\/v2\/operations"/);
+  assert.match(repository, /ON CONFLICT \(worker_type, task_key\) DO UPDATE/);
+  assert.match(repository, /cooldown_until/);
+  assert.match(leases, /worker-lease-heartbeat/);
+  for (const worker of ["MARKET_DATA", "SIGNAL", "BACKTEST", "RESEARCH_EXPERIMENT", "WALK_FORWARD", "PAPER_EXECUTION", "LIVE_RECONCILIATION", "MONITORING"]) {
+    assert.match(migration, new RegExp(`'${worker}'`));
+  }
+  assert.match(migration, /operational_audit_append_only/);
+  assert.match(migration, /operational_alerts_active_fingerprint_uq/);
+  assert.doesNotMatch(workspace, /apiSecret|passphrase|credentials_ciphertext/);
 });
 
 test("signal filters stay collapsed and reason codes are humanized", async () => {

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, ExitStack
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -46,6 +47,7 @@ class MarketSignalWorker:
         engine_name: str | None = None,
         automation_mode: str = "SIGNALS",
         signal_source: str = "OPENDELTA",
+        lease_factories: Sequence[Callable[[], AbstractContextManager]] = (),
     ) -> None:
         self.market = market
         self.engine = engine
@@ -60,6 +62,7 @@ class MarketSignalWorker:
         self.engine_name = engine_name or f"{ENGINE_NAME}:{engine.strategy.strategy_id}:{engine.timeframe}"
         self.automation_mode = automation_mode
         self.signal_source = signal_source
+        self.lease_factories = tuple(lease_factories)
         daily_session_close = market.daily_session_close if engine.timeframe == "1d" else None
         self.processor = CandleProcessor(
             bar_minutes=market.minutes(engine.timeframe),
@@ -141,6 +144,14 @@ class MarketSignalWorker:
         self._set_state(status="STOPPED", connection="DISCONNECTED", message="Worker stopped")
 
     def run(self) -> None:
+        with ExitStack() as stack:
+            leases = [stack.enter_context(factory()) for factory in self.lease_factories]
+            if any(not getattr(lease, "acquired", True) for lease in leases):
+                self._set_state(status="STANDBY", connection="DISCONNECTED", message="Worker lease is owned elsewhere")
+                return
+            self._run_owned()
+
+    def _run_owned(self) -> None:
         try:
             self.recover()
         except Exception as error:  # noqa: BLE001 - recovery problems are reported, then polling continues

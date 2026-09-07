@@ -27,7 +27,8 @@ from backend.data.repositories import (
     StrategySourceRepository,
     WalkForwardValidationRepository,
 )
-from psycopg.errors import CheckViolation
+from backend.monitoring.repository import MonitoringRepository
+from psycopg.errors import CheckViolation, RaiseException
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 
@@ -88,6 +89,7 @@ class PlatformDatabaseTests(unittest.TestCase):
                 "019_ai_research_copilot",
                 "020_secure_exchange_connections",
                 "021_live_execution_foundation",
+                "022_production_monitoring",
             ],
         )
         self.assertEqual(self.database.migrate(), [])
@@ -125,6 +127,11 @@ class PlatformDatabaseTests(unittest.TestCase):
             "live_order_state_events",
             "live_order_fills",
             "live_reconciliation_findings",
+            "worker_leases",
+            "operational_audit_events",
+            "operational_alerts",
+            "operational_alert_occurrences",
+            "notification_deliveries",
             "tradingview_webhook_events",
             "backtest_runs",
             "backtest_trades",
@@ -254,6 +261,64 @@ class PlatformDatabaseTests(unittest.TestCase):
                 """,
                 (uuid.uuid4(),),
             )
+
+    def test_monitoring_leases_are_compare_and_set_and_recover_after_expiry(self) -> None:
+        repository = MonitoringRepository(self.database)
+        first_time = datetime(2026, 9, 7, 10, 0, tzinfo=UTC)
+        owner_one, owner_two = str(uuid.uuid4()), str(uuid.uuid4())
+        first = repository.acquire_lease(
+            worker_type="BACKTEST", task_key="run-monitoring-test", worker_identity="worker-one",
+            host_identity="host-one", process_identity="1", owner_token=owner_one,
+            ttl_seconds=30, now=first_time,
+        )
+        self.assertIsNotNone(first)
+        self.assertIsNone(repository.acquire_lease(
+            worker_type="BACKTEST", task_key="run-monitoring-test", worker_identity="worker-two",
+            host_identity="host-two", process_identity="2", owner_token=owner_two,
+            ttl_seconds=30, now=datetime(2026, 9, 7, 10, 0, 10, tzinfo=UTC),
+        ))
+        recovered = repository.acquire_lease(
+            worker_type="BACKTEST", task_key="run-monitoring-test", worker_identity="worker-two",
+            host_identity="host-two", process_identity="2", owner_token=owner_two,
+            ttl_seconds=30, now=datetime(2026, 9, 7, 10, 0, 31, tzinfo=UTC),
+        )
+        self.assertEqual(recovered["workerIdentity"], "worker-two")
+        self.assertNotEqual(recovered["ownerFingerprint"], first["ownerFingerprint"])
+
+    def test_operational_audit_is_append_only_and_alerts_deduplicate_with_cooldown(self) -> None:
+        repository = MonitoringRepository(self.database)
+        audit = repository.append_audit(
+            request_id=str(uuid.uuid4()), action="BACKTEST_CREATED", actor_type="USER",
+            actor_id="database-test", success=True, details={"apiSecret": "omitted", "market": "NSE"},
+        )
+        self.assertNotIn("apiSecret", audit["details"])
+        with self.assertRaises(RaiseException):
+            self.database.execute(
+                "UPDATE operational_audit_events SET success = false WHERE audit_id = %s",
+                (uuid.UUID(audit["auditId"]),),
+            )
+        first_time = datetime(2026, 9, 7, 11, 0, tzinfo=UTC)
+        first = repository.raise_alert(
+            alert_type="STALE_NSE_DATA", severity="WARNING", source="market-data",
+            title="NSE stale", message="No settled candle", context={"market": "NSE"},
+            cooldown_seconds=300, now=first_time,
+        )
+        duplicate = repository.raise_alert(
+            alert_type="STALE_NSE_DATA", severity="WARNING", source="market-data",
+            title="NSE stale", message="Still stale", context={"market": "NSE"},
+            cooldown_seconds=300, now=datetime(2026, 9, 7, 11, 1, tzinfo=UTC),
+        )
+        self.assertEqual(duplicate["alertId"], first["alertId"])
+        self.assertEqual(duplicate["occurrenceCount"], 2)
+        self.assertTrue(first["notificationDue"])
+        self.assertFalse(duplicate["notificationDue"])
+        repository.resolve_alert(first["alertId"], actor="operator", resolution="Feed recovered")
+        next_incident = repository.raise_alert(
+            alert_type="STALE_NSE_DATA", severity="WARNING", source="market-data",
+            title="NSE stale", message="New incident", context={"market": "NSE"},
+            cooldown_seconds=300, now=datetime(2026, 9, 7, 12, 0, tzinfo=UTC),
+        )
+        self.assertNotEqual(next_incident["alertId"], first["alertId"])
 
     def test_strategy_sources_are_immutable_and_filter_by_market(self) -> None:
         repository = StrategySourceRepository(self.database)

@@ -24,9 +24,9 @@ login_status="$(curl -sS -o /dev/null -w '%{http_code}' \
 [[ "${login_status}" == "303" ]]
 echo "verified login"
 
-for page in / /screener /backtest /signals /paper-trading /settings; do
+for page in / /screener /backtest /research /signals /paper-trading /operations /settings; do
   curl -fsS -b "${cookie_jar}" "${base_url}${page}" > "${dashboard_html}"
-  for label in Dashboard Watchlist Backtest Signals 'Paper Trading' Strategies; do
+  for label in Dashboard Watchlist Backtest Research Signals 'Paper Trading' Operations Strategies; do
     grep -q "${label}" "${dashboard_html}"
   done
   grep -q 'OpenDelta' "${dashboard_html}"

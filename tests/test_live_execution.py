@@ -93,6 +93,10 @@ class FakeRepository:
     def list_stops(self):
         return self.stops
 
+    def list_findings(self, *, limit=100):
+        del limit
+        return []
+
     def list_intents(self, *, limit=100):
         return list(self.intents.values())[:limit]
 

@@ -11,7 +11,7 @@ Route surface (legacy research endpoints were retired with their engines):
 * ``/application-settings``, ``/market-data/symbols`` (GET) settings (``api.application_settings_routes``)
 * ``/nifty-oi/history/status``            OI coverage status (``api.oi_routes``)
 * ``/market-symbols/*`` and crypto routes (``markets.crypto.api``)
-* ``/v2/*``                               unified NSE+Crypto platform (``platform_runtime.install_platform``)
+* ``/v2/*``                               unified NSE+Crypto platform and Operations monitoring
 
 The service remains paper-only by default. Live adapters are present behind
 deployment, environment, governance, risk and emergency-stop gates; provider

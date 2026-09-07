@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from types import TracebackType
@@ -58,11 +59,13 @@ class WalkForwardJobRunner:
         *,
         poll_seconds: float = 1.0,
         max_pending: int = 20,
+        lease_factory: Callable[[str], AbstractContextManager] | None = None,
     ) -> None:
         self.repository = repository
         self.backtests = backtests
         self.poll_seconds = poll_seconds
         self.max_pending = max_pending
+        self.lease_factory = lease_factory
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="walk-forward")
         self._futures: dict[str, Future[None]] = {}
         self._reserved = 0
@@ -93,61 +96,15 @@ class WalkForwardJobRunner:
             self._reserved = max(0, self._reserved - 1)
 
     def _execute(self, validation_id: str) -> None:
+        lease = self.lease_factory(validation_id) if self.lease_factory else None
         try:
-            for position in range(1, self.repository.get(validation_id)["foldCount"] + 1):
-                validation = self.repository.get(validation_id)
-                fold = validation["folds"][position - 1]
-                if validation["cancelRequested"]:
-                    self._cancel_fold(fold)
-                    continue
-                if fold["status"] in {"COMPLETE", "FAILED", "CANCELLED"}:
-                    continue
-                self.repository.update_fold(fold["foldId"], status="TRAINING")
-                fold = self._wait_for_training(validation_id, position)
-                validation = self.repository.get(validation_id)
-                if validation["cancelRequested"]:
-                    self._cancel_fold(fold)
-                    continue
-                ranked = rank_completed_candidates(
-                    fold["trainingCandidates"],
-                    objective=validation["rankingObjective"],
-                    minimum_trades=validation["minimumRequiredTrades"],
-                )
-                if not ranked:
-                    self.repository.update_fold(
-                        fold["foldId"],
-                        status="FAILED",
-                        error="No completed training candidate met the minimum-trades requirement",
-                    )
-                    continue
-                winner = ranked[0]
-                test_run = self.repository.create_test_run(fold_id=fold["foldId"], candidate=winner)
-                request = BacktestRequest(
-                    run_id=test_run["runId"], market=test_run["market"], strategy_id=test_run["strategyId"],
-                    strategy_source_id=test_run["strategySourceId"], symbols=test_run["symbols"],
-                    timeframe=test_run["timeframe"], start_date=_date(test_run["startDate"]),
-                    end_date=_date(test_run["endDate"]), configuration=test_run["configurationSnapshot"],
-                    execution=ExecutionSettings.from_mapping(
-                        test_run["executionSettings"], whole_units=test_run["market"] == "NSE"
-                    ),
-                )
-                self._submit_when_available(request, validation_id)
-                terminal = self._wait_for_run(validation_id, test_run["runId"])
-                if terminal["status"] == "COMPLETE":
-                    self.repository.update_fold(fold["foldId"], status="COMPLETE")
-                elif terminal["status"] == "CANCELLED":
-                    self.repository.update_fold(fold["foldId"], status="CANCELLED")
-                else:
-                    self.repository.update_fold(
-                        fold["foldId"], status="FAILED", error=terminal.get("error") or "Unseen test run failed"
-                    )
-            finished = self.repository.get(validation_id)
-            unseen = [
-                fold["testRun"]["metrics"]
-                for fold in finished["folds"]
-                if fold["status"] == "COMPLETE" and fold.get("testRun", {}).get("metrics") is not None
-            ]
-            self.repository.finish(validation_id, aggregate_unseen_metrics(unseen))
+            if lease is not None:
+                with lease as ownership:
+                    if not getattr(ownership, "acquired", True):
+                        return
+                    self._execute_owned(validation_id)
+                return
+            self._execute_owned(validation_id)
         except Exception as error:  # noqa: BLE001 - isolate one validation from the queue
             logger.exception("Walk-forward validation %s failed", validation_id)
             try:
@@ -160,6 +117,62 @@ class WalkForwardJobRunner:
         finally:
             with self._lock:
                 self._futures.pop(validation_id, None)
+
+    def _execute_owned(self, validation_id: str) -> None:
+        for position in range(1, self.repository.get(validation_id)["foldCount"] + 1):
+            validation = self.repository.get(validation_id)
+            fold = validation["folds"][position - 1]
+            if validation["cancelRequested"]:
+                self._cancel_fold(fold)
+                continue
+            if fold["status"] in {"COMPLETE", "FAILED", "CANCELLED"}:
+                continue
+            self.repository.update_fold(fold["foldId"], status="TRAINING")
+            fold = self._wait_for_training(validation_id, position)
+            validation = self.repository.get(validation_id)
+            if validation["cancelRequested"]:
+                self._cancel_fold(fold)
+                continue
+            ranked = rank_completed_candidates(
+                fold["trainingCandidates"],
+                objective=validation["rankingObjective"],
+                minimum_trades=validation["minimumRequiredTrades"],
+            )
+            if not ranked:
+                self.repository.update_fold(
+                    fold["foldId"],
+                    status="FAILED",
+                    error="No completed training candidate met the minimum-trades requirement",
+                )
+                continue
+            winner = ranked[0]
+            test_run = self.repository.create_test_run(fold_id=fold["foldId"], candidate=winner)
+            request = BacktestRequest(
+                run_id=test_run["runId"], market=test_run["market"], strategy_id=test_run["strategyId"],
+                strategy_source_id=test_run["strategySourceId"], symbols=test_run["symbols"],
+                timeframe=test_run["timeframe"], start_date=_date(test_run["startDate"]),
+                end_date=_date(test_run["endDate"]), configuration=test_run["configurationSnapshot"],
+                execution=ExecutionSettings.from_mapping(
+                    test_run["executionSettings"], whole_units=test_run["market"] == "NSE"
+                ),
+            )
+            self._submit_when_available(request, validation_id)
+            terminal = self._wait_for_run(validation_id, test_run["runId"])
+            if terminal["status"] == "COMPLETE":
+                self.repository.update_fold(fold["foldId"], status="COMPLETE")
+            elif terminal["status"] == "CANCELLED":
+                self.repository.update_fold(fold["foldId"], status="CANCELLED")
+            else:
+                self.repository.update_fold(
+                    fold["foldId"], status="FAILED", error=terminal.get("error") or "Unseen test run failed"
+                )
+        finished = self.repository.get(validation_id)
+        unseen = [
+            fold["testRun"]["metrics"]
+            for fold in finished["folds"]
+            if fold["status"] == "COMPLETE" and fold.get("testRun", {}).get("metrics") is not None
+        ]
+        self.repository.finish(validation_id, aggregate_unseen_metrics(unseen))
 
     def _wait_for_training(self, validation_id: str, position: int) -> dict[str, Any]:
         while True:

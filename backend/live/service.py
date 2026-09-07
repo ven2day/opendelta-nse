@@ -90,6 +90,7 @@ class LiveExecutionService:
             "eligiblePaperApprovals": self.repository.eligible_approvals(),
             "emergencyStops": self.repository.list_stops(),
             "intents": self.repository.list_intents(limit=100),
+            "reconciliationFindings": self.repository.list_findings(limit=100),
             "cancelAllSupported": False,
             "cancelAllMessage": "Existing provider orders are never cancelled by an emergency stop",
         }

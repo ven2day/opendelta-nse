@@ -202,20 +202,9 @@ class PlatformRuntime:
             self.reconcile_signal_workers(market)
 
     def configured_deployments(self, market: str) -> list[dict[str, Any]]:
-        """Database selections win; environment bindings remain a migration fallback."""
+        """Return only durable, operator-reviewed V2 deployment records."""
         key = market.strip().upper()
-        saved = self.strategy_deployments().list(key) if self.database is not None else []
-        if saved:
-            return saved
-        if not _truthy(os.environ.get(f"{key}_SIGNAL_ENGINE_V2_ENABLED")):
-            return []
-        mode = "PAPER" if _truthy(os.environ.get(f"{key}_PAPER_TRADING_V2_ENABLED", "true")) else "SIGNALS"
-        rows: list[dict[str, Any]] = []
-        for binding in self.live_bindings(key):
-            active = self.strategy_configs().active(key, binding.strategy_id) if self.database is not None else None
-            strategy = STRATEGIES.get(binding.strategy_id)
-            rows.append({"deploymentId": None, "market": key, "strategyId": binding.strategy_id, "strategyVersion": strategy.version, "configId": (active or {}).get("configId"), "universeId": None, "timeframe": binding.timeframe, "mode": mode, "signalSource": "OPENDELTA", "source": "ENVIRONMENT", "createdAt": None, "updatedAt": None})
-        return rows
+        return self.strategy_deployments().list(key) if self.database is not None else []
 
     def deployment_status(self, market: str, strategy_id: str) -> dict[str, Any]:
         key = market.strip().upper()

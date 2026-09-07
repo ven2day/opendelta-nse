@@ -3,11 +3,10 @@
 ## Scope and safety boundary
 
 This procedure provisions the canonical candle database and prepares backfill
-jobs. Reader migration is a separate, explicit runtime setting; its safe
-default is `PLATFORM_CANDLE_READ_MODE=legacy`. Keep the legacy Dhan files and
-crypto SQLite database intact until production count, checksum, gap, and
-full-market-cycle checks pass, then validate `timescale-fallback` before using
-strict `timescale` mode.
+jobs. Strict `PLATFORM_CANDLE_READ_MODE=timescale` is the V2 default. Before
+cutover, validate production counts, checksums, gaps and a full market cycle.
+Keep the legacy Dhan files and crypto SQLite database intact as explicit
+`timescale-fallback` / `legacy` rollback sources; never mix provider streams.
 
 The service uses `timescale/timescaledb:2.29.2-pg17`, a Docker named volume,
 and the existing `opendelta-internal` network. PostgreSQL port 5432 is not

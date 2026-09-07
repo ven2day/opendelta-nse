@@ -32,7 +32,7 @@ summary as evidence.
 | 13 — Production monitoring | Complete on review stack | migration 022, leases, append-only audit, deduplicated alerts, notifications and Operations UI; PR #97 |
 | 14 — Agent/MCP access | Complete on review stack | migration 023, hashed scoped tokens, 19 strict research tools and audit/rate limits; PR #98 |
 | Full V2 validation | Complete in this change | executable structural/policy contract, lifecycle evidence report and fail-closed unknown-market fix |
-| V2 default cutover | Pending next ordered change | make canonical Timescale/V2 defaults explicit, update deployment guidance and preserve safe redirects |
+| V2 default cutover | Complete on review stack | strict Timescale default, durable deployment source of truth, updated release/rollback guidance and preserved safe redirects |
 | Obsolete V1 removal | Pending final ordered change | remove only items classified `REMOVE`; do not drop historical tables or delete `UNCERTAIN` items |
 
 ## QuantDinger functional comparison

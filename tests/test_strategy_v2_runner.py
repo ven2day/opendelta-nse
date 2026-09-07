@@ -85,6 +85,26 @@ class StrategyV2RunnerTests(unittest.TestCase):
         self.assertEqual(rows[19]["decision"], "NONE")
         self.assertEqual(rows[20]["decision"], "BUY")
 
+    def test_long_backtests_use_a_bounded_completed_candle_window(self) -> None:
+        source = starter_source().replace(
+            'return "HOLD"',
+            'return {"decision": "BUY", "reasons": ["BOUNDED"], "indicators": '
+            '{"window": len(data.candles), "first": close[0], "last": close[len(close) - 1]}} '
+            'if len(close) == 512 else "HOLD"',
+        )
+        payload = self.payload(source)
+        count = 600
+        payload["candles"] = {
+            "timestamp": pd.date_range("2026-01-01T00:00:00Z", periods=count, freq="5min").astype(str).tolist(),
+            "open": list(range(count)), "high": list(range(1, count + 1)),
+            "low": list(range(count)), "close": list(range(count)), "volume": [10] * count,
+        }
+
+        rows = evaluate_isolated(payload, timeout_seconds=10)["rows"]
+
+        self.assertEqual(rows[-1]["decision"], "BUY")
+        self.assertEqual(rows[-1]["indicators"], {"window": 512, "first": 88, "last": 599})
+
     def test_adapter_exposes_the_live_signal_decision_contract(self) -> None:
         source_code = starter_source().replace(
             'return "HOLD"',

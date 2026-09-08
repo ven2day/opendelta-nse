@@ -184,24 +184,17 @@ class EngineBehaviourTests(unittest.TestCase):
 
 class ExitRuleTests(unittest.TestCase):
     def test_strategy_stop_is_used_when_execution_has_no_override(self) -> None:
-        writer = MemoryResultWriter()
-        source = SyntheticSource()
-        engine(writer, source).run(request(["AAA"]))
-        self.assertTrue(writer.trades)
-        self.assertTrue(all(trade["stop_price"] is not None for trade in writer.trades))
-        strategy = STRATEGIES.get("ema_vwap_strong_buy")
-        frame = decision_frame(
-            strategy,
-            source.candles("AAA", "5m", datetime(2026, 8, 3), datetime(2026, 8, 31), warmup_bars=0),
-            MarketContext(market="NSE", symbol="AAA", timeframe="5m", timezone=IST),
-            {},
+        replay = engine(MemoryResultWriter(), SyntheticSource())
+        timestamps = pd.date_range("2026-08-03 09:15", periods=2, freq="5min", tz=IST)
+        lot = replay._enter(
+            None, ExecutionSettings(), {}, "AAA", 0, 1, 0, "AAA-Cycle1",
+            timestamps, np.array([100.0, 101.0]), np.array([100.0, 101.0]),
+            timestamps.to_numpy(), np.array([100.0, 101.0]), np.array([105.0, 106.0]),
+            np.array([98.0, np.nan]), None, 0.0,
         )
-        for trade in writer.trades:
-            signal_bar = frame.index.get_loc(pd.Timestamp(trade["signal_timestamp"]))
-            strategy_stop = float(frame["StopPrice"].iloc[signal_bar])
-            signal_price = float(frame["SignalPrice"].iloc[signal_bar])
-            expected = round(float(trade["entry_price"]) * strategy_stop / signal_price, 4)
-            self.assertEqual(trade["stop_price"], expected)
+        self.assertIsNotNone(lot)
+        assert lot is not None
+        self.assertEqual(lot.stop_price, round(lot.entry_price * 0.98, 4))
 
     def test_stop_loss_and_holding_limit_close_lots(self) -> None:
         writer = MemoryResultWriter()

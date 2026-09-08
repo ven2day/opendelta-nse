@@ -1,5 +1,5 @@
-import { useEffect, type ReactNode } from "react";
-import { AlertTriangle, DatabaseZap, LoaderCircle } from "lucide-react";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { AlertTriangle, ChevronDown, DatabaseZap, LoaderCircle } from "lucide-react";
 import { formatSignedMoney } from "./format";
 import type { PlatformMarket } from "./platform-client";
 import { isPlatformUnconfigured } from "./v2-client";
@@ -43,8 +43,19 @@ export function PaperOnlyBadge() {
   return <StatusBadge tone="good">Paper only · broker execution disabled</StatusBadge>;
 }
 
-export function Panel({ icon, title, description, aside, children, className }: { icon?: ReactNode; title: string; description?: string; aside?: ReactNode; children: ReactNode; className?: string }) {
-  return <section className={`quant-panel${className ? ` ${className}` : ""}`}><div className="quant-panel-heading"><div>{icon}<div><h2>{title}</h2>{description && <p>{description}</p>}</div></div>{aside}</div>{children}</section>;
+export function Panel({ icon, title, description, aside, children, className, defaultOpen = false, collapsible = true, collapsedSummary }: { icon?: ReactNode; title: string; description?: string; aside?: ReactNode; children: ReactNode; className?: string; defaultOpen?: boolean; collapsible?: boolean; collapsedSummary?: ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen || !collapsible);
+  const contentId = useId();
+  const classes = `quant-panel${open ? " open" : " collapsed"}${className ? ` ${className}` : ""}`;
+  return <section className={classes}>
+    <div className="quant-panel-heading">
+      {collapsible ? <button type="button" className="quant-panel-toggle" aria-expanded={open} aria-controls={contentId} onClick={() => setOpen((value) => !value)}>
+        {icon}<span><h2>{title}</h2>{description && <p>{description}</p>}{!open && collapsedSummary && <small>{collapsedSummary}</small>}</span><ChevronDown className="quant-panel-chevron" size={17} />
+      </button> : <div>{icon}<div><h2>{title}</h2>{description && <p>{description}</p>}</div></div>}
+      {aside && <div className="quant-panel-aside">{aside}</div>}
+    </div>
+    <div id={contentId} className="quant-panel-content" hidden={!open}>{children}</div>
+  </section>;
 }
 
 export function Tag({ children, tone }: { children: ReactNode; tone?: "good" | "warn" | "bad" | "neutral" }) {

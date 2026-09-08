@@ -624,3 +624,24 @@ test("screener and backtest use backend-owned ready-made NIFTY universes", async
   assert.doesNotMatch(screener, /const NIFTY_?50|const NIFTY_TOP_?20/);
   assert.doesNotMatch(backtest, /const NIFTY_?50|const NIFTY_TOP_?20/);
 });
+
+test("production workspaces share collapsible panels and backtest history exposes outcomes", async () => {
+  const [primitives, backtest, types, metrics] = await Promise.all([
+    readFile(new URL("../app/platform/workspace-ui.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/backtest/backtest-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/platform/v2-types.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../backend/backtest/metrics.py", import.meta.url), "utf8"),
+  ]);
+  assert.match(primitives, /defaultOpen = false/);
+  assert.match(primitives, /aria-expanded=\{open\}/);
+  assert.match(primitives, /quant-panel-content/);
+  assert.match(backtest, /Trade outcomes/);
+  assert.match(backtest, /Profitable/);
+  assert.match(backtest, /Stop-loss/);
+  assert.match(backtest, /Strategy or run ID/);
+  assert.match(backtest, /Target \/ stop \/ open/);
+  for (const metric of ["profitableTrades", "losingTrades", "grossProfit", "grossLoss", "profitFactor"]) {
+    assert.match(types, new RegExp(metric));
+    assert.match(metrics, new RegExp(`"${metric}"`));
+  }
+});

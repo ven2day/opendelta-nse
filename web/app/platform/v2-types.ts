@@ -229,6 +229,12 @@ export type BacktestMetrics = {
   expiredTrades?: number | null;
   openTrades?: number | null;
   realizedPnl?: number | null;
+  profitableTrades?: number | null;
+  losingTrades?: number | null;
+  breakevenTrades?: number | null;
+  grossProfit?: number | null;
+  grossLoss?: number | null;
+  profitFactor?: number | null;
   unrealizedPnl?: number | null;
   fees?: number | null;
   slippage?: number | null;

@@ -388,6 +388,7 @@ class BacktestEngine:
         signal_timestamps = frame["SignalTimestamp"].to_numpy() if "SignalTimestamp" in frame else timestamps.to_numpy()
         signal_prices = frame["SignalPrice"].to_numpy(dtype=float) if "SignalPrice" in frame else closes
         signal_targets = frame["TargetPrice"].to_numpy(dtype=float)
+        signal_stops = frame["StopPrice"].to_numpy(dtype=float) if "StopPrice" in frame else np.full(len(frame), np.nan)
         in_window = np.asarray(timestamps >= start, dtype=bool)
         del frame
 
@@ -409,7 +410,7 @@ class BacktestEngine:
                 pending = None
                 entered = self._enter(
                     request, execution, config, symbol, signal_bar, bar, entry_number, cycle_id,
-                    timestamps, opens, closes, signal_timestamps, signal_prices, signal_targets,
+                    timestamps, opens, closes, signal_timestamps, signal_prices, signal_targets, signal_stops,
                     cycle_first_entry_price, inventory.cost, expiry_bar_multiplier,
                 )
                 if entered is not None:
@@ -535,7 +536,7 @@ class BacktestEngine:
             projected.at[final_stamp, "StopPrice"] = float(row["StopPrice"])
         return projected
 
-    def _enter(self, _request, execution, config, _symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, _closes, signal_timestamps, signal_prices, signal_targets, cycle_first_entry_price, current_open_capital, expiry_bar_multiplier=1) -> _Lot | None:
+    def _enter(self, _request, execution, config, _symbol, signal_bar, bar, entry_number, cycle_id, timestamps, opens, _closes, signal_timestamps, signal_prices, signal_targets, signal_stops, cycle_first_entry_price, current_open_capital, expiry_bar_multiplier=1) -> _Lot | None:
         reference_price = float(opens[bar])
         ladder = PriceBandLadder.from_config(config)
         indicative_fill_price = self._fees.buy(reference_price, 1).price
@@ -563,7 +564,18 @@ class BacktestEngine:
             # Preserve the strategy's target distance relative to the actual fill.
             target = entry_price * (strategy_target / signal_close) if signal_close > 0 and not math.isnan(strategy_target) else entry_price * 1.01
             target_pct = (target / entry_price - 1) * 100
-        stop = entry_price * (1 - execution.stop_loss_pct / 100) if execution.stop_loss_pct is not None else None
+        if execution.stop_loss_pct is not None:
+            stop = entry_price * (1 - execution.stop_loss_pct / 100)
+        else:
+            strategy_stop = float(signal_stops[signal_bar])
+            signal_price = float(signal_prices[signal_bar])
+            # Preserve a valid strategy-defined stop distance relative to the
+            # actual next-candle fill, just as strategy targets are preserved.
+            stop = (
+                entry_price * (strategy_stop / signal_price)
+                if signal_price > 0 and math.isfinite(strategy_stop) and 0 < strategy_stop < signal_price
+                else None
+            )
         expires_bar = bar + execution.maximum_holding_bars * expiry_bar_multiplier if execution.maximum_holding_bars is not None else None
         return _Lot(
             lot_id=f"{cycle_id}-Lot{entry_number + 1}",

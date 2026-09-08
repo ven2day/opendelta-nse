@@ -1357,3 +1357,31 @@
   .quant-table th { font-size: 11px; }
   .quant-table td { font-size: 12px; }
 }
+
+
+.quant-result-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--od-border);
+  border-radius: 10px;
+  background: var(--od-surface);
+}
+.quant-result-tabs button {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--od-muted);
+  background: transparent;
+  white-space: nowrap;
+}
+.quant-result-tabs button:hover { color: var(--od-text); background: var(--od-surface-raised); }
+.quant-result-tabs button.active {
+  color: var(--od-text);
+  background: var(--od-surface-raised);
+  box-shadow: inset 0 0 0 1px var(--od-border-strong);
+}

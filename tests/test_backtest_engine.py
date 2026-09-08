@@ -183,6 +183,19 @@ class EngineBehaviourTests(unittest.TestCase):
 
 
 class ExitRuleTests(unittest.TestCase):
+    def test_strategy_stop_is_used_when_execution_has_no_override(self) -> None:
+        replay = engine(MemoryResultWriter(), SyntheticSource())
+        timestamps = pd.date_range("2026-08-03 09:15", periods=2, freq="5min", tz=IST)
+        lot = replay._enter(
+            None, ExecutionSettings(), {}, "AAA", 0, 1, 0, "AAA-Cycle1",
+            timestamps, np.array([100.0, 101.0]), np.array([100.0, 101.0]),
+            timestamps.to_numpy(), np.array([100.0, 101.0]), np.array([105.0, 106.0]),
+            np.array([98.0, np.nan]), None, 0.0,
+        )
+        self.assertIsNotNone(lot)
+        assert lot is not None
+        self.assertEqual(lot.stop_price, round(lot.entry_price * 0.98, 4))
+
     def test_stop_loss_and_holding_limit_close_lots(self) -> None:
         writer = MemoryResultWriter()
         engine(writer, SyntheticSource()).run(request(["AAA", "BBB"], execution=ExecutionSettings(stop_loss_pct=0.4, maximum_holding_bars=40)))

@@ -22,6 +22,7 @@ const DEFAULT_TIMEFRAME = "5m";
 type Notice = { kind: "success" | "error"; text: string } | null;
 type TradeSort = "symbol" | "status" | "entryTimestamp" | "entryPrice" | "quantity" | "targetPrice" | "stopPrice" | "exitTimestamp" | "exitPrice" | "netPnl" | "maePct" | "holdingMinutes";
 type SortDirection = "asc" | "desc";
+type ResultView = "summary" | "trades" | "chart" | "history";
 type BacktestStrategyOption = { key: string; strategy: Strategy; strategySourceId: string | null };
 
 function SortableHeading({ label, column, active, direction, numeric, onSort }: { label: string; column: TradeSort; active: boolean; direction: SortDirection; numeric?: boolean; onSort: (column: TradeSort) => void }) {
@@ -106,7 +107,7 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
   const loadStrategies = useCallback(() => v2Get<StrategiesResponse>("strategies", { market }), [market]);
   const loadUniverses = useCallback(() => v2Get<UniversesResponse>("screener/universes", { market }), [market]);
   const loadPresets = useCallback(() => v2Get<UniversePresetsResponse>("screener/presets", { market }), [market]);
-  const loadRuns = useCallback(() => v2Get<BacktestRunsResponse>("backtests", { market, limit: 20 }), [market]);
+  const loadRuns = useCallback(() => v2Get<BacktestRunsResponse>("backtests", { market, limit: 100 }), [market]);
   const loadDeployments = useCallback(() => v2Get<StrategyDeploymentsResponse>("strategy-deployments", { market }), [market]);
   const loadStrategySources = useCallback(() => v2Get<StrategySourcesResponse>("strategy-studio/sources", { market }), [market]);
   const strategies = useV2Resource(loadStrategies);
@@ -137,6 +138,7 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
   const [tradeSort, setTradeSort] = useState<TradeSort>("entryTimestamp");
   const [tradeDirection, setTradeDirection] = useState<SortDirection>("asc");
   const [tradeOffset, setTradeOffset] = useState(0);
+  const [resultView, setResultView] = useState<ResultView>("summary");
 
   const marketStrategies = useMemo(() => (strategies.data?.strategies ?? []).filter((strategy) => !strategy.supportedMarkets?.length || strategy.supportedMarkets.includes(market)), [strategies.data, market]);
   const strategyOptions = useMemo<BacktestStrategyOption[]>(() => [
@@ -199,6 +201,7 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
 
   const selectRun = (runId: string) => {
     setSelectedRunChoice(runId);
+    setResultView("summary");
     setTradeOffset(0);
     setTradeSymbol("");
     setTradeSymbolInput("");
@@ -285,6 +288,9 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
       title="Strategy backtest"
       actions={<div className="quant-header-actions"><PaperOnlyBadge /><button type="button" onClick={() => { refreshRuns(); refreshRun(); }}><RefreshCw size={15} />Refresh</button></div>}
     />
+    <nav className="quant-result-tabs" aria-label="Backtest result views">
+      {([["summary", "Summary"], ["trades", `Trades (${formatInteger(total)})`], ["chart", "Chart"], ["history", `History (${formatInteger(runs.data?.runs.length ?? 0)})`]] as const).map(([value, label]) => <button key={value} type="button" className={resultView === value ? "active" : ""} aria-current={resultView === value ? "page" : undefined} onClick={() => setResultView(value)}>{label}</button>)}
+    </nav>
 
     <Panel icon={<FlaskConical size={17} />} title="Run backtest">
       {strategies.loading || universes.loading || strategySources.loading ? <LoadingState label="Loading strategies and universes" /> : strategies.error ? <RequestErrorState error={strategies.error} retry={strategies.reload} /> : !strategy ? <EmptyState title="No strategies for this market" description={`No registered strategy supports ${marketLabel(market)}.`} /> : <form onSubmit={submit} noValidate>
@@ -320,7 +326,7 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
       </form>}
     </Panel>
 
-    <Panel icon={<Gauge size={17} />} title={run ? `Run ${shortId(run.runId)}` : "Run progress"} description={run ? `${run.strategyId} ${run.strategyVersion ? `v${run.strategyVersion}` : ""} · ${run.timeframe} signals${executionTimeframe && executionTimeframe !== run.timeframe ? ` · ${executionTimeframe} execution` : ""} · ${run.startDate} → ${run.endDate}` : "Select a run from the list below or start a new one."} aside={run && <div className="quant-toolbar"><StatusBadge tone={tone(run.status)}>{run.status}</StatusBadge>{runActive && <button type="button" className="danger" disabled={cancelling || run.cancelRequested} onClick={() => setConfirmingCancel(true)}><Square size={13} />{run.cancelRequested ? "Cancelling…" : cancelling ? "Cancelling…" : "Cancel"}</button>}</div>}>
+    {resultView === "summary" && <Panel icon={<Gauge size={17} />} title={run ? `Run ${shortId(run.runId)}` : "Run progress"} description={run ? `${run.strategyId} ${run.strategyVersion ? `v${run.strategyVersion}` : ""} · ${run.timeframe} signals${executionTimeframe && executionTimeframe !== run.timeframe ? ` · ${executionTimeframe} execution` : ""} · ${run.startDate} → ${run.endDate}` : "Select a run from the list below or start a new one."} aside={run && <div className="quant-toolbar"><StatusBadge tone={tone(run.status)}>{run.status}</StatusBadge>{runActive && <button type="button" className="danger" disabled={cancelling || run.cancelRequested} onClick={() => setConfirmingCancel(true)}><Square size={13} />{run.cancelRequested ? "Cancelling…" : cancelling ? "Cancelling…" : "Cancel"}</button>}</div>}>
       {!selectedRunId ? <EmptyState title="No backtests yet" description="Start a backtest above; progress and metrics appear here." /> : runDetail.error ? <RequestErrorState error={runDetail.error} retry={runDetail.reload} /> : !run ? <LoadingState label="Loading run" /> : <>
         <div className="quant-progress-row">
           <div className="quant-progress"><span style={{ width: `${progressPct(run)}%` }} /></div>
@@ -338,11 +344,11 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
         </div> : <div className="quant-panel-body"><p className="quant-inline-note">{runActive ? "Metrics are published when the run completes." : "No metrics were recorded for this run."}</p></div>}
         {run.failedSymbols && run.failedSymbols.length > 0 && <div className="quant-panel-body"><details className="quant-details"><summary>{formatInteger(run.failedSymbols.length)} failed symbols</summary><div className="quant-table-scroll"><table className="quant-table"><thead><tr><th>Symbol</th><th>Message</th></tr></thead><tbody>{run.failedSymbols.map((item) => <tr key={item.symbol}><td><strong>{item.symbol}</strong></td><td>{item.message}</td></tr>)}</tbody></table></div></details></div>}
       </>}
-    </Panel>
+    </Panel>}
 
-    {run?.status === "COMPLETE" && <Panel icon={<CandlestickChart size={17} />} title="Strategy chart" description="Candles, BUY/SELL decisions, simulated entries and exits, targets, stops and optional immutable indicator overlays."><StrategyChartWorkspace runId={run.runId} symbols={run.symbols} market={market} /></Panel>}
+    {resultView === "chart" && run?.status === "COMPLETE" && <Panel icon={<CandlestickChart size={17} />} title="Strategy chart" description="Candles, BUY/SELL decisions, simulated entries and exits, targets, stops and optional immutable indicator overlays."><StrategyChartWorkspace runId={run.runId} symbols={run.symbols} preferredSymbol={trades.data?.trades[0]?.symbol} market={market} /></Panel>}
 
-    {tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" aside={(tradeSymbolInput || tradeStatus) && <button type="button" className="quant-icon-action" onClick={() => { setTradeSymbolInput(""); setTradeStatus(""); setTradeOffset(0); }}><X size={13} />Clear filters</button>}>
+    {resultView === "trades" && tradesRunId && <Panel icon={<FlaskConical size={17} />} title="Trades" aside={(tradeSymbolInput || tradeStatus) && <button type="button" className="quant-icon-action" onClick={() => { setTradeSymbolInput(""); setTradeStatus(""); setTradeOffset(0); }}><X size={13} />Clear filters</button>}>
       <div className="quant-table-scroll tall quant-trades-scroll"><table className="quant-table quant-trades-table">
           <colgroup>
             <col className="quant-trade-symbol" />
@@ -400,7 +406,7 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
       {!trades.loading && !trades.error && trades.data && <div className="quant-form-actions"><div className="quant-pager"><button type="button" disabled={tradeOffset === 0} onClick={() => setTradeOffset(Math.max(0, tradeOffset - TRADES_PAGE_SIZE))}>Previous</button><button type="button" disabled={pageEnd >= total} onClick={() => setTradeOffset(tradeOffset + TRADES_PAGE_SIZE)}>Next</button></div><span>{total ? `${pageStart}–${pageEnd}` : "0"} of {formatInteger(total)} trades</span></div>}
     </Panel>}
 
-    <Panel icon={<Gauge size={17} />} title="Recent runs" description={`Latest ${marketLabel(market)} backtests; select one to inspect its progress, metrics and trades.`}>
+    {resultView === "history" && <Panel icon={<Gauge size={17} />} title="Backtest history" description={`Latest 100 ${marketLabel(market)} backtests; select one to inspect its summary, trades and chart.`}>
       {runs.loading ? <LoadingState label="Loading recent runs" /> : runs.error ? <RequestErrorState error={runs.error} retry={runs.reload} /> : !runs.data?.runs.length ? <EmptyState title="No runs recorded" description="Completed and in-flight backtests are listed here." /> : <div className="quant-table-scroll"><table className="quant-table">
         <thead><tr><th>Run</th><th>Strategy</th><th>Status</th><th>Progress</th><th>Range</th><th className="numeric">Realized PnL</th><th className="numeric">Win rate</th><th>Created</th><th></th></tr></thead>
         <tbody>{runs.data.runs.map((item) => <tr key={item.runId} className={item.runId === selectedRunId ? "active" : ""}>
@@ -415,7 +421,7 @@ export function BacktestWorkspace({ market, initialRunId }: { market: PlatformMa
           <td><button type="button" disabled={item.runId === selectedRunId} onClick={() => selectRun(item.runId)}>{item.runId === selectedRunId ? "Selected" : "View"}</button></td>
         </tr>)}</tbody>
       </table></div>}
-    </Panel>
+    </Panel>}
 
     {confirmingCancel && run && <ConfirmDialog
       title="Cancel backtest"

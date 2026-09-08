@@ -27,6 +27,10 @@ class MetricsAccumulator:
         self.slippage = 0.0
         self.exposure_minutes = 0.0
         self.winners = 0
+        self.losers = 0
+        self.breakeven_trades = 0
+        self.gross_profit = 0.0
+        self.gross_loss = 0.0
         self._holding_minutes: list[float] = []
         self._mae: list[float] = []
         self._mfe: list[float] = []
@@ -56,6 +60,12 @@ class MetricsAccumulator:
         self.realized_pnl += net
         if net > 0:
             self.winners += 1
+            self.gross_profit += net
+        elif net < 0:
+            self.losers += 1
+            self.gross_loss += abs(net)
+        else:
+            self.breakeven_trades += 1
         if status == "TARGET_HIT":
             self.target_hits += 1
         elif status == "STOPPED":
@@ -85,6 +95,12 @@ class MetricsAccumulator:
             "expiredTrades": self.expired_trades,
             "openTrades": self.open_trades,
             "realizedPnl": _round(self.realized_pnl, 2),
+            "profitableTrades": self.winners,
+            "losingTrades": self.losers,
+            "breakevenTrades": self.breakeven_trades,
+            "grossProfit": _round(self.gross_profit, 2),
+            "grossLoss": _round(self.gross_loss, 2),
+            "profitFactor": _round(self.gross_profit / self.gross_loss, 4) if self.gross_loss > 0 else None,
             "unrealizedPnl": _round(self.unrealized_pnl, 2),
             "fees": _round(self.fees, 2),
             "slippage": _round(self.slippage, 2),

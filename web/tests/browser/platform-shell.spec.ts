@@ -30,6 +30,11 @@ async function login(page: Page) {
   ]);
 }
 
+async function expandPanels(page: Page) {
+  const collapsed = page.locator('.quant-panel-toggle[aria-expanded="false"]');
+  while (await collapsed.count()) await collapsed.first().click();
+}
+
 test.beforeEach(async ({ page }) => {
   await mockPlatform(page);
   await login(page);
@@ -278,6 +283,7 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/research");
+  await expandPanels(page);
   const aiPanel = page.getByRole("heading", { name: "AI Research Copilot" }).locator("xpath=ancestor::section[1]");
   await aiPanel.getByLabel("Backtest summary context").selectOption(runs[0]);
   await aiPanel.getByText(/Selected trades/).click();
@@ -294,6 +300,7 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   await page.getByRole("button", { name: "Add parameter" }).click();
   await page.getByLabel("rsi_low values").fill("[25, 30]");
   await page.getByRole("button", { name: "Preview experiment" }).click();
+  await expandPanels(page);
   await expect(page.getByRole("heading", { name: "Experiment preview" })).toBeVisible();
   await expect(page.getByText("rsi_low=25", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Symbol-runs").first()).toBeVisible();
@@ -328,6 +335,7 @@ test("research parameter sweeps preview safely and reuse comparison and chart wo
   const walkRun = page.getByRole("button", { name: "Run validation" });
   await expect(walkRun).toBeDisabled();
   await page.getByRole("button", { name: "Preview walk-forward" }).click();
+  await expandPanels(page);
   await expect(page.getByRole("heading", { name: "Walk-forward workload preview" })).toBeVisible();
   await expect(page.getByText("TRAINING").first()).toBeVisible();
   await expect(page.getByText("UNSEEN TEST").first()).toBeVisible();
@@ -372,6 +380,7 @@ test("operations shows durable health, leases, alerts, audit, and exact timestam
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/operations");
+  await expandPanels(page);
   await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Worker leases" })).toBeVisible();
   await expect(page.getByText("Crypto market data is stale")).toBeVisible();
@@ -423,6 +432,7 @@ test("strategies adds a configured instrument with one compact control", async (
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/settings?market=CRYPTO");
+  await expandPanels(page);
   const disclosure = page.getByText("Instrument setup", { exact: true });
   await expect(page.getByPlaceholder("BTC-USDT")).toBeHidden();
   await disclosure.click();

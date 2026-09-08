@@ -4544,6 +4544,15 @@ footer {
 .quant-kpi-grid article small { color: #7b899d; font-size: 11px; }
 .quant-panel { min-width: 0; overflow: hidden; border: 1px solid #d5deea; border-radius: 10px; background: #fff; box-shadow: 0 5px 18px rgb(15 30 55 / 5%); }
 .quant-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e0e7f0; padding: 13px 16px; }
+.quant-panel.collapsed .quant-panel-heading { border-bottom: 0; }
+.quant-panel-toggle { display: flex; min-width: 0; flex: 1; align-items: center; gap: 10px; border: 0; padding: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.quant-panel-toggle > span { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.quant-panel-toggle:focus-visible { border-radius: 6px; outline: 2px solid var(--od-primary); outline-offset: 5px; }
+.quant-panel-toggle small { overflow: hidden; color: #748298; font-size: 11px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.quant-panel-chevron { flex: 0 0 auto; color: #718096; transition: transform .16s ease; }
+.quant-panel.open .quant-panel-chevron { transform: rotate(180deg); }
+.quant-panel-aside { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.quant-panel-content[hidden] { display: none; }
 .quant-panel-heading > div { display: flex; align-items: center; gap: 10px; }
 .quant-panel-heading h2, .quant-card-list h2, .factor-catalog-grid h2, .quant-notes h2 { margin: 0; color: #18263d; font-size: 15px; }
 .quant-panel-heading p { margin: 3px 0 0; color: #748298; font-size: 12px; }
@@ -5796,6 +5805,8 @@ footer {
 .platform-frame .quant-table th { color: var(--od-muted); background: var(--od-surface-raised); }
 .platform-frame .quant-table td { border-color: var(--od-border); color: var(--od-text); }
 .platform-frame .quant-table td small { color: var(--od-muted); }
+.platform-frame .quant-panel-toggle small,
+.platform-frame .quant-panel-chevron { color: var(--od-muted); }
 .platform-frame .quant-badge { border-color: var(--od-border-strong); color: var(--od-muted); background: var(--od-surface-raised); }
 .platform-frame .quant-badge.good { border-color: color-mix(in srgb, var(--od-success) 50%, var(--od-border)); color: var(--od-success); background: var(--od-success-soft); }
 .platform-frame .quant-badge.warn { border-color: color-mix(in srgb, var(--od-warning) 50%, var(--od-border)); color: var(--od-warning); background: var(--od-warning-soft); }
@@ -5878,6 +5889,22 @@ footer {
 .quant-progress-row .quant-progress { width: min(320px, 100%); }
 .quant-pnl.positive { color: #0d7555; }
 .quant-pnl.negative { color: #a72e35; }
+.quant-outcome-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.quant-outcome-grid article { display: grid; gap: 4px; min-width: 0; border: 1px solid #d5deea; border-radius: 8px; padding: 11px 12px; background: #f8fafc; }
+.quant-outcome-grid span { color: #718096; font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.quant-outcome-grid strong { color: #17243a; font: 750 19px var(--font-jetbrains-mono), monospace; }
+.quant-outcome-grid small { overflow: hidden; color: #7b899d; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.quant-outcome-grid .profit { border-left: 3px solid #0d9b6d; }
+.quant-outcome-grid .loss, .quant-outcome-grid .stop { border-left: 3px solid #d44855; }
+.quant-outcome-grid .target { border-left: 3px solid #2d66c4; }
+.quant-outcome-grid .open { border-left: 3px solid #d99016; }
+.quant-history-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 9px; border-bottom: 1px solid #e0e7f0; padding: 12px 16px; }
+.quant-history-toolbar label { display: grid; min-width: 160px; gap: 4px; }
+.quant-history-toolbar label:first-child { min-width: min(280px, 100%); flex: 1; }
+.quant-history-toolbar label span { color: #67778d; font-size: 10px; font-weight: 750; text-transform: uppercase; }
+.quant-history-toolbar input, .quant-history-toolbar select { min-height: 36px; border: 1px solid #cad5e3; border-radius: 7px; padding: 6px 9px; color: #263850; background: #fff; }
+.quant-history-toolbar > span { margin-left: auto; padding-bottom: 9px; color: #6f7d90; font-size: 11px; }
+.quant-history-table { min-width: 1280px; }
 .quant-table tr.active td { background: #eef4ff; }
 .quant-table td.numeric, .quant-table th.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 .quant-table .quant-row-actions { display: flex; align-items: center; gap: 6px; }
@@ -5915,6 +5942,11 @@ footer {
 .platform-frame .quant-message.error { color: var(--od-danger); background: var(--od-danger-soft); }
 .platform-frame .quant-pnl.positive { color: var(--od-success); }
 .platform-frame .quant-pnl.negative { color: var(--od-danger); }
+.platform-frame .quant-outcome-grid article { border-color: var(--od-border); background: var(--od-surface-raised); }
+.platform-frame .quant-outcome-grid span, .platform-frame .quant-outcome-grid small, .platform-frame .quant-history-toolbar label span, .platform-frame .quant-history-toolbar > span { color: var(--od-muted); }
+.platform-frame .quant-outcome-grid strong { color: var(--od-text); }
+.platform-frame .quant-history-toolbar { border-color: var(--od-border); }
+.platform-frame .quant-history-toolbar input, .platform-frame .quant-history-toolbar select { border-color: var(--od-border-strong); color: var(--od-text); background: var(--od-surface); }
 .platform-frame .quant-table tr.active td { background: var(--od-primary-soft); }
 .platform-frame .quant-state.unconfigured { color: var(--od-muted); }
 .platform-frame .quant-state.unconfigured strong { color: var(--od-text); }
@@ -5932,6 +5964,7 @@ footer {
 @media (max-width: 1100px) {
   .quant-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .quant-operations-grid { grid-template-columns: 1fr; }
+  .quant-outcome-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 560px) {
@@ -5942,4 +5975,8 @@ footer {
   .quant-form-actions > span { margin-left: 0; text-align: left; }
   .quant-toolbar { align-items: stretch; flex-direction: column; }
   .quant-alert-list article { grid-template-columns: 1fr; }
+  .quant-outcome-grid { grid-template-columns: 1fr 1fr; }
+  .quant-history-toolbar { align-items: stretch; flex-direction: column; }
+  .quant-history-toolbar label, .quant-history-toolbar label:first-child { width: 100%; min-width: 0; }
+  .quant-history-toolbar > span { margin-left: 0; padding-bottom: 0; }
 }

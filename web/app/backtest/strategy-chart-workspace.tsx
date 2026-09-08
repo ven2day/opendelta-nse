@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { PlatformMarket } from "../platform/platform-client";
 import { useV2Resource } from "../platform/use-v2";
 import { v2Get } from "../platform/v2-client";
@@ -58,7 +58,6 @@ export function StrategyChartWorkspace({ runId, symbols, preferredSymbol }: { ru
   const [symbol, setSymbol] = useState(preferredSymbol ?? symbols[0] ?? "");
   const [indicatorSourceId, setIndicatorSourceId] = useState("");
   const [bars, setBars] = useState<number | "trades">("trades");
-  useEffect(() => setSymbol(preferredSymbol && symbols.includes(preferredSymbol) ? preferredSymbol : symbols[0] ?? ""), [runId, preferredSymbol, symbols]);
   const effectiveSymbol = symbols.includes(symbol) ? symbol : symbols[0] ?? "";
   const loadIndicators = useCallback(() => v2Get<IndicatorSourcesResponse>("indicator-studio/sources", { status: "VALIDATED" }), []);
   const indicators = useV2Resource(loadIndicators);
